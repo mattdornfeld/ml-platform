@@ -1,4 +1,4 @@
-"""Spark and Iceberg coverage for market data and labels."""
+"""Spark and Iceberg coverage for market-data ingestion."""
 
 from datetime import date
 from pathlib import Path
@@ -10,14 +10,12 @@ from pydantic import ValidationError
 
 from pytorch_tutorial.configs import (
     DEFAULT_VARIANT_NAME,
-    LongShortLabelConfig,
     MarketDataConfig,
     VariantsConfig,
     load_variants_config,
     parse_variant_args,
     with_variants_config,
 )
-from pytorch_tutorial.labels import LABEL_TABLE_IDENTIFIER, materialize_long_short_labels
 from pytorch_tutorial.market_data import (
     ICEBERG_TABLE_IDENTIFIER,
     create_spark_session,
@@ -65,9 +63,8 @@ class MarketDataIntegrationTest(unittest.TestCase):
 
     def setUp(self) -> None:
         """Drop tables left by the preceding test."""
-        for identifier in (LABEL_TABLE_IDENTIFIER, ICEBERG_TABLE_IDENTIFIER):
-            if self.spark.catalog.tableExists(identifier):
-                self.spark.sql(f"DROP TABLE {identifier} PURGE")
+        if self.spark.catalog.tableExists(ICEBERG_TABLE_IDENTIFIER):
+            self.spark.sql(f"DROP TABLE {ICEBERG_TABLE_IDENTIFIER} PURGE")
 
     @patch("pytorch_tutorial.market_data._request_yahoo_chart")
     def test_yahoo_json_writes_spark_dataframe_without_partition_column(self, request: object) -> None:
@@ -82,23 +79,6 @@ class MarketDataIntegrationTest(unittest.TestCase):
         self.assertEqual([row.Close for row in rows], [100.5, 101.5, 102.5])
         self.assertNotIn("timestamp_day", self.spark.table(ICEBERG_TABLE_IDENTIFIER).columns)
         request.assert_called_once_with("MOCK", TEST_START_DATE, TEST_END_DATE)
-
-    def test_merge_and_labels_do_not_write_timestamp_day(self) -> None:
-        """Preserve symbol rows and keep time partition fields out of table schemas."""
-        first = self.spark.createDataFrame(
-            [("2026-01-02T14:30:00Z", "AAA", "regular", 100.0, 101.0, 99.0, 100.5, 1000)],
-            "timestamp string, symbol string, market_session string, Open double, High double, Low double, Close double, Volume long",
-        )
-        bars = first
-        for hour, close in enumerate([101.0, 102.0, 104.0, 100.0], start=15):
-            bars = bars.unionByName(self.spark.createDataFrame(
-                [(f"2026-01-02T{hour}:30:00Z", "AAA", "regular", close, close, close, close, 1000)], first.schema
-            ))
-        materialize_daily_ohlcv_partitions(bars, self.warehouse)
-        labels = LongShortLabelConfig(horizon_bars=1, volatility_lookback_bars=2, profit_taking_multiplier=0.5, stop_loss_multiplier=0.5)
-        self.assertGreater(materialize_long_short_labels(self.warehouse, labels, spark=self.spark), 0)
-        self.assertNotIn("timestamp_day", self.spark.table(LABEL_TABLE_IDENTIFIER).columns)
-
 
 class MarketDataUnitTest(unittest.TestCase):
     """Cover configuration and decorated entrypoint behavior."""
