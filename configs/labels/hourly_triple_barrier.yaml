@@ -1,0 +1,5 @@
+# Barriers are trailing-volatility multiples calculated from hourly log returns.
+horizon_bars: 24
+volatility_lookback_bars: 24
+profit_taking_multiplier: 1.0
+stop_loss_multiplier: 1.0

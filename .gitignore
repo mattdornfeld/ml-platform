@@ -1,0 +1,32 @@
+# Runtime data, Iceberg metadata, and generated Parquet files
+data/
+spark-warehouse/
+metastore_db/
+derby.log
+*.parquet
+*.avro
+*.tmp
+
+# Logs and interactive-session output
+logs/
+lightning_logs/
+*.log
+.ipynb_checkpoints/
+.DS_Store
+.idea/
+
+# Python environments, caches, coverage, and build products
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+*.egg-info/
