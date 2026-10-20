@@ -7,14 +7,15 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
 
-from pytorch_tutorial.configs import LongShortLabelConfig
-from pytorch_tutorial.labels import (
+from sdk.configs import LongShortLabelConfig
+from sdk.labels import (
     DATA_ROOT,
-    LABEL_TABLE_IDENTIFIER,
+    label_storage_path,
+    label_table_identifier,
     main,
     materialize_long_short_labels,
 )
-from pytorch_tutorial.market_data import (
+from sdk.market_data import (
     ICEBERG_TABLE_IDENTIFIER,
     create_spark_session,
     materialize_daily_ohlcv_partitions,
@@ -24,6 +25,8 @@ from pytorch_tutorial.market_data import (
 def label_config() -> LongShortLabelConfig:
     """Return a small deterministic triple-barrier configuration."""
     return LongShortLabelConfig(
+        name="test_hourly_triple_barrier",
+        version=1,
         horizon_bars=1,
         volatility_lookback_bars=2,
         profit_taking_multiplier=0.5,
@@ -50,7 +53,7 @@ class LabelsIntegrationTest(unittest.TestCase):
 
     def setUp(self) -> None:
         """Create a source market table with known next-bar outcomes."""
-        for identifier in (LABEL_TABLE_IDENTIFIER, ICEBERG_TABLE_IDENTIFIER):
+        for identifier in (label_table_identifier(label_config()), ICEBERG_TABLE_IDENTIFIER):
             if self.spark.catalog.tableExists(identifier):
                 self.spark.sql(f"DROP TABLE {identifier} PURGE")
         source = self.spark.createDataFrame(
@@ -74,17 +77,25 @@ class LabelsIntegrationTest(unittest.TestCase):
     def test_writes_expected_outcomes_and_is_idempotent(self) -> None:
         """Materialize profit, stop, and timeout labels without future leakage."""
         first_count = materialize_long_short_labels(self.warehouse, label_config(), spark=self.spark)
-        rows = self.spark.table(LABEL_TABLE_IDENTIFIER).orderBy("timestamp").collect()
+        rows = self.spark.table(label_table_identifier(label_config())).orderBy("timestamp").collect()
         outcomes = {(row.barrier_outcome, row.long_short_label) for row in rows}
 
         self.assertGreaterEqual(first_count, 3)
         self.assertTrue({("profit_taking", 1), ("stop_loss", -1), ("timeout", 0)} <= outcomes)
-        self.assertNotIn("timestamp_day", self.spark.table(LABEL_TABLE_IDENTIFIER).columns)
+        self.assertNotIn("timestamp_day", self.spark.table(label_table_identifier(label_config())).columns)
         self.assertEqual(
             materialize_long_short_labels(self.warehouse, label_config(), spark=self.spark),
             first_count,
         )
-        self.assertEqual(self.spark.table(LABEL_TABLE_IDENTIFIER).count(), len(rows))
+        self.assertEqual(self.spark.table(label_table_identifier(label_config())).count(), len(rows))
+        self.assertEqual(
+            label_storage_path(self.warehouse, label_config()),
+            self.warehouse.resolve() / "labels" / "test_hourly_triple_barrier_v1",
+        )
+        self.assertEqual(
+            sorted(path.name for path in (label_storage_path(self.warehouse, label_config()) / "data").glob("timestamp_day=*")),
+            ["timestamp_day=2026-01-02"],
+        )
 
 
 class LabelsUnitTest(unittest.TestCase):
@@ -110,7 +121,7 @@ class LabelsUnitTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Market-data table does not exist"):
             materialize_long_short_labels(Path("unused"), label_config(), spark=spark)
 
-    @patch("pytorch_tutorial.labels.materialize_long_short_labels", return_value=12)
+    @patch("sdk.labels.materialize_long_short_labels", return_value=12)
     def test_entrypoint_uses_default_variant(self, materialize: MagicMock) -> None:
         """Load the default variant and pass only its label config to the writer."""
         with patch("sys.argv", ["labels"]):

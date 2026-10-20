@@ -23,4 +23,4 @@ lock: venv
 
 ## Run the complete test suite, including the Spark/Iceberg integration test.
 test: configure
-	JAVA_HOME="$(SPARK_JAVA_HOME)" UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) run --locked python -m unittest discover -s tests -t . -v
+	JAVA_HOME="$(SPARK_JAVA_HOME)" UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) run --locked python -m unittest discover -s tests -v

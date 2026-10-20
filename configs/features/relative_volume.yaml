@@ -1,0 +1,17 @@
+# @package _global_
+# Current volume divided by mean volume over preceding hourly bars.
+name: relative_volume
+version: 1
+dtype: double
+frequency: hourly
+feature_key: symbol
+datasets:
+  - dataset_id: market_data.hourly_ohlcv
+    # Market data is daily-partitioned; use one preceding daily partition.
+    num_lookback_partitions: 1
+transform: features.relative_volume.RelativeVolumeTransform
+description: Current volume divided by trailing mean volume.
+parameters:
+  lookback_bars: 24
+validations:
+  min_rows_per_partition: 1

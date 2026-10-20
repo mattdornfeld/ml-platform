@@ -13,7 +13,7 @@ make test
 ```
 
 The reusable `MNISTDataModule` and `MNISTClassifier` live in
-`src/pytorch_tutorial/mnist.py`. The `pytorch-tutorial-train` command remains
+`src/sdk/mnist.py`. The `pytorch-tutorial-train` command remains
 available after `workon pytorch-tutorial`.
 
 ## Yahoo Finance hourly OHLCV data
@@ -43,7 +43,7 @@ restricts intraday history. Spark 4.1 currently requires Java 17 through 24.
 
 The `pytorch-tutorial-extract-long-short-labels` command reads the hourly OHLCV
 Iceberg table with Spark and writes daily-partitioned labels to
-`labels.hourly_long_short_labels` under `data/labels`. The composed
+`data/labels/<name>_v<version>`. The composed
 variant supplies [configs/labels/hourly_triple_barrier.yaml](configs/labels/hourly_triple_barrier.yaml).
 For each event, the writer calculates trailing hourly-return volatility, then
 uses future `High` and `Low` bars to find which is hit first: a profit-taking
@@ -53,6 +53,31 @@ Rows without a complete vertical horizon are omitted.
 
 ```bash
 JAVA_HOME=/opt/homebrew/opt/openjdk@21 pytorch-tutorial-extract-long-short-labels --variant sp500
+```
+
+## Market features
+
+`pytorch-tutorial-create-feature` applies a configured PySpark transformation
+to the Iceberg market-data table and writes a versioned feature table under
+`data/features/<name>_v<version>`, with Iceberg time partitions below its
+`data` directory. The supplied configurations are `log_return`,
+`trailing_volatility_1d`, `trailing_volatility_7d`, and `relative_volume`.
+Trailing features use preceding bars only. Each YAML file in `configs/features` maps a versioned `FeatureConfig`
+to one transform module under `src/features` and records its output dtype,
+description, parameters, datasets, and free-form metadata. Each dataset
+declares its dataset ID and number of preceding physical partitions; the current
+partition is always included. The generic SDK harness loads the declared
+dependency windows, then injects them into the transform constructor; it does not
+contain feature-specific logic. The application
+configuration in `configs/feature_materialization/default.yaml` controls
+`max_concurrent_spark_jobs`; every YAML file in `configs/features` runs as a
+separate Spark job. The harness records deterministic content hashes for every
+dataset partition used by each feature-output partition. A changed or removed
+parent marks only its dependent output partitions stale; those partitions are
+deleted, recomputed, and given a replacement dependency manifest.
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@21 pytorch-tutorial-create-feature --config default
 ```
 
 ## Parquet explorer

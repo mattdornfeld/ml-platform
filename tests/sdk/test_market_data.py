@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from pytorch_tutorial.configs import (
+from sdk.configs import (
     DEFAULT_VARIANT_NAME,
     MarketDataConfig,
     VariantsConfig,
@@ -16,7 +16,7 @@ from pytorch_tutorial.configs import (
     parse_variant_args,
     with_variants_config,
 )
-from pytorch_tutorial.market_data import (
+from sdk.market_data import (
     ICEBERG_TABLE_IDENTIFIER,
     create_spark_session,
     fetch_hourly_ohlcv,
@@ -66,7 +66,7 @@ class MarketDataIntegrationTest(unittest.TestCase):
         if self.spark.catalog.tableExists(ICEBERG_TABLE_IDENTIFIER):
             self.spark.sql(f"DROP TABLE {ICEBERG_TABLE_IDENTIFIER} PURGE")
 
-    @patch("pytorch_tutorial.market_data._request_yahoo_chart")
+    @patch("sdk.market_data._request_yahoo_chart")
     def test_yahoo_json_writes_spark_dataframe_without_partition_column(self, request: object) -> None:
         """Convert mocked JSON to Spark and persist only the declared table schema."""
         request.return_value = yahoo_payload()

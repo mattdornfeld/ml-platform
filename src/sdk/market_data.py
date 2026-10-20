@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 from pyspark.sql import DataFrame, SparkSession, functions as F
 from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType, TimestampType
 
-from pytorch_tutorial.configs import MarketDataConfig, VariantsConfig, with_variants_config
+from sdk.configs import MarketDataConfig, VariantsConfig, with_variants_config
 
 OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
@@ -31,6 +31,7 @@ ICEBERG_CATALOG = "data"
 ICEBERG_NAMESPACE = "market_data"
 ICEBERG_TABLE = "hourly_ohlcv"
 ICEBERG_TABLE_IDENTIFIER = f"{ICEBERG_CATALOG}.{ICEBERG_NAMESPACE}.{ICEBERG_TABLE}"
+MARKET_DATASET_ID = f"{ICEBERG_NAMESPACE}.{ICEBERG_TABLE}"
 DATA_ROOT = Path("data")
 
 
@@ -117,6 +118,7 @@ def create_spark_session(warehouse_dir: str | Path = DATA_ROOT) -> SparkSession:
         .config("spark.driver.memory", "8g")
         .config("spark.executor.memory", "8g")
         .config("spark.sql.shuffle.partitions", "64")
+        .config("spark.scheduler.mode", "FAIR")
         .config("spark.jars.packages", ICEBERG_RUNTIME_PACKAGE)
         .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
         .config(f"spark.sql.catalog.{ICEBERG_CATALOG}", "org.apache.iceberg.spark.SparkCatalog")

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import lightning.pytorch as pl
 
-from pytorch_tutorial.mnist import MNISTClassifier, MNISTDataModule
+from sdk.mnist import MNISTClassifier, MNISTDataModule
 
 
 def parse_args() -> argparse.Namespace:

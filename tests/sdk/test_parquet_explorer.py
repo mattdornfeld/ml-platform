@@ -6,7 +6,7 @@ import unittest
 
 import pandas as pd
 
-from pytorch_tutorial.parquet_explorer import load_partitioned_parquet
+from sdk.parquet_explorer import load_partitioned_parquet
 
 
 class ParquetExplorerTest(unittest.TestCase):

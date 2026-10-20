@@ -4,21 +4,34 @@ from pathlib import Path
 
 from pyspark.sql import SparkSession, Window, functions as F
 
-from pytorch_tutorial.configs import (
+from sdk.configs import (
     LongShortLabelConfig,
     VariantsConfig,
     with_variants_config,
 )
-from pytorch_tutorial.market_data import (
+from sdk.market_data import (
     DATA_ROOT,
     ICEBERG_CATALOG,
     ICEBERG_TABLE_IDENTIFIER,
     create_spark_session,
 )
 
-LABEL_TABLE = "hourly_long_short_labels"
 LABEL_NAMESPACE = "labels"
-LABEL_TABLE_IDENTIFIER = f"{ICEBERG_CATALOG}.{LABEL_NAMESPACE}.{LABEL_TABLE}"
+
+
+def label_id(config: LongShortLabelConfig) -> str:
+    """Return the versioned identifier used for one label dataset."""
+    return f"{config.name}_v{config.version}"
+
+
+def label_table_identifier(config: LongShortLabelConfig) -> str:
+    """Return the Iceberg table identifier for one label dataset."""
+    return f"{ICEBERG_CATALOG}.{LABEL_NAMESPACE}.{label_id(config)}"
+
+
+def label_storage_path(warehouse_dir: str | Path, config: LongShortLabelConfig) -> Path:
+    """Return the versioned label directory under the configured data root."""
+    return Path(warehouse_dir).resolve() / LABEL_NAMESPACE / label_id(config)
 
 
 def materialize_long_short_labels(
@@ -155,11 +168,12 @@ def materialize_long_short_labels(
     )
     materialized_labels = labels.localCheckpoint(eager=True)
     row_count = materialized_labels.count()
-    _ensure_label_table(session)
+    label_table = label_table_identifier(config)
+    _ensure_label_table(session, config)
     materialized_labels.createOrReplaceTempView("incoming_long_short_labels")
     session.sql(
         f"""
-        MERGE INTO {LABEL_TABLE_IDENTIFIER} AS target
+        MERGE INTO {label_table} AS target
         USING incoming_long_short_labels AS source
         ON target.symbol = source.symbol
            AND target.timestamp = source.timestamp
@@ -185,12 +199,12 @@ def materialize_long_short_labels(
     return row_count
 
 
-def _ensure_label_table(session: SparkSession) -> None:
+def _ensure_label_table(session: SparkSession, config: LongShortLabelConfig) -> None:
     """Create the daily-partitioned Iceberg triple-barrier label table when needed."""
     session.sql(f"CREATE NAMESPACE IF NOT EXISTS {ICEBERG_CATALOG}.{LABEL_NAMESPACE}")
     session.sql(
         f"""
-        CREATE TABLE IF NOT EXISTS {LABEL_TABLE_IDENTIFIER} (
+        CREATE TABLE IF NOT EXISTS {label_table_identifier(config)} (
             timestamp TIMESTAMP,
             symbol STRING,
             vertical_barrier_timestamp TIMESTAMP,
@@ -207,7 +221,11 @@ def _ensure_label_table(session: SparkSession) -> None:
         TBLPROPERTIES (
             'format-version' = '2',
             'write.format.default' = 'parquet',
-            'write.parquet.compression-codec' = 'zstd'
+            'write.parquet.compression-codec' = 'zstd',
+            'write.distribution-mode' = 'hash',
+            'write.spark.fanout.enabled' = 'false',
+            'label.name' = '{config.name}',
+            'label.version' = '{config.version}'
         )
         """
     )
