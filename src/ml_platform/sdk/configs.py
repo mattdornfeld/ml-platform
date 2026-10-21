@@ -62,7 +62,11 @@ class MarketDataConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    dataset_id: str = Field(default="market_data.hourly_ohlcv", pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+    name: str = Field(default="market_data", pattern=r"^[a-z][a-z0-9_]*$")
+    version: int = Field(default=1, ge=1)
     dataset_type: Literal[DatasetType.MARKET_DATA]
+    description: str = Field(default="Market data.", min_length=1)
     symbols: list[str] = Field(default_factory=lambda: ["AAPL"], min_length=1)
     time_range: TimeRange
 

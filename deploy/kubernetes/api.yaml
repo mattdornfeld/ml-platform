@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: ServiceAccount
-metadata: {name: materialization-api, namespace: materialization}
+metadata: {name: ml-control-plane, namespace: ml-platform}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: spark-submit, namespace: materialization}
+metadata: {name: spark-submit, namespace: ml-platform}
 rules:
 - apiGroups: [sparkoperator.k8s.io]
   resources: [sparkapplications]
@@ -18,22 +18,22 @@ rules:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: spark-submit, namespace: materialization}
-subjects: [{kind: ServiceAccount, name: materialization-api, namespace: materialization}]
+metadata: {name: spark-submit, namespace: ml-platform}
+subjects: [{kind: ServiceAccount, name: ml-control-plane, namespace: ml-platform}]
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: spark-submit}
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: api, namespace: materialization}
+metadata: {name: ml-control-plane, namespace: ml-platform}
 spec:
   replicas: 1
-  selector: {matchLabels: {app: api}}
+  selector: {matchLabels: {app: ml-control-plane}}
   template:
-    metadata: {labels: {app: api}}
+    metadata: {labels: {app: ml-control-plane}}
     spec:
-      serviceAccountName: materialization-api
+      serviceAccountName: ml-control-plane
       containers:
-      - name: api
+      - name: ml-control-plane
         image: ml-platform:latest
         imagePullPolicy: IfNotPresent
         command: [python]
@@ -41,13 +41,15 @@ spec:
         env:
         - {name: DATABASE_URL, value: postgresql://postgres@postgres:5432/ml_platform}
         - {name: DATA_WAREHOUSE_DIR, value: s3a://warehouse}
-        - {name: KUBERNETES_NAMESPACE, value: materialization}
+        - {name: KUBERNETES_NAMESPACE, value: ml-platform}
+        - {name: HEADLAMP_URL, value: http://127.0.0.1:8002}
         - {name: MATERIALIZATION_IMAGE, value: ml-platform:latest}
         - {name: S3_ENDPOINT, value: http://minio:9000}
+        - {name: MINIO_CONSOLE_URL, value: http://127.0.0.1:9003}
         envFrom: [{secretRef: {name: minio-credentials}}]
         ports: [{containerPort: 8000}]
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: api, namespace: materialization}
-spec: {selector: {app: api}, ports: [{port: 8000, targetPort: 8000}]}
+metadata: {name: ml-control-plane, namespace: ml-platform}
+spec: {selector: {app: ml-control-plane}, ports: [{port: 8000, targetPort: 8000}]}

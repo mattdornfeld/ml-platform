@@ -1,0 +1,11 @@
+# Local Minikube UI. The service is only exposed through `make headlamp` on localhost.
+# Requests are authenticated as the pod service account, which has only get/list/watch grants.
+config:
+  inCluster: true
+  inClusterContextName: main
+  unsafeUseServiceAccountToken: true
+serviceAccount:
+  create: false
+  name: ml-platform-headlamp
+clusterRoleBinding:
+  create: false

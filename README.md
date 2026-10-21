@@ -92,7 +92,7 @@ ml-platform-parquet-explorer data/market_data/hourly_ohlcv/data
 ## Kubernetes materialization environment
 
 The development deployment runs the control plane, PostgreSQL, and MinIO in the
-`materialization` namespace. Iceberg's Hadoop catalog writes its warehouse to
+`ml-platform` namespace. Iceberg's Hadoop catalog writes its warehouse to
 the `warehouse` bucket in MinIO; it does not write dataset partitions to the
 API pod filesystem. The API creates `SparkApplication` custom resources with
 the Kubernetes Python client and waits for the Spark Operator to report a
@@ -101,7 +101,7 @@ terminal state.
 Run `scripts/bootstrap-minikube.sh` from the repository root to create the
 Minikube cluster, install the Spark Operator, build `ml-platform:latest`
 in Minikube's image store, and apply the versioned manifests. Access the API
-locally with `kubectl -n materialization port-forward service/api 8000:8000`.
+locally with `kubectl -n ml-platform port-forward service/ml-control-plane 8000:8000`.
 
 The control-plane client is available as the `ml_platform.cli` module:
 

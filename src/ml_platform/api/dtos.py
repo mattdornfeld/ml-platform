@@ -73,6 +73,14 @@ class DatasetResponse(DatasetCreateRequest):
     job_id: UUID | None = None
 
 
+class DatasetDescriptionUpdate(BaseModel):
+    """Mutable display metadata for an existing dataset definition."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(min_length=1)
+
+
 class FeatureDatasetDependency(BaseModel):
     """A registered dataset version consumed by a feature."""
 
@@ -149,14 +157,45 @@ class FeaturePartitionMaterializationRequest(PartitionMaterializationRequest):
     mode: FeatureMaterializationMode = FeatureMaterializationMode.ENSURE_CURRENT
 
 
+class JobTarget(BaseModel):
+    """A versioned resource targeted by a materialization job."""
+
+    resource_type: Literal["dataset", "feature"]
+    name: str
+    version: int
+
+
+class JobPartition(BaseModel):
+    """One resource partition targeted by a materialization job."""
+
+    resource_type: Literal["dataset", "feature"]
+    name: str
+    version: int
+    timestamp: datetime
+    status: PartitionStatus
+
+
+class KubernetesResourceLink(BaseModel):
+    """A read-only Headlamp link for a Kubernetes resource created by a job."""
+
+    resource_type: str
+    resource_id: str
+    url: str
+
+
 class JobResponse(BaseModel):
-    """A materialization job and its aggregate lifecycle state."""
+    """A materialization job, its targets, partitions, and aggregate lifecycle state."""
 
     id: UUID
     type: JobType
     status: JobStatus
     created_at: datetime
     updated_at: datetime
+    targets: list[JobTarget] = Field(default_factory=list)
+    partitions: list[JobPartition] = Field(default_factory=list)
+    spark_application_name: str | None = None
+    headlamp_url: str | None = None
+    kubernetes_resources: list[KubernetesResourceLink] = Field(default_factory=list)
 
 
 class PartitionUpdateRequestResponse(BaseModel):

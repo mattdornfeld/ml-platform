@@ -2,22 +2,29 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path as FilePath
 from datetime import datetime, time, timedelta, timezone
 import os
 import secrets
 from typing import Annotated, Any
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, status
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from psycopg import Connection, errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
+from kubernetes import client as kubernetes_client
+from kubernetes.client.exceptions import ApiException
 
 from ml_platform.api.database import get_connection
 from ml_platform.api.scheduler import JobScheduler
 from ml_platform.api.migrations import migrate_database
 from ml_platform.api.dtos import (
     DatasetCreateRequest,
+    DatasetDescriptionUpdate,
     DatasetResponse,
     ErrorResponse,
     FeatureCreateRequest,
@@ -53,6 +60,23 @@ app = FastAPI(
     summary="Control plane for Iceberg-backed dataset and feature materialization.",
     lifespan=lifespan,
 )
+
+UI_DIRECTORY = FilePath(__file__).with_name("ui")
+app.mount("/ui/assets", StaticFiles(directory=UI_DIRECTORY), name="ui-assets")
+
+
+@app.get("/", include_in_schema=False)
+def dashboard() -> RedirectResponse:
+    """Open the control-plane dashboard."""
+    return RedirectResponse(url="/ui")
+
+
+@app.get("/ui", include_in_schema=False)
+@app.get("/ui/{dashboard_path:path}", include_in_schema=False)
+def dashboard_ui(dashboard_path: str = "") -> FileResponse:
+    """Serve the single-page dashboard at every resource browser path."""
+    return FileResponse(UI_DIRECTORY / "index.html")
+
 
 ResourceName = Annotated[str, Path(min_length=1)]
 ResourceVersion = Annotated[int, Path(gt=0)]
@@ -222,6 +246,133 @@ JOB_VALIDATION = {
 }
 
 
+def _job_targets(cursor: Any, job_id: UUID) -> list[dict[str, Any]]:
+    """Return each versioned resource whose partitions a job targets."""
+    cursor.execute(
+        """SELECT 'dataset' AS resource_type, dataset_name AS name, dataset_version AS version
+            FROM partition_update_requests WHERE job_id = %s
+            GROUP BY dataset_name, dataset_version
+            UNION
+            SELECT 'feature' AS resource_type, feature_name AS name, feature_version AS version
+            FROM feature_partition_update_requests WHERE job_id = %s
+            GROUP BY feature_name, feature_version
+            ORDER BY resource_type, name, version""",
+        (job_id, job_id),
+    )
+    return list(cursor.fetchall())
+
+
+def _job_partitions(cursor: Any, job_id: UUID) -> list[dict[str, Any]]:
+    """Return the partition requests targeted by one materialization job."""
+    cursor.execute(
+        """SELECT 'dataset' AS resource_type, dataset_name AS name, dataset_version AS version, timestamp, status
+            FROM partition_update_requests WHERE job_id = %s
+            UNION ALL
+            SELECT 'feature' AS resource_type, feature_name AS name, feature_version AS version, timestamp, status
+            FROM feature_partition_update_requests WHERE job_id = %s
+            ORDER BY timestamp, resource_type, name, version""",
+        (job_id, job_id),
+    )
+    return list(cursor.fetchall())
+
+
+def _resource_jobs(cursor: Any, resource_type: str, name: str, version: int) -> list[dict[str, Any]]:
+    """Return jobs which targeted one immutable resource version."""
+    if resource_type == "dataset":
+        cursor.execute(
+            """SELECT DISTINCT jobs.id, jobs.type, jobs.status, jobs.created_at, jobs.updated_at
+                FROM jobs JOIN partition_update_requests AS request ON request.job_id = jobs.id
+                WHERE request.dataset_name = %s AND request.dataset_version = %s
+                ORDER BY jobs.created_at DESC""",
+            (name, version),
+        )
+    else:
+        cursor.execute(
+            """SELECT DISTINCT jobs.id, jobs.type, jobs.status, jobs.created_at, jobs.updated_at
+                FROM jobs JOIN feature_partition_update_requests AS request ON request.job_id = jobs.id
+                WHERE request.feature_name = %s AND request.feature_version = %s
+                ORDER BY jobs.created_at DESC""",
+            (name, version),
+        )
+    return list(cursor.fetchall())
+
+
+@app.get("/datasets", tags=["datasets"])
+def list_datasets(connection: DatabaseConnection, include_deleted: bool = False) -> list[dict[str, Any]]:
+    """List dataset definitions with logical partition status counts for the dashboard."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("""SELECT datasets.name, datasets.version, datasets.dataset_type, datasets.config, datasets.created_at, datasets.deleted_at, datasets.deprecated_at,
+            COUNT(request.partition_id) AS partition_count,
+            COUNT(request.partition_id) FILTER (WHERE request.status = 'created') AS created_partition_count,
+            COUNT(request.partition_id) FILTER (WHERE request.status = 'pending') AS pending_partition_count,
+            COUNT(request.partition_id) FILTER (WHERE request.status IN ('failed', 'cancelled')) AS failed_partition_count
+            FROM datasets LEFT JOIN partition_update_requests request
+              ON request.dataset_name = datasets.name AND request.dataset_version = datasets.version
+            WHERE (%s OR datasets.deleted_at IS NULL)
+            GROUP BY datasets.name, datasets.version, datasets.dataset_type, datasets.config, datasets.created_at, datasets.deleted_at, datasets.deprecated_at
+            ORDER BY datasets.name, datasets.version DESC""", (include_deleted,))
+        return list(cursor.fetchall())
+
+
+@app.get("/datasets/{name}/versions/{version}", tags=["datasets"])
+def get_dataset(name: ResourceName, version: ResourceVersion, connection: DatabaseConnection) -> dict[str, Any]:
+    """Return one dataset and the latest receipt for each logical partition."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT name, version, dataset_type, config, created_at, deleted_at, deprecated_at FROM datasets WHERE name = %s AND version = %s", (name, version))
+        dataset = cursor.fetchone()
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="Dataset version does not exist.")
+        cursor.execute("""SELECT DISTINCT ON (request.timestamp) request.partition_id, request.timestamp, request.status,
+                request.created_at, request.updated_at, receipt.content_hash, receipt.snapshot_id
+            FROM partition_update_requests request LEFT JOIN dataset_partitions receipt ON receipt.partition_id = request.partition_id
+            WHERE request.dataset_name = %s AND request.dataset_version = %s
+            ORDER BY request.timestamp DESC, request.created_at DESC""", (name, version))
+        dataset["partitions"] = list(cursor.fetchall())
+        dataset["jobs"] = _resource_jobs(cursor, "dataset", name, version)
+    _attach_minio_locations(dataset, "market_data/hourly_ohlcv")
+    return dataset
+
+
+@app.patch("/datasets/{name}/versions/{version}", tags=["datasets"])
+def update_dataset_description(
+    name: ResourceName,
+    version: ResourceVersion,
+    payload: DatasetDescriptionUpdate,
+    connection: DatabaseConnection,
+) -> dict[str, Any]:
+    """Update display-only dataset metadata without changing its materialized definition."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """UPDATE datasets SET config = jsonb_set(config, '{description}', to_jsonb(%s::text))
+            WHERE name = %s AND version = %s
+            RETURNING name, version, dataset_type, config, created_at""",
+            (payload.description, name, version),
+        )
+        dataset = cursor.fetchone()
+        if dataset is None:
+            raise HTTPException(status_code=404, detail="Dataset version does not exist.")
+    connection.commit()
+    return dataset
+
+
+@app.delete("/datasets/{name}/versions/{version}", status_code=status.HTTP_204_NO_CONTENT, tags=["datasets"])
+def delete_dataset(name: ResourceName, version: ResourceVersion, connection: DatabaseConnection) -> None:
+    """Soft-delete a dataset version and cancel its unstarted partition requests."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("""UPDATE datasets SET deleted_at = COALESCE(deleted_at, now())
+            WHERE name = %s AND version = %s RETURNING name""", (name, version))
+        if cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Dataset version does not exist.")
+        cursor.execute("""UPDATE partition_update_requests SET status = 'cancelled', updated_at = now()
+            WHERE dataset_name = %s AND dataset_version = %s AND status = 'pending'""", (name, version))
+        cursor.execute("""UPDATE jobs SET status = 'cancelled', updated_at = now()
+            WHERE status = 'submitted' AND id IN (
+              SELECT DISTINCT job_id FROM partition_update_requests
+              WHERE dataset_name = %s AND dataset_version = %s
+            )""", (name, version))
+    connection.commit()
+
+
 @app.post("/datasets", response_model=DatasetResponse, status_code=201, responses=error_responses(DATASET_VALIDATION), tags=["datasets"])
 def create_dataset(payload: DatasetCreateRequest, connection: DatabaseConnection) -> DatasetResponse:
     """Register an immutable dataset definition."""
@@ -256,11 +407,77 @@ def _enqueue_dataset_job(cursor: Any, name: str, version: int, config: dict[str,
     return job_id
 
 
+@app.get("/features", tags=["features"])
+def list_features(connection: DatabaseConnection, include_deleted: bool = False) -> list[dict[str, Any]]:
+    """List feature definitions with logical partition status counts for the dashboard."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("""SELECT features.name, features.version, features.dtype, features.frequency, features.feature_key,
+            features.description, features.created_at, features.deleted_at, features.deprecated_at, COUNT(request.partition_id) AS partition_count,
+            COUNT(request.partition_id) FILTER (WHERE request.status = 'created') AS created_partition_count,
+            COUNT(request.partition_id) FILTER (WHERE request.status = 'pending') AS pending_partition_count,
+            COUNT(request.partition_id) FILTER (WHERE request.status IN ('failed', 'cancelled')) AS failed_partition_count
+            FROM features LEFT JOIN feature_partition_update_requests request
+              ON request.feature_name = features.name AND request.feature_version = features.version
+            WHERE (%s OR features.deleted_at IS NULL)
+            GROUP BY features.name, features.version, features.dtype, features.frequency, features.feature_key,
+                features.description, features.created_at, features.deleted_at, features.deprecated_at
+            ORDER BY features.name, features.version DESC""", (include_deleted,))
+        return list(cursor.fetchall())
+
+
+@app.get("/features/{name}/versions/{version}", tags=["features"])
+def get_feature(name: ResourceName, version: ResourceVersion, connection: DatabaseConnection) -> dict[str, Any]:
+    """Return one feature, its dependencies, and latest logical partition receipts."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("""SELECT name, version, dtype, frequency, feature_key, validations, transform, description,
+            parameters, created_at, deleted_at, deprecated_at FROM features WHERE name = %s AND version = %s""", (name, version))
+        feature = cursor.fetchone()
+        if feature is None:
+            raise HTTPException(status_code=404, detail="Feature version does not exist.")
+        cursor.execute("""SELECT dataset_name AS name, dataset_version AS version, num_lookback_partitions
+            FROM feature_dataset_dependencies WHERE feature_name = %s AND feature_version = %s
+            ORDER BY dataset_name, dataset_version""", (name, version))
+        feature["datasets"] = list(cursor.fetchall())
+        cursor.execute("""SELECT DISTINCT ON (request.timestamp) request.partition_id, request.timestamp, request.status,
+                request.created_at, request.updated_at, receipt.content_hash, receipt.snapshot_id
+            FROM feature_partition_update_requests request LEFT JOIN feature_partitions receipt ON receipt.partition_id = request.partition_id
+            WHERE request.feature_name = %s AND request.feature_version = %s
+            ORDER BY request.timestamp DESC, request.created_at DESC""", (name, version))
+        feature["partitions"] = list(cursor.fetchall())
+        feature["jobs"] = _resource_jobs(cursor, "feature", name, version)
+    _attach_minio_locations(feature, f"features/{name}_v{version}")
+    return feature
+
+
+@app.delete("/features/{name}/versions/{version}", status_code=status.HTTP_204_NO_CONTENT, tags=["features"])
+def delete_feature(name: ResourceName, version: ResourceVersion, connection: DatabaseConnection) -> None:
+    """Soft-delete a feature version and cancel its unstarted partition requests."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("""UPDATE features SET deleted_at = COALESCE(deleted_at, now())
+            WHERE name = %s AND version = %s RETURNING name""", (name, version))
+        if cursor.fetchone() is None:
+            raise HTTPException(status_code=404, detail="Feature version does not exist.")
+        cursor.execute("""UPDATE feature_partition_update_requests SET status = 'cancelled', updated_at = now()
+            WHERE feature_name = %s AND feature_version = %s AND status = 'pending'""", (name, version))
+        cursor.execute("""UPDATE jobs SET status = 'cancelled', updated_at = now()
+            WHERE status = 'submitted' AND id IN (
+              SELECT DISTINCT job_id FROM feature_partition_update_requests
+              WHERE feature_name = %s AND feature_version = %s
+            )""", (name, version))
+    connection.commit()
+
+
 @app.post("/features", response_model=FeatureResponse, status_code=201, responses=error_responses(FEATURE_VALIDATION), tags=["features"])
 def create_feature(payload: FeatureCreateRequest, connection: DatabaseConnection) -> FeatureResponse:
     """Register an immutable feature definition."""
     try:
         with connection.cursor(row_factory=dict_row) as cursor:
+            for dependency in payload.datasets:
+                cursor.execute("""SELECT deleted_at FROM datasets WHERE name = %s AND version = %s""",
+                    (dependency.name, dependency.version))
+                dataset = cursor.fetchone()
+                if dataset is None or dataset["deleted_at"] is not None:
+                    raise HTTPException(status_code=422, detail="Feature datasets must reference active dataset versions.")
             cursor.execute("""INSERT INTO features
                 (name, version, dtype, frequency, feature_key, validations, transform, description, parameters)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -286,7 +503,7 @@ def create_feature(payload: FeatureCreateRequest, connection: DatabaseConnection
 def materialize_dataset_partitions(name: ResourceName, version: ResourceVersion, payload: PartitionMaterializationRequest, connection: DatabaseConnection) -> MaterializationJobResponse:
     """Create missing dataset partitions and join any completed or pending request."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("SELECT 1 FROM datasets WHERE name = %s AND version = %s", (name, version))
+        cursor.execute("SELECT 1 FROM datasets WHERE name = %s AND version = %s AND deleted_at IS NULL", (name, version))
         if cursor.fetchone() is None:
             raise HTTPException(status_code=404, detail="Dataset version does not exist.")
         existing: list[dict[str, Any]] = []
@@ -410,9 +627,14 @@ def _feature_plan_ids(cursor: Any, request_id: UUID, *, completed: bool) -> set[
 def materialize_feature_partitions(name: ResourceName, version: ResourceVersion, payload: FeaturePartitionMaterializationRequest, connection: DatabaseConnection) -> MaterializationJobResponse:
     """Create only stale/missing feature partitions after pinning their input revisions."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("SELECT 1 FROM features WHERE name = %s AND version = %s", (name, version))
+        cursor.execute("SELECT 1 FROM features WHERE name = %s AND version = %s AND deleted_at IS NULL", (name, version))
         if cursor.fetchone() is None:
             raise HTTPException(status_code=404, detail="Feature version does not exist.")
+        cursor.execute("""SELECT 1 FROM feature_dataset_dependencies AS dependency
+            JOIN datasets ON datasets.name = dependency.dataset_name AND datasets.version = dependency.dataset_version
+            WHERE dependency.feature_name = %s AND dependency.feature_version = %s AND datasets.deleted_at IS NOT NULL""", (name, version))
+        if cursor.fetchone() is not None:
+            raise HTTPException(status_code=409, detail="Feature partition cannot be materialized because an input dataset version is deleted.")
 
         existing: list[dict[str, Any]] = []
         planned_by_timestamp: dict[datetime, list[UUID]] = {}
@@ -477,7 +699,9 @@ def materialize_feature_partitions(name: ResourceName, version: ResourceVersion,
 def complete_dataset_partition(partition_id: UUID, payload: PartitionCompletionRequest, callback_token: Annotated[str, Header()], connection: DatabaseConnection) -> PartitionResultResponse:
     """Record a successful dataset Iceberg write authenticated by its callback token."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("SELECT callback_token FROM partition_update_requests WHERE partition_id = %s", (partition_id,))
+        cursor.execute("""SELECT request.callback_token FROM partition_update_requests AS request
+            JOIN datasets ON datasets.name = request.dataset_name AND datasets.version = request.dataset_version
+            WHERE request.partition_id = %s AND datasets.deleted_at IS NULL""", (partition_id,))
         request = cursor.fetchone()
         if request is None or not secrets.compare_digest(request["callback_token"], callback_token):
             raise HTTPException(status_code=403, detail="Invalid partition callback token.")
@@ -502,7 +726,9 @@ def complete_dataset_partition(partition_id: UUID, payload: PartitionCompletionR
 def complete_feature_partition(partition_id: UUID, payload: FeaturePartitionCompletionRequest, callback_token: Annotated[str, Header()], connection: DatabaseConnection) -> PartitionResultResponse:
     """Record a successful feature Iceberg write and its partition receipt."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("SELECT callback_token FROM feature_partition_update_requests WHERE partition_id = %s", (partition_id,))
+        cursor.execute("""SELECT request.callback_token FROM feature_partition_update_requests AS request
+            JOIN features ON features.name = request.feature_name AND features.version = request.feature_version
+            WHERE request.partition_id = %s AND features.deleted_at IS NULL""", (partition_id,))
         request = cursor.fetchone()
         if request is None or not secrets.compare_digest(request["callback_token"], callback_token):
             raise HTTPException(status_code=403, detail="Invalid partition callback token.")
@@ -529,6 +755,17 @@ def complete_feature_partition(partition_id: UUID, payload: FeaturePartitionComp
     return PartitionResultResponse.model_validate(result)
 
 
+@app.get("/jobs", tags=["jobs"])
+def list_jobs(connection: DatabaseConnection) -> list[dict[str, Any]]:
+    """List materialization jobs and their versioned resource targets."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT id, type, status, created_at, updated_at FROM jobs ORDER BY created_at DESC")
+        jobs = list(cursor.fetchall())
+        for job in jobs:
+            job["targets"] = _job_targets(cursor, job["id"])
+        return jobs
+
+
 @app.get("/jobs/{job_id}", response_model=JobResponse, responses=error_responses(JOB_VALIDATION), tags=["jobs"])
 def get_job(job_id: UUID, connection: DatabaseConnection) -> JobResponse:
     """Return aggregate status for one materialization job."""
@@ -540,7 +777,74 @@ def get_job(job_id: UUID, connection: DatabaseConnection) -> JobResponse:
         job = cursor.fetchone()
     if job is None:
         raise HTTPException(status_code=404, detail="Materialization job does not exist.")
+    with connection.cursor(row_factory=dict_row) as cursor:
+        job["targets"] = _job_targets(cursor, job_id)
+        job["partitions"] = _job_partitions(cursor, job_id)
+    prefix = "dataset" if job["type"] == "dataset_materialization" else "feature"
+    job["spark_application_name"] = f"{prefix}-{job_id}".lower()
+    job["headlamp_url"] = _headlamp_resource_url("customresources/sparkapplications.sparkoperator.k8s.io", job["spark_application_name"])
+    job["kubernetes_resources"] = _job_kubernetes_resources(job["spark_application_name"])
     return JobResponse.model_validate(job)
+
+
+def _minio_browser_url(object_path: str) -> str | None:
+    """Build a MinIO Console object-browser URL for one warehouse object prefix."""
+    console_url = os.environ.get("MINIO_CONSOLE_URL")
+    if not console_url:
+        return None
+    prefix = quote(f"{object_path.rstrip('/')}/", safe="")
+    return f"{console_url.rstrip('/')}/browser/warehouse/{prefix}"
+
+
+def _attach_minio_locations(resource: dict[str, Any], table_path: str) -> None:
+    """Attach direct MinIO Console locations for an Iceberg table and its day partitions."""
+    resource["minio_table_url"] = _minio_browser_url(table_path)
+    for partition in resource.get("partitions", []):
+        timestamp = partition["timestamp"]
+        partition_day = timestamp.date().isoformat() if isinstance(timestamp, datetime) else str(timestamp)[:10]
+        partition["minio_url"] = _minio_browser_url(f"{table_path}/data/timestamp_day={partition_day}")
+
+
+def _headlamp_resource_url(resource_path: str, resource_name: str) -> str | None:
+    """Build a direct Headlamp URL for one resource in the configured namespace."""
+    headlamp_url = os.environ.get("HEADLAMP_URL")
+    if not headlamp_url:
+        return None
+    namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+    return f"{headlamp_url.rstrip('/')}/c/main/{resource_path}/{namespace}/{resource_name}"
+
+
+def _job_kubernetes_resources(application_name: str) -> list[dict[str, str]]:
+    """Return Headlamp links for the application and any extant Spark driver or executors."""
+    application_url = _headlamp_resource_url("customresources/sparkapplications.sparkoperator.k8s.io", application_name)
+    resources = [{"resource_type": "Spark Application", "resource_id": application_name, "url": application_url}] if application_url else []
+    if not application_url:
+        return resources
+    namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+    try:
+        kubernetes_client.CustomObjectsApi().get_namespaced_custom_object(
+            "sparkoperator.k8s.io", "v1beta2", namespace, "sparkapplications", application_name
+        )
+    except ApiException as error:
+        if error.status == 404:
+            return []
+    except Exception:
+        return resources
+    try:
+        pods = kubernetes_client.CoreV1Api().list_namespaced_pod(
+            namespace,
+            label_selector=f"sparkoperator.k8s.io/app-name={application_name}",
+        ).items
+    except Exception:
+        return resources
+    for pod in sorted(pods, key=lambda value: value.metadata.name):
+        role = (pod.metadata.labels or {}).get("spark-role")
+        if role not in {"driver", "executor"}:
+            continue
+        url = _headlamp_resource_url("pods", pod.metadata.name)
+        if url:
+            resources.append({"resource_type": f"{role.title()} Pod", "resource_id": pod.metadata.name, "url": url})
+    return resources
 
 
 def main() -> None:

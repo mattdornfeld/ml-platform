@@ -6,7 +6,7 @@ WORKON_HOME ?= $(HOME)/.virtualenvs
 VENV_PATH := $(WORKON_HOME)/$(VENV_NAME)
 SPARK_JAVA_HOME ?= $(shell brew --prefix openjdk@21 2>/dev/null || /usr/libexec/java_home 2>/dev/null)
 
-.PHONY: configure venv lock test
+.PHONY: configure venv lock test ui headlamp minio minio-console
 
 ## Create the named environment with mkvirtualenv, then install locked dependencies.
 configure: venv
@@ -24,3 +24,19 @@ lock: venv
 ## Run the complete test suite, including the Spark/Iceberg integration test.
 test: configure
 	JAVA_HOME="$(SPARK_JAVA_HOME)" UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) run --locked python -m unittest discover -s tests -v
+
+## Serve the control-plane dashboard from the local Minikube cluster.
+ui:
+	kubectl -n ml-platform port-forward service/ml-control-plane 8001:8000
+
+## Serve the in-cluster Headlamp Kubernetes UI.
+headlamp:
+	kubectl -n headlamp port-forward service/headlamp 8002:80
+
+## Serve the public in-cluster MinIO warehouse endpoint.
+minio:
+	kubectl -n ml-platform port-forward service/minio 9004:9000
+
+## Serve the authenticated in-cluster MinIO Console.
+minio-console:
+	kubectl -n ml-platform port-forward service/minio 9003:9001

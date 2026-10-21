@@ -1,17 +1,17 @@
 apiVersion: v1
 kind: Secret
-metadata: {name: minio-credentials, namespace: materialization}
+metadata: {name: minio-credentials, namespace: ml-platform}
 type: Opaque
 stringData: {MINIO_ROOT_USER: minio, MINIO_ROOT_PASSWORD: miniosecret}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
-metadata: {name: minio-data, namespace: materialization}
+metadata: {name: minio-data, namespace: ml-platform}
 spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 20Gi}}}
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: minio, namespace: materialization}
+metadata: {name: minio, namespace: ml-platform}
 spec:
   replicas: 1
   selector: {matchLabels: {app: minio}}
@@ -22,20 +22,20 @@ spec:
       - name: minio
         image: ml-platform-minio:latest
         imagePullPolicy: IfNotPresent
-        args: [server, /data]
+        args: [server, /data, --console-address, ":9001"]
         envFrom: [{secretRef: {name: minio-credentials}}]
-        ports: [{containerPort: 9000}]
+        ports: [{name: api, containerPort: 9000}, {name: console, containerPort: 9001}]
         volumeMounts: [{name: data, mountPath: /data}]
       volumes: [{name: data, persistentVolumeClaim: {claimName: minio-data}}]
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: minio, namespace: materialization}
-spec: {selector: {app: minio}, ports: [{port: 9000, targetPort: 9000}]}
+metadata: {name: minio, namespace: ml-platform}
+spec: {selector: {app: minio}, ports: [{name: api, port: 9000, targetPort: 9000}, {name: console, port: 9001, targetPort: 9001}]}
 ---
 apiVersion: batch/v1
 kind: Job
-metadata: {name: create-warehouse-bucket, namespace: materialization}
+metadata: {name: create-warehouse-bucket, namespace: ml-platform}
 spec:
   backoffLimit: 10
   template:
@@ -48,3 +48,19 @@ spec:
         envFrom: [{secretRef: {name: minio-credentials}}]
         command: [/bin/sh, -ec]
         args: ["mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD; mc mb --ignore-existing local/warehouse"]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: configure-public-warehouse, namespace: ml-platform}
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: configure-public-access
+        image: ml-platform-minio:latest
+        imagePullPolicy: IfNotPresent
+        envFrom: [{secretRef: {name: minio-credentials}}]
+        command: [/bin/sh, -ec]
+        args: ["mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD; mc mb --ignore-existing local/warehouse; mc anonymous set public local/warehouse"]

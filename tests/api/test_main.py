@@ -2,6 +2,7 @@
 
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -73,7 +74,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
             "updated_at": now,
         }
         cursor = MagicMock()
-        cursor.fetchone.side_effect = [{"exists": True}, None, None, job, partition]
+        cursor.fetchone.side_effect = [{"exists": True}, None, None, None, job, partition]
         cursor.fetchall.return_value = []
         cursor.__enter__.return_value = cursor
         connection = MagicMock()
@@ -99,7 +100,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
             "status": "created", "created_at": now, "updated_at": now,
         }
         cursor = MagicMock()
-        cursor.fetchone.side_effect = [{"exists": True}]
+        cursor.fetchone.side_effect = [{"exists": True}, None]
         cursor.__enter__.return_value = cursor
         connection = MagicMock()
         connection.cursor.return_value = cursor
@@ -128,14 +129,48 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         }
         cursor = MagicMock()
         cursor.fetchone.return_value = row
+        cursor.fetchall.side_effect = [
+            [{"resource_type": "dataset", "name": "sp500", "version": 3}],
+            [{
+                "resource_type": "dataset", "name": "sp500", "version": 3,
+                "timestamp": datetime(2026, 10, 20, 18, tzinfo=timezone.utc), "status": "created",
+            }],
+        ]
         cursor.__enter__.return_value = cursor
         connection = MagicMock()
         connection.cursor.return_value = cursor
 
-        response = get_job(row["id"], connection)
+        with patch.dict("os.environ", {"HEADLAMP_URL": "http://headlamp.test"}, clear=False), patch(
+            "ml_platform.api.main.kubernetes_client.CoreV1Api"
+        ) as core_api, patch("ml_platform.api.main.kubernetes_client.CustomObjectsApi"):
+            core_api.return_value.list_namespaced_pod.return_value.items = [
+                SimpleNamespace(metadata=SimpleNamespace(name="dataset-job-driver", labels={"spark-role": "driver"})),
+                SimpleNamespace(metadata=SimpleNamespace(name="dataset-job-exec-1", labels={"spark-role": "executor"})),
+            ]
+            response = get_job(row["id"], connection)
 
         self.assertEqual(str(response.id), row["id"])
         self.assertEqual(response.status, "submitted")
+        self.assertEqual(response.targets[0].name, "sp500")
+        self.assertEqual(response.targets[0].version, 3)
+        self.assertEqual(response.partitions[0].status, "created")
+        self.assertEqual(response.spark_application_name, "dataset-00000000-0000-0000-0000-000000000001")
+        self.assertEqual(
+            response.headlamp_url,
+            "http://headlamp.test/c/main/customresources/"
+            "sparkapplications.sparkoperator.k8s.io/ml-platform/"
+            "dataset-00000000-0000-0000-0000-000000000001",
+        )
+        self.assertEqual(response.kubernetes_resources[0].resource_type, "Spark Application")
+        self.assertEqual(response.kubernetes_resources[0].resource_id, response.spark_application_name)
+        self.assertEqual(response.kubernetes_resources[1].resource_type, "Driver Pod")
+        self.assertEqual(response.kubernetes_resources[1].resource_id, "dataset-job-driver")
+        self.assertEqual(
+            response.kubernetes_resources[1].url,
+            "http://headlamp.test/c/main/pods/ml-platform/dataset-job-driver",
+        )
+        self.assertEqual(response.kubernetes_resources[2].resource_type, "Executor Pod")
+        self.assertIn("partition_update_requests", str(cursor.execute.call_args_list))
 
 class MaterializationBehaviorTest(unittest.TestCase):
     """Exercise idempotency and completion safety at the API boundary."""
@@ -170,7 +205,7 @@ class MaterializationBehaviorTest(unittest.TestCase):
         completed = {"partition_id": "00000000-0000-0000-0000-000000000002", "job_id": "00000000-0000-0000-0000-000000000001", "timestamp": datetime(2026, 10, 20, 18, tzinfo=timezone.utc), "status": "created", "created_at": now, "updated_at": now}
         job = {"id": "00000000-0000-0000-0000-000000000003", "type": "feature_materialization", "status": "submitted", "created_at": now, "updated_at": now}
         created = {**completed, "partition_id": "00000000-0000-0000-0000-000000000004", "job_id": job["id"], "status": "pending"}
-        connection, _ = self._connection([{"exists": True}, None, job, created])
+        connection, _ = self._connection([{"exists": True}, None, None, job, created])
         with patch.object(api_main, "_plan_feature_inputs", return_value=["input"]), \
              patch.object(api_main, "_completed_feature_request", return_value=completed), \
              patch.object(api_main, "_feature_plan_ids", return_value={"input"}):
@@ -196,3 +231,101 @@ class MaterializationBehaviorTest(unittest.TestCase):
                 )
         self.assertEqual(raised.exception.status_code, 409)
         self.assertFalse(any("INSERT INTO feature_partitions" in str(call) for call in cursor.execute.call_args_list))
+
+class DashboardReadApiTest(unittest.TestCase):
+    """Verify dashboard data endpoints expose resource and partition summaries."""
+
+    def test_dataset_summary_returns_status_counts(self) -> None:
+        """Dataset list is a read-only projection suitable for the dashboard cards."""
+        from ml_platform.api.main import list_datasets
+
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [{
+            "name": "sp500", "version": 3, "dataset_type": "market_data", "config": {},
+            "created_at": datetime.now(timezone.utc), "partition_count": 2,
+            "created_partition_count": 1, "pending_partition_count": 1, "failed_partition_count": 0,
+        }]
+        cursor.__enter__.return_value = cursor
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+
+        result = list_datasets(connection)
+
+        self.assertEqual(result[0]["name"], "sp500")
+        self.assertEqual(result[0]["created_partition_count"], 1)
+        self.assertIn("FILTER (WHERE request.status = 'created')", str(cursor.execute.call_args))
+
+    def test_static_dashboard_is_served(self) -> None:
+        """The browser UI is available without a separate frontend deployment."""
+        client = TestClient(app)
+        response = client.get("/ui/datasets/sp500/3")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("ML Platform", response.text)
+        assets = client.get("/ui/assets/app.js")
+        self.assertEqual(assets.status_code, 200)
+        self.assertIn("renderDetail", assets.text)
+
+class ResourceDeletionTest(unittest.TestCase):
+    """Verify soft-deletion prevents future work while preserving history."""
+
+    def _connection(self, rows: list[object]) -> tuple[MagicMock, MagicMock]:
+        cursor = MagicMock()
+        cursor.fetchone.side_effect = rows
+        cursor.__enter__.return_value = cursor
+        connection = MagicMock()
+        connection.cursor.return_value = cursor
+        return connection, cursor
+
+    def test_delete_dataset_soft_deletes_and_cancels_pending_work(self) -> None:
+        """Deleting a dataset retires its definition and any unfinished work."""
+        from ml_platform.api.main import delete_dataset
+
+        connection, cursor = self._connection([{"name": "sp500"}])
+        delete_dataset("sp500", 3, connection)
+        sql = "\n".join(str(call) for call in cursor.execute.call_args_list)
+        self.assertIn("deleted_at", sql)
+        self.assertIn("cancelled", sql)
+        connection.commit.assert_called_once()
+
+    def test_deleted_dataset_cannot_materialize_partitions(self) -> None:
+        """The partition endpoint rejects a resource that has been soft-deleted."""
+        from fastapi import HTTPException
+        from ml_platform.api.dtos import PartitionMaterializationRequest
+        from ml_platform.api.main import materialize_dataset_partitions
+
+        connection, _ = self._connection([None])
+        with self.assertRaises(HTTPException) as raised:
+            materialize_dataset_partitions(
+                "sp500", 3,
+                PartitionMaterializationRequest(timestamps=[datetime(2026, 10, 20, tzinfo=timezone.utc)]),
+                connection,
+            )
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_dataset_list_excludes_deleted_unless_requested(self) -> None:
+        """Catalog list calls keep soft-deleted versions hidden by default."""
+        from ml_platform.api.main import list_datasets
+
+        connection, cursor = self._connection([])
+        cursor.fetchall.return_value = []
+        list_datasets(connection)
+        self.assertEqual(cursor.execute.call_args.args[1], (False,))
+        list_datasets(connection, include_deleted=True)
+        self.assertEqual(cursor.execute.call_args.args[1], (True,))
+
+class MinioLocationTest(unittest.TestCase):
+    """Verify control-plane metadata links resolve to Iceberg table prefixes."""
+
+    def test_table_and_partition_links_use_the_minio_browser(self) -> None:
+        resource = {"partitions": [{"timestamp": datetime(2026, 10, 20, tzinfo=timezone.utc)}]}
+        with patch.dict("os.environ", {"MINIO_CONSOLE_URL": "http://minio.test:9003"}, clear=False):
+            api_main._attach_minio_locations(resource, "features/trailing_volatility_1d_v1")
+
+        self.assertEqual(
+            resource["minio_table_url"],
+            "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d_v1%2F",
+        )
+        self.assertEqual(
+            resource["partitions"][0]["minio_url"],
+            "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d_v1%2Fdata%2Ftimestamp_day%3D2026-10-20%2F",
+        )

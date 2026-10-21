@@ -3,6 +3,7 @@ name: sp500
 version: 3
 # Current S&P 500 constituent share classes; dot-class symbols use Yahoo Finance hyphens.
 dataset_type: market_data
+description: Hourly OHLCV market data for the current S&P 500 constituents, including available pre-market and after-hours trading.
 symbols:
   - "MMM"
   - "AOS"

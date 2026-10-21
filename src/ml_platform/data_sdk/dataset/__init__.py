@@ -25,7 +25,7 @@ def materialize_dataset(
         for callback in partition_callbacks or []:
             timestamp = str(callback["timestamp"])
             body = json.dumps({"content_hash": result.partition_hashes[timestamp], "snapshot_id": result.snapshot_id}).encode()
-            request = Request(f"{os.environ.get('MATERIALIZATION_API_URL', 'http://127.0.0.1:8000')}/dataset-partition-update-requests/{callback['partition_id']}/complete", data=body, headers={"Content-Type": "application/json", "callback-token": callback["callback_token"]}, method="POST")
+            request = Request(f"{os.environ.get('MATERIALIZATION_API_URL', 'http://ml-control-plane:8000')}/dataset-partition-update-requests/{callback['partition_id']}/complete", data=body, headers={"Content-Type": "application/json", "callback-token": callback["callback_token"]}, method="POST")
             with urlopen(request, timeout=30):
                 pass
         return row_count

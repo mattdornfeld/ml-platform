@@ -86,7 +86,7 @@ def materialize_feature(config: dict[str, Any], callbacks: list[dict[str, Any]],
                 "dataset_partition_ids": [item["partition_id"] for item in callback["dataset_partitions"]],
             }).encode()
             request = Request(
-                f"{os.environ.get('MATERIALIZATION_API_URL', 'http://api:8000')}/feature-partition-update-requests/{callback['partition_id']}/complete",
+                f"{os.environ.get('MATERIALIZATION_API_URL', 'http://ml-control-plane:8000')}/feature-partition-update-requests/{callback['partition_id']}/complete",
                 data=body, method="POST", headers={"Content-Type": "application/json", "callback-token": callback["callback_token"]},
             )
             with urlopen(request, timeout=30):
