@@ -1,5 +1,5 @@
 [project]
-name = "pytorch-tutorial"
+name = "ml-platform"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -14,15 +14,19 @@ dependencies = [
     "pydantic>=2.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
+    "psycopg[binary]>=3.2",
+    "kubernetes>=32.0",
 ]
 
 [project.scripts]
-pytorch-tutorial-train = "sdk.train:main"
-pytorch-tutorial-download-ohlcv = "sdk.market_data:main"
-pytorch-tutorial-extract-long-short-labels = "sdk.labels:main"
-pytorch-tutorial-create-feature = "sdk.feature_harness:main"
-pytorch-tutorial-parquet-explorer = "sdk.parquet_explorer:main"
-pytorch-tutorial-api = "api.main:main"
+ml-platform-train = "ml_platform.sdk.train:main"
+ml-platform-download-ohlcv = "ml_platform.data_sdk.dataset.market_data:main"
+ml-platform-extract-long-short-labels = "ml_platform.sdk.labels:main"
+ml-platform-create-feature = "ml_platform.sdk.feature_harness:main"
+ml-platform-parquet-explorer = "ml_platform.sdk.parquet_explorer:main"
+ml-platform-api = "ml_platform.api.main:main"
+ml-platform-materialize-dataset = "ml_platform.data_sdk.dataset:main"
+ml-platform = "ml_platform.cli.materialization:main"
 
 [build-system]
 requires = ["setuptools>=68"]

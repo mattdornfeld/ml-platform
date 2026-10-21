@@ -7,15 +7,15 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import ValidationError
 
-from sdk.configs import LongShortLabelConfig
-from sdk.labels import (
+from ml_platform.sdk.configs import LongShortLabelConfig
+from ml_platform.sdk.labels import (
     DATA_ROOT,
     label_storage_path,
     label_table_identifier,
     main,
     materialize_long_short_labels,
 )
-from sdk.market_data import (
+from ml_platform.data_sdk.dataset.market_data import (
     ICEBERG_TABLE_IDENTIFIER,
     create_spark_session,
     materialize_daily_ohlcv_partitions,
@@ -121,7 +121,7 @@ class LabelsUnitTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Market-data table does not exist"):
             materialize_long_short_labels(Path("unused"), label_config(), spark=spark)
 
-    @patch("sdk.labels.materialize_long_short_labels", return_value=12)
+    @patch("ml_platform.sdk.labels.materialize_long_short_labels", return_value=12)
     def test_entrypoint_uses_default_variant(self, materialize: MagicMock) -> None:
         """Load the default variant and pass only its label config to the writer."""
         with patch("sys.argv", ["labels"]):

@@ -9,7 +9,7 @@ datasets:
   - dataset_id: market_data.hourly_ohlcv
     # Market data is daily-partitioned; use one preceding daily partition.
     num_lookback_partitions: 1
-transform: features.relative_volume.RelativeVolumeTransform
+transform: ml_platform.data_sdk.features.relative_volume.RelativeVolumeTransform
 description: Current volume divided by trailing mean volume.
 parameters:
   lookback_bars: 24

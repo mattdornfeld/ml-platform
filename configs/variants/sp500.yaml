@@ -1,5 +1,5 @@
 # @package _global_
 defaults:
-  - /market_data: sp500
+  - /datasets: sp500
   - /labels: hourly_triple_barrier
   - _self_

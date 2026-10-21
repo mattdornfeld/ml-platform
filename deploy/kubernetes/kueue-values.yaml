@@ -1,0 +1,22 @@
+# Helm values for the local Kueue installation. SparkApplication support is alpha
+# upstream, so pin the chart version in scripts/bootstrap-minikube.sh.
+controllerManager:
+  featureGates:
+    - name: SparkApplicationIntegration
+      enabled: true
+managerConfig:
+  controllerManagerConfigYaml: |-
+    apiVersion: config.kueue.x-k8s.io/v1beta2
+    kind: Configuration
+    health:
+      healthProbeBindAddress: :8081
+    metrics:
+      bindAddress: :8443
+    webhook:
+      port: 9443
+    leaderElection:
+      leaderElect: true
+      resourceName: c1f6bfd2.kueue.x-k8s.io
+    integrations:
+      frameworks:
+        - sparkoperator.k8s.io/sparkapplication

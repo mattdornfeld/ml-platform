@@ -9,7 +9,7 @@ datasets:
   - dataset_id: market_data.hourly_ohlcv
     # Use one preceding daily market-data partition for lineage.
     num_lookback_partitions: 1
-transform: features.log_return.LogReturnTransform
+transform: ml_platform.data_sdk.features.log_return.LogReturnTransform
 description: One-bar close-to-close log return.
 validations:
   min_rows_per_partition: 1

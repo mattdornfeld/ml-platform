@@ -1,7 +1,7 @@
 UV ?= uv
 PYTHON_VERSION ?= 3.12
 VIRTUALENVWRAPPER_CONFIG ?= $(HOME)/.zsh_configs/uv-virtualenvwrapper.sh
-VENV_NAME ?= pytorch-tutorial
+VENV_NAME ?= ml-platform
 WORKON_HOME ?= $(HOME)/.virtualenvs
 VENV_PATH := $(WORKON_HOME)/$(VENV_NAME)
 SPARK_JAVA_HOME ?= $(shell brew --prefix openjdk@21 2>/dev/null || /usr/libexec/java_home 2>/dev/null)

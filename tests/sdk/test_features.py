@@ -7,10 +7,10 @@ from unittest.mock import MagicMock
 
 from pydantic import ValidationError
 
-from features.trailing_volatility import TrailingVolatilityTransform
-from sdk.configs import DatasetMetadata, FeatureConfig, list_feature_config_names, load_feature_config, load_feature_materialization_config
-from sdk.datasets import Dataset
-from sdk.feature_harness import (
+from ml_platform.data_sdk.features.trailing_volatility import TrailingVolatilityTransform
+from ml_platform.sdk.configs import DatasetMetadata, FeatureConfig, list_feature_config_names, load_feature_config, load_feature_materialization_config
+from ml_platform.sdk.datasets import Dataset
+from ml_platform.sdk.feature_harness import (
     FeatureHarness,
     DEPENDENCY_MANIFEST_TABLE_IDENTIFIER,
     _feature_storage_path,
@@ -18,7 +18,7 @@ from sdk.feature_harness import (
     _instantiate_transform,
     _validate_feature_frame,
 )
-from sdk.market_data import ICEBERG_TABLE_IDENTIFIER, create_spark_session, materialize_daily_ohlcv_partitions
+from ml_platform.data_sdk.dataset.market_data import ICEBERG_TABLE_IDENTIFIER, create_spark_session, materialize_daily_ohlcv_partitions
 
 
 def feature_config(
@@ -67,9 +67,9 @@ class FeaturesIntegrationTest(unittest.TestCase):
         identifiers.extend(
             _feature_table_identifier(config)
             for config in (
-                feature_config("test_log_return", "features.log_return.LogReturnTransform"),
-                feature_config("test_trailing_volatility", "features.trailing_volatility.TrailingVolatilityTransform", 2, parameters={"lookback_bars": 2}),
-                feature_config("test_relative_volume", "features.relative_volume.RelativeVolumeTransform", 2, "hourly", {"lookback_bars": 2}),
+                feature_config("test_log_return", "ml_platform.data_sdk.features.log_return.LogReturnTransform"),
+                feature_config("test_trailing_volatility", "ml_platform.data_sdk.features.trailing_volatility.TrailingVolatilityTransform", 2, parameters={"lookback_bars": 2}),
+                feature_config("test_relative_volume", "ml_platform.data_sdk.features.relative_volume.RelativeVolumeTransform", 2, "hourly", {"lookback_bars": 2}),
             )
         )
         for identifier in identifiers:
@@ -99,8 +99,8 @@ class FeaturesIntegrationTest(unittest.TestCase):
 
     def test_materializes_three_configured_features(self) -> None:
         """Write each PySpark feature to its own table with expected values."""
-        log_returns = feature_config("test_log_return", "features.log_return.LogReturnTransform")
-        volatility = feature_config("test_trailing_volatility", "features.trailing_volatility.TrailingVolatilityTransform", 2, parameters={"lookback_bars": 2})
+        log_returns = feature_config("test_log_return", "ml_platform.data_sdk.features.log_return.LogReturnTransform")
+        volatility = feature_config("test_trailing_volatility", "ml_platform.data_sdk.features.trailing_volatility.TrailingVolatilityTransform", 2, parameters={"lookback_bars": 2})
 
         self.assertEqual(self.harness.create(log_returns), 4)
         self.assertEqual(self.harness.create(volatility), 2)
@@ -123,7 +123,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
             )
         properties = dict(self.spark.sql(f"SHOW TBLPROPERTIES {_feature_table_identifier(log_returns)}").collect())
         self.assertEqual(properties["feature.version"], "1")
-        self.assertEqual(properties["feature.transform"], "features.log_return.LogReturnTransform")
+        self.assertEqual(properties["feature.transform"], "ml_platform.data_sdk.features.log_return.LogReturnTransform")
         self.assertEqual(properties["feature.frequency"], "daily")
         self.assertEqual(
             self.spark.table(DEPENDENCY_MANIFEST_TABLE_IDENTIFIER)
@@ -162,7 +162,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
                 ("2026-01-04T18:30:00Z", "AAA", 144.0, 100),
             ]
         )
-        log_returns = feature_config("test_log_return", "features.log_return.LogReturnTransform", 1)
+        log_returns = feature_config("test_log_return", "ml_platform.data_sdk.features.log_return.LogReturnTransform", 1)
         self.assertEqual(self.harness.create(log_returns), 14)
         unchanged_day_four = self.spark.table(DEPENDENCY_MANIFEST_TABLE_IDENTIFIER).where(
             "feature_name = 'test_log_return' AND date(output_partition) = DATE '2026-01-04'"
@@ -190,7 +190,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
                 ("2026-01-03T18:30:00Z", "AAA", 134.0, 100),
             ]
         )
-        log_returns = feature_config("test_log_return", "features.log_return.LogReturnTransform", 1)
+        log_returns = feature_config("test_log_return", "ml_platform.data_sdk.features.log_return.LogReturnTransform", 1)
         self.assertEqual(self.harness.create(log_returns), 9)
 
         self.spark.sql(
@@ -216,7 +216,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
                 ("2026-01-03T16:30:00Z", "AAA", 132.0, 100),
             ]
         )
-        log_returns = feature_config("test_log_return", "features.log_return.LogReturnTransform", 1)
+        log_returns = feature_config("test_log_return", "ml_platform.data_sdk.features.log_return.LogReturnTransform", 1)
         self.harness.create(log_returns)
         self.assertEqual(
             self.spark.table(DEPENDENCY_MANIFEST_TABLE_IDENTIFIER)
@@ -230,7 +230,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
 
     def test_enforces_mandatory_transform_output_validations(self) -> None:
         """Reject malformed schemas, duplicate keys, and unrequested partitions."""
-        config = feature_config("validated", "features.log_return.LogReturnTransform")
+        config = feature_config("validated", "ml_platform.data_sdk.features.log_return.LogReturnTransform")
         source = self.spark.createDataFrame(
             [("2026-01-02T14:30:00Z", "AAA", 100.0)],
             "timestamp string, symbol string, Close double",
@@ -267,7 +267,7 @@ class FeaturesUnitTest(unittest.TestCase):
 
     def test_loads_each_checked_in_feature_config(self) -> None:
         """Load the checked-in feature specifications from YAML."""
-        self.assertEqual(load_feature_config("log_return").transform, "features.log_return.LogReturnTransform")
+        self.assertEqual(load_feature_config("log_return").transform, "ml_platform.data_sdk.features.log_return.LogReturnTransform")
         self.assertEqual(load_feature_config("log_return").datasets[0].num_lookback_partitions, 1)
         self.assertEqual(load_feature_config("trailing_volatility_1d").datasets[0].num_lookback_partitions, 1)
         self.assertEqual(load_feature_config("trailing_volatility_7d").datasets[0].num_lookback_partitions, 7)
@@ -282,18 +282,18 @@ class FeaturesUnitTest(unittest.TestCase):
 
     def test_feature_validations_only_expose_configurable_checks(self) -> None:
         """Keep schema, uniqueness, and output-partition checks unconditional."""
-        values = feature_config("returns", "features.log_return.LogReturnTransform").model_dump()
+        values = feature_config("returns", "ml_platform.data_sdk.features.log_return.LogReturnTransform").model_dump()
         values["validations"] = {"unsupported_validation": False}
         with self.assertRaises(ValidationError):
             FeatureConfig.model_validate(values)
 
     def test_frequency_uses_daily_or_hourly_metadata(self) -> None:
         """Reject the retired partition_type field and Spark-style values."""
-        values = feature_config("returns", "features.log_return.LogReturnTransform").model_dump()
+        values = feature_config("returns", "ml_platform.data_sdk.features.log_return.LogReturnTransform").model_dump()
         values["frequency"] = "day"
         with self.assertRaises(ValidationError):
             FeatureConfig.model_validate(values)
-        values = feature_config("returns", "features.log_return.LogReturnTransform").model_dump()
+        values = feature_config("returns", "ml_platform.data_sdk.features.log_return.LogReturnTransform").model_dump()
         values["partition_type"] = "day"
         with self.assertRaises(ValidationError):
             FeatureConfig.model_validate(values)
@@ -301,12 +301,12 @@ class FeaturesUnitTest(unittest.TestCase):
     def test_requires_valid_feature_parameters(self) -> None:
         """Reject unsupported names and invalid lookback combinations."""
         with self.assertRaises(ValidationError):
-            feature_config("bad-name", "features.log_return.LogReturnTransform")
+            feature_config("bad-name", "ml_platform.data_sdk.features.log_return.LogReturnTransform")
         with self.assertRaises(ValidationError):
-            FeatureConfig(name="returns", version="one", dtype="double", frequency="daily", datasets=[], transform="features.log_return.LogReturnTransform", description="x")
+            FeatureConfig(name="returns", version="one", dtype="double", frequency="daily", datasets=[], transform="ml_platform.data_sdk.features.log_return.LogReturnTransform", description="x")
         with self.assertRaises(ValidationError):
             FeatureConfig(name="returns", version=1, dtype="double", frequency="daily", datasets=[], transform="bad-path", description="x")
-        duplicate_datasets = feature_config("returns", "features.log_return.LogReturnTransform").model_dump()
+        duplicate_datasets = feature_config("returns", "ml_platform.data_sdk.features.log_return.LogReturnTransform").model_dump()
         duplicate_datasets["datasets"].append(duplicate_datasets["datasets"][0])
         with self.assertRaises(ValidationError):
             FeatureConfig.model_validate(duplicate_datasets)
@@ -331,7 +331,7 @@ class FeaturesUnitTest(unittest.TestCase):
         spark.catalog.tableExists.return_value = False
         with self.assertRaisesRegex(ValueError, "Feature dataset table does not exist"):
             FeatureHarness(spark, Path("unused")).create(
-                feature_config("returns", "features.log_return.LogReturnTransform")
+                feature_config("returns", "ml_platform.data_sdk.features.log_return.LogReturnTransform")
             )
 
 

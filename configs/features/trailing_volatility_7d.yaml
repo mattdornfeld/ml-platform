@@ -9,7 +9,7 @@ datasets:
   - dataset_id: market_data.hourly_ohlcv
     # Market data is daily-partitioned; use seven preceding daily partitions.
     num_lookback_partitions: 7
-transform: features.trailing_volatility.TrailingVolatilityTransform
+transform: ml_platform.data_sdk.features.trailing_volatility.TrailingVolatilityTransform
 description: Seven-day trailing sample volatility of hourly log returns.
 parameters:
   lookback_bars: 168

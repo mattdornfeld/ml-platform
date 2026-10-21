@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from sdk.configs import (
+from ml_platform.sdk.configs import (
     DEFAULT_VARIANT_NAME,
     MarketDataConfig,
     VariantsConfig,
@@ -16,7 +16,7 @@ from sdk.configs import (
     parse_variant_args,
     with_variants_config,
 )
-from sdk.market_data import (
+from ml_platform.data_sdk.dataset.market_data import (
     ICEBERG_TABLE_IDENTIFIER,
     create_spark_session,
     fetch_hourly_ohlcv,
@@ -66,7 +66,7 @@ class MarketDataIntegrationTest(unittest.TestCase):
         if self.spark.catalog.tableExists(ICEBERG_TABLE_IDENTIFIER):
             self.spark.sql(f"DROP TABLE {ICEBERG_TABLE_IDENTIFIER} PURGE")
 
-    @patch("sdk.market_data._request_yahoo_chart")
+    @patch("ml_platform.data_sdk.dataset.market_data._request_yahoo_chart")
     def test_yahoo_json_writes_spark_dataframe_without_partition_column(self, request: object) -> None:
         """Convert mocked JSON to Spark and persist only the declared table schema."""
         request.return_value = yahoo_payload()
@@ -80,15 +80,16 @@ class MarketDataIntegrationTest(unittest.TestCase):
         self.assertNotIn("timestamp_day", self.spark.table(ICEBERG_TABLE_IDENTIFIER).columns)
         request.assert_called_once_with("MOCK", TEST_START_DATE, TEST_END_DATE)
 
+
 class MarketDataUnitTest(unittest.TestCase):
     """Cover configuration and decorated entrypoint behavior."""
 
     def test_config_rejects_invalid_and_aliased_dates(self) -> None:
         """Require the canonical date fields and valid ordering."""
         with self.assertRaises(ValidationError):
-            MarketDataConfig(symbols=["AAPL"], start_date="2026-01-02", end_date="2026-01-02")
+            MarketDataConfig(dataset_type="market_data", symbols=["AAPL"], time_range={"start_date": "2026-01-02", "end_date": "2026-01-02"})
         with self.assertRaisesRegex(ValidationError, "start_data"):
-            MarketDataConfig(symbols=["AAPL"], start_data="2026-01-01", end_date="2026-01-02")
+            MarketDataConfig(dataset_type="market_data", symbols=["AAPL"], time_range={"start_data": "2026-01-01", "end_date": "2026-01-02"})
 
     def test_variant_decorator_injects_config(self) -> None:
         """Inject the selected typed variant into an entrypoint."""
@@ -98,7 +99,7 @@ class MarketDataUnitTest(unittest.TestCase):
             received.append(config)
         with patch("sys.argv", ["entrypoint"]):
             entrypoint()
-        self.assertEqual(len(received[0].market_data.symbols), 503)
+        self.assertEqual(len(received[0].datasets.symbols), 503)
         with patch("sys.argv", ["entrypoint"]):
             self.assertEqual(parse_variant_args().variant, DEFAULT_VARIANT_NAME)
         self.assertEqual(load_variants_config("sp500").labels.horizon_bars, 24)

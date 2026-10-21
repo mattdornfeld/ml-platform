@@ -1,0 +1,8 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.ml-control-plane</groupId><artifactId>spark-runtime-jars</artifactId><version>1.0.0</version>
+  <dependencies>
+    <dependency><groupId>org.apache.iceberg</groupId><artifactId>iceberg-spark-runtime-4.1_2.13</artifactId><version>1.12.0</version></dependency>
+    <dependency><groupId>org.apache.hadoop</groupId><artifactId>hadoop-aws</artifactId><version>3.4.1</version></dependency>
+  </dependencies>
+</project>
