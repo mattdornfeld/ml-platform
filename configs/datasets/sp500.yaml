@@ -1,3 +1,6 @@
+dataset_id: market_data.hourly_ohlcv
+name: sp500
+version: 3
 # Current S&P 500 constituent share classes; dot-class symbols use Yahoo Finance hyphens.
 dataset_type: market_data
 symbols:
