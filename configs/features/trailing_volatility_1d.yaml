@@ -6,10 +6,11 @@ dtype: double
 frequency: daily
 feature_key: symbol
 datasets:
-  - dataset_id: market_data.hourly_ohlcv
+  - name: sp500
+    version: 3
     # Market data is daily-partitioned; use one preceding daily partition.
     num_lookback_partitions: 1
-transform: ml_platform.data_sdk.features.trailing_volatility.TrailingVolatilityTransform
+transform: ml_platform.data_sdk.TrailingVolatilityTransform
 description: One-day trailing sample volatility of hourly log returns.
 parameters:
   lookback_bars: 24

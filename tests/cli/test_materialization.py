@@ -15,10 +15,10 @@ class ResourceSyncTest(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         (self.root / "datasets").mkdir()
         (self.root / "features").mkdir()
-        (self.root / "datasets" / "prices.yaml").write_text("""dataset_id: market_data.hourly_ohlcv
-name: prices
+        (self.root / "datasets" / "prices.yaml").write_text("""name: prices
 version: 2
 dataset_type: market_data
+description: Test prices.
 symbols: [AAPL]
 time_range: {start_date: 2026-01-01, end_date: 2026-01-02}
 """)
@@ -28,9 +28,10 @@ dtype: double
 frequency: daily
 feature_key: symbol
 datasets:
-  - dataset_id: market_data.hourly_ohlcv
+  - name: prices
+    version: 2
     num_lookback_partitions: 1
-transform: ml_platform.data_sdk.features.log_return.LogReturnTransform
+transform: ml_platform.data_sdk.LogReturnTransform
 description: Returns
 validations: {min_rows_per_partition: 1}
 """)
@@ -39,7 +40,7 @@ validations: {min_rows_per_partition: 1}
     def test_dataset_sync_creates_configured_and_deletes_removed(self, request: object) -> None:
         request.side_effect = [[
             {"name": "obsolete", "version": 1, "deleted_at": None},
-            {"name": "prices", "version": 2, "deleted_at": None},
+            {"name": "prices", "version": 2, "deleted_at": None, "config": {"description": "Test prices."}},
         ], {}]
         result = sync_resources("http://api", "dataset", self.root)
         self.assertEqual(result, {"created": [], "deleted": ["obsolete v1"]})

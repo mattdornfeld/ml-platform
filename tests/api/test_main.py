@@ -42,6 +42,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         response = create_dataset(payload, connection)
 
         self.assertEqual(response.name, "sp500")
+        self.assertEqual(response.id, "sp500_v1")
         connection.commit.assert_called_once()
         self.assertTrue(any("submitted" in str(call) for call in cursor.execute.call_args_list))
 
@@ -319,13 +320,13 @@ class MinioLocationTest(unittest.TestCase):
     def test_table_and_partition_links_use_the_minio_browser(self) -> None:
         resource = {"partitions": [{"timestamp": datetime(2026, 10, 20, tzinfo=timezone.utc)}]}
         with patch.dict("os.environ", {"MINIO_CONSOLE_URL": "http://minio.test:9003"}, clear=False):
-            api_main._attach_minio_locations(resource, "features/trailing_volatility_1d_v1")
+            api_main._attach_minio_locations(resource, "features/trailing_volatility_1d-v1")
 
         self.assertEqual(
             resource["minio_table_url"],
-            "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d_v1%2F",
+            "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d-v1%2F",
         )
         self.assertEqual(
             resource["partitions"][0]["minio_url"],
-            "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d_v1%2Fdata%2Ftimestamp_day%3D2026-10-20%2F",
+            "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d-v1%2Fdata%2Ftimestamp_day%3D2026-10-20%2F",
         )

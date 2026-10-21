@@ -6,10 +6,11 @@ dtype: double
 frequency: daily
 feature_key: symbol
 datasets:
-  - dataset_id: market_data.hourly_ohlcv
+  - name: sp500
+    version: 3
     # Use one preceding daily market-data partition for lineage.
     num_lookback_partitions: 1
-transform: ml_platform.data_sdk.features.log_return.LogReturnTransform
+transform: ml_platform.data_sdk.LogReturnTransform
 description: One-bar close-to-close log return.
 validations:
   min_rows_per_partition: 1

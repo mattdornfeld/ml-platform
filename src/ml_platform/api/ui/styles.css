@@ -65,3 +65,8 @@
 .job-summary { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
 .job-summary .partition-summary { margin:0; }
 .job-total { color:var(--muted); }
+.summary-section > .section-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.summary-section > .section-heading h2 { margin:0; }
+.section-toggle { border:0; padding:0; background:transparent; color:var(--cyan); font:inherit; cursor:pointer; }
+.section-toggle:hover { text-decoration:underline; }
+.summary-section > [hidden] { display:none; }

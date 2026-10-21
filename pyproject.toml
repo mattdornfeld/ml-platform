@@ -10,22 +10,19 @@ dependencies = [
     "pandas>=2.2,<3.0",
     "pyspark>=4.1,<4.2",
     "omegaconf>=2.3",
-    "hydra-core>=1.3",
     "pydantic>=2.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "psycopg[binary]>=3.2",
     "kubernetes>=32.0",
+    "simple-classproperty>=4.0.2",
 ]
 
 [project.scripts]
-ml-platform-train = "ml_platform.sdk.train:main"
-ml-platform-download-ohlcv = "ml_platform.data_sdk.dataset.market_data:main"
-ml-platform-extract-long-short-labels = "ml_platform.sdk.labels:main"
-ml-platform-create-feature = "ml_platform.sdk.feature_harness:main"
-ml-platform-parquet-explorer = "ml_platform.sdk.parquet_explorer:main"
+ml-platform-train = "ml_platform.model_sdk.train:main"
+ml-platform-parquet-explorer = "ml_platform.data_sdk.utils.data_explorer:main"
 ml-platform-api = "ml_platform.api.main:main"
-ml-platform-materialize-dataset = "ml_platform.data_sdk.dataset:main"
+ml-platform-materialize-dataset = "ml_platform.data_sdk.materializers._dataset:main"
 ml-platform = "ml_platform.cli.materialization:main"
 
 [build-system]

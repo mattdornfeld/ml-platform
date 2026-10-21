@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 from pyspark.sql import DataFrame, Window, functions as F
 
-from ml_platform.data_sdk.features.base import FeatureTransform
-from ml_platform.sdk.datasets import Dataset
+from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
+from ml_platform.data_sdk.transforms._types import Dataset
 
 
 @dataclass(frozen=True)

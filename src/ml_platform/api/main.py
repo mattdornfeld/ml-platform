@@ -311,7 +311,10 @@ def list_datasets(connection: DatabaseConnection, include_deleted: bool = False)
             WHERE (%s OR datasets.deleted_at IS NULL)
             GROUP BY datasets.name, datasets.version, datasets.dataset_type, datasets.config, datasets.created_at, datasets.deleted_at, datasets.deprecated_at
             ORDER BY datasets.name, datasets.version DESC""", (include_deleted,))
-        return list(cursor.fetchall())
+        datasets = list(cursor.fetchall())
+    for dataset in datasets:
+        dataset["id"] = f"{dataset['name']}_v{dataset['version']}"
+    return datasets
 
 
 @app.get("/datasets/{name}/versions/{version}", tags=["datasets"])
@@ -329,7 +332,8 @@ def get_dataset(name: ResourceName, version: ResourceVersion, connection: Databa
             ORDER BY request.timestamp DESC, request.created_at DESC""", (name, version))
         dataset["partitions"] = list(cursor.fetchall())
         dataset["jobs"] = _resource_jobs(cursor, "dataset", name, version)
-    _attach_minio_locations(dataset, "market_data/hourly_ohlcv")
+    dataset["id"] = f"{dataset['name']}_v{dataset['version']}"
+    _attach_minio_locations(dataset, f"market_data/{name}-v{version}")
     return dataset
 
 
@@ -352,6 +356,7 @@ def update_dataset_description(
         if dataset is None:
             raise HTTPException(status_code=404, detail="Dataset version does not exist.")
     connection.commit()
+    dataset["id"] = f"{dataset['name']}_v{dataset['version']}"
     return dataset
 
 
@@ -382,10 +387,10 @@ def create_dataset(payload: DatasetCreateRequest, connection: DatabaseConnection
                 """INSERT INTO datasets (name, version, dataset_type, config)
                 VALUES (%s, %s, %s, %s)
                 RETURNING name, version, dataset_type, config, created_at""",
-                (payload.name, payload.version, payload.dataset_type.value, Json(payload.config)),
+                (payload.name, payload.version, payload.dataset_type.value, Json(payload.config.model_dump(mode="json"))),
             )
             row = cursor.fetchone()
-            job_id = _enqueue_dataset_job(cursor, payload.name, payload.version, payload.config)
+            job_id = _enqueue_dataset_job(cursor, payload.name, payload.version, payload.config.model_dump(mode="json"))
         connection.commit()
     except errors.UniqueViolation as error:
         raise HTTPException(status_code=409, detail="Dataset name and version already exist.") from error
@@ -445,7 +450,7 @@ def get_feature(name: ResourceName, version: ResourceVersion, connection: Databa
             ORDER BY request.timestamp DESC, request.created_at DESC""", (name, version))
         feature["partitions"] = list(cursor.fetchall())
         feature["jobs"] = _resource_jobs(cursor, "feature", name, version)
-    _attach_minio_locations(feature, f"features/{name}_v{version}")
+    _attach_minio_locations(feature, f"features/{name}-v{version}")
     return feature
 
 

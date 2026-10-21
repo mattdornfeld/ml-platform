@@ -6,10 +6,11 @@ dtype: double
 frequency: hourly
 feature_key: symbol
 datasets:
-  - dataset_id: market_data.hourly_ohlcv
+  - name: sp500
+    version: 3
     # Market data is daily-partitioned; use one preceding daily partition.
     num_lookback_partitions: 1
-transform: ml_platform.data_sdk.features.relative_volume.RelativeVolumeTransform
+transform: ml_platform.data_sdk.RelativeVolumeTransform
 description: Current volume divided by trailing mean volume.
 parameters:
   lookback_bars: 24

@@ -1,4 +1,0 @@
-# @package _global_
-# Every YAML file in configs/features is materialized in its own Spark job.
-# This setting limits simultaneous jobs.
-max_concurrent_spark_jobs: 2

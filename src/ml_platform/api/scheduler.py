@@ -93,8 +93,8 @@ class JobScheduler:
                 "type": "Python", "mode": "cluster", "suspend": True,
                 "image": os.environ.get("MATERIALIZATION_IMAGE", "ml-platform:latest"),
                 "imagePullPolicy": "IfNotPresent",
-                "mainApplicationFile": "local:///app/src/ml_platform/data_sdk/dataset/__init__.py",
-                "arguments": ["--dataset-type", dataset["dataset_type"], "--config-json", json.dumps(dataset["config"], default=str), "--partition-callbacks-json", json.dumps(dataset["callbacks"], default=str), "--warehouse-dir", os.environ.get("DATA_WAREHOUSE_DIR", "s3a://warehouse")],
+                "mainApplicationFile": "local:///app/src/ml_platform/data_sdk/materializers/_dataset.py",
+                "arguments": ["--config-json", json.dumps({**dataset["config"], "name": dataset["name"], "version": dataset["version"], "dataset_type": dataset["dataset_type"], "warehouse_dir": os.environ.get("DATA_WAREHOUSE_DIR", "s3a://warehouse"), "partitions": dataset["callbacks"]}, default=str)],
                 "sparkVersion": "4.1.3", "restartPolicy": {"type": "Never"},
                 "sparkConf": {
                     "spark.sql.session.timeZone": "UTC",
@@ -120,7 +120,7 @@ class JobScheduler:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """SELECT datasets.dataset_type, datasets.config,
+                    """SELECT datasets.name, datasets.version, datasets.dataset_type, datasets.config,
                     json_agg(json_build_object('partition_id', request.partition_id,
                         'timestamp', request.timestamp, 'callback_token', request.callback_token)
                         ORDER BY request.timestamp) AS callbacks
@@ -128,7 +128,7 @@ class JobScheduler:
                     JOIN datasets ON datasets.name = request.dataset_name
                       AND datasets.version = request.dataset_version
                     WHERE request.job_id = %s
-                    GROUP BY datasets.dataset_type, datasets.config""",
+                    GROUP BY datasets.name, datasets.version, datasets.dataset_type, datasets.config""",
                     (job_id,),
                 )
                 dataset = cursor.fetchone()
@@ -147,8 +147,8 @@ class JobScheduler:
                 "annotations": {"kueue.x-k8s.io/admission-gated-by": ADMISSION_GATE}},
             "spec": {"type": "Python", "mode": "cluster", "suspend": True,
                 "image": os.environ.get("MATERIALIZATION_IMAGE", "ml-platform:latest"), "imagePullPolicy": "IfNotPresent",
-                "mainApplicationFile": "local:///app/src/ml_platform/data_sdk/feature/__init__.py",
-                "arguments": ["--feature-json", json.dumps(feature["config"], default=str), "--partition-callbacks-json", json.dumps(feature["callbacks"], default=str), "--warehouse-dir", os.environ.get("DATA_WAREHOUSE_DIR", "s3a://warehouse")],
+                "mainApplicationFile": "local:///app/src/ml_platform/data_sdk/materializers/_feature.py",
+                "arguments": ["--config-json", json.dumps({**feature["config"], "warehouse_dir": os.environ.get("DATA_WAREHOUSE_DIR", "s3a://warehouse"), "partitions": feature["callbacks"]}, default=str)],
                 "sparkVersion": "4.1.3", "restartPolicy": {"type": "Never"},
                 "sparkConf": {"spark.sql.session.timeZone": "UTC", "spark.hadoop.fs.s3a.endpoint": os.environ.get("S3_ENDPOINT", "http://minio:9000"), "spark.hadoop.fs.s3a.path.style.access": "true", "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem", "spark.hadoop.fs.s3a.access.key": os.environ.get("MINIO_ROOT_USER", "minio"), "spark.hadoop.fs.s3a.secret.key": os.environ.get("MINIO_ROOT_PASSWORD", "miniosecret")},
                 "driver": {"cores": 1, "memory": "2g", "serviceAccount": "ml-control-plane", "env": [{"name": "MATERIALIZATION_API_URL", "value": "http://ml-control-plane:8000"}]},

@@ -11,6 +11,8 @@ from urllib.request import Request, urlopen
 
 from omegaconf import OmegaConf
 
+from ml_platform.data_sdk.configs import FeatureConfig, MarketDataConfig
+
 
 DEFAULT_CONFIG_DIR = Path("configs")
 
@@ -53,46 +55,54 @@ def _describe_job(base_url: str, job_id: str, poll_seconds: float | None = None)
         time.sleep(poll_seconds)
 
 
+def _dataset_payload(config: dict[str, Any]) -> dict[str, Any]:
+    """Validate one dataset YAML mapping and convert it to the API request shape."""
+    definition = MarketDataConfig.model_validate_json(json.dumps(config, default=str))
+    values = definition.model_dump(mode="json")
+    values.pop("num_lookback_partitions")
+    return {
+        "name": values.pop("name"),
+        "version": values.pop("version"),
+        "dataset_type": values.pop("dataset_type"),
+        "config": values,
+    }
+
+
 def _dataset_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
-    """Load every checked-in dataset config into its API create payload."""
+    """Load, validate, and serialize every checked-in dataset definition."""
     resources: dict[tuple[str, int], dict[str, Any]] = {}
     for path in sorted((config_dir / "datasets").glob("*.yaml")):
-        config = _load_yaml(path)
-        name = config.pop("name")
-        version = config.pop("version")
-        config.pop("dataset_id")
-        identity = (str(name), int(version))
+        payload = _dataset_payload(_load_yaml(path))
+        identity = (str(payload["name"]), int(payload["version"]))
         if identity in resources:
             raise ValueError(f"Duplicate dataset config identity: {identity[0]} v{identity[1]}")
-        resources[identity] = {"name": name, "version": version, "dataset_type": config.pop("dataset_type"), "config": config}
+        resources[identity] = payload
     return resources
 
 
+def _feature_payload(config: dict[str, Any]) -> dict[str, Any]:
+    """Validate one feature YAML mapping and convert it to the API request shape."""
+    values = FeatureConfig.model_validate_json(json.dumps(config, default=str)).model_dump(mode="json")
+    values["datasets"] = [
+        {
+            "name": dataset["name"],
+            "version": dataset["version"],
+            "num_lookback_partitions": dataset["num_lookback_partitions"],
+        }
+        for dataset in values["datasets"]
+    ]
+    return values
+
+
 def _feature_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
-    """Load feature configs and resolve logical dataset IDs to API dataset identities."""
-    dataset_ids: dict[str, tuple[str, int]] = {}
-    for path in sorted((config_dir / "datasets").glob("*.yaml")):
-        config = _load_yaml(path)
-        dataset_id = str(config["dataset_id"])
-        if dataset_id in dataset_ids:
-            raise ValueError(f"Duplicate dataset_id in configs: {dataset_id}")
-        dataset_ids[dataset_id] = (str(config["name"]), int(config["version"]))
+    """Load and validate feature YAML definitions for API registration."""
     resources: dict[tuple[str, int], dict[str, Any]] = {}
     for path in sorted((config_dir / "features").glob("*.yaml")):
-        config = _load_yaml(path)
-        config.pop("metadata", None)
-        dependencies = []
-        for dependency in config["datasets"]:
-            dataset_id = str(dependency["dataset_id"])
-            if dataset_id not in dataset_ids:
-                raise ValueError(f"Feature {config['name']} references unknown dataset_id: {dataset_id}")
-            name, version = dataset_ids[dataset_id]
-            dependencies.append({"name": name, "version": version, "num_lookback_partitions": dependency["num_lookback_partitions"]})
-        config["datasets"] = dependencies
-        identity = (str(config["name"]), int(config["version"]))
+        payload = _feature_payload(_load_yaml(path))
+        identity = (str(payload["name"]), int(payload["version"]))
         if identity in resources:
             raise ValueError(f"Duplicate feature config identity: {identity[0]} v{identity[1]}")
-        resources[identity] = config
+        resources[identity] = payload
     return resources
 
 
@@ -156,12 +166,12 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "create" and args.resource == "dataset":
-        config = _load_yaml(args.config)
-        result = _api_request(args.api_url, "POST", "/datasets", {"name": args.name, "version": args.version, **config})
+        payload = _dataset_payload(_load_yaml(args.config))
+        if payload["name"] != args.name or payload["version"] != args.version:
+            raise ValueError("Dataset --name and --version must match the config identity.")
+        result = _api_request(args.api_url, "POST", "/datasets", payload)
     elif args.command == "create" and args.resource == "feature":
-        config = _load_yaml(args.config)
-        config.pop("metadata", None)
-        result = _api_request(args.api_url, "POST", "/features", config)
+        result = _api_request(args.api_url, "POST", "/features", _feature_payload(_load_yaml(args.config)))
     elif args.command == "materialize":
         result = _api_request(args.api_url, "POST", f"/{args.resource}s/{args.name}/versions/{args.version}/partitions", _timestamps(args.timestamp))
     elif args.command in {"datasets", "features"}:

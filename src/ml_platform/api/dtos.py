@@ -1,11 +1,19 @@
 """HTTP request and response models for the materialization control plane."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, computed_field, field_validator
+
+from ml_platform.common.types import BaseConfig
+
+
+class _ApiModel(BaseConfig):
+    """HTTP DTO base retaining JSON coercion while inheriting common safeguards."""
+
+    model_config = ConfigDict(strict=False, frozen=False)
 
 
 class JobType(StrEnum):
@@ -39,10 +47,8 @@ class FeatureKey(StrEnum):
     SYMBOL = "symbol"
 
 
-class FeatureValidations(BaseModel):
+class FeatureValidations(_ApiModel):
     """Configurable validation requirements for returned feature DataFrames."""
-
-    model_config = ConfigDict(extra="forbid")
 
     min_rows_per_partition: int = Field(default=1, ge=1)
     require_finite_feature_value: bool = True
@@ -55,15 +61,35 @@ class DatasetType(StrEnum):
     MARKET_DATA = "market_data"
 
 
-class DatasetCreateRequest(BaseModel):
-    """Payload for registering an immutable dataset definition."""
+class DatasetTimeRange(_ApiModel):
+    """Inclusive start and exclusive end dates for a dataset definition."""
 
-    model_config = ConfigDict(extra="forbid")
+    start_date: date
+    end_date: date
+
+
+class MarketDataDatasetConfig(_ApiModel):
+    """Definition fields for a market-data dataset, excluding its derived ID."""
+
+    description: str = Field(default="Market data.", min_length=1)
+    validations: dict[str, Any] = Field(default_factory=dict)
+    symbols: list[str] = Field(min_length=1)
+    time_range: DatasetTimeRange
+
+
+class DatasetCreateRequest(_ApiModel):
+    """Payload for registering an immutable dataset definition."""
 
     name: str = Field(min_length=1)
     version: int = Field(gt=0)
     dataset_type: DatasetType
-    config: dict[str, Any]
+    config: MarketDataDatasetConfig
+
+    @computed_field
+    @property
+    def id(self) -> str:
+        """Return the immutable resource ID derived from name and version."""
+        return f"{self.name}_v{self.version}"
 
 
 class DatasetResponse(DatasetCreateRequest):
@@ -73,28 +99,22 @@ class DatasetResponse(DatasetCreateRequest):
     job_id: UUID | None = None
 
 
-class DatasetDescriptionUpdate(BaseModel):
+class DatasetDescriptionUpdate(_ApiModel):
     """Mutable display metadata for an existing dataset definition."""
-
-    model_config = ConfigDict(extra="forbid")
 
     description: str = Field(min_length=1)
 
 
-class FeatureDatasetDependency(BaseModel):
+class FeatureDatasetDependency(_ApiModel):
     """A registered dataset version consumed by a feature."""
-
-    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
     version: int = Field(gt=0)
     num_lookback_partitions: int = Field(ge=0)
 
 
-class FeatureCreateRequest(BaseModel):
+class FeatureCreateRequest(_ApiModel):
     """Payload for registering an immutable, normalized feature definition."""
-
-    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
     version: int = Field(gt=0)
@@ -122,10 +142,8 @@ class FeatureMaterializationMode(StrEnum):
     FORCE = "force"
 
 
-class PartitionMaterializationRequest(BaseModel):
+class PartitionMaterializationRequest(_ApiModel):
     """Logical UTC partitions requested for one materialization job."""
-
-    model_config = ConfigDict(extra="forbid")
 
     timestamps: list[datetime] = Field(
         min_length=1,
@@ -157,7 +175,7 @@ class FeaturePartitionMaterializationRequest(PartitionMaterializationRequest):
     mode: FeatureMaterializationMode = FeatureMaterializationMode.ENSURE_CURRENT
 
 
-class JobTarget(BaseModel):
+class JobTarget(_ApiModel):
     """A versioned resource targeted by a materialization job."""
 
     resource_type: Literal["dataset", "feature"]
@@ -165,7 +183,7 @@ class JobTarget(BaseModel):
     version: int
 
 
-class JobPartition(BaseModel):
+class JobPartition(_ApiModel):
     """One resource partition targeted by a materialization job."""
 
     resource_type: Literal["dataset", "feature"]
@@ -175,7 +193,7 @@ class JobPartition(BaseModel):
     status: PartitionStatus
 
 
-class KubernetesResourceLink(BaseModel):
+class KubernetesResourceLink(_ApiModel):
     """A read-only Headlamp link for a Kubernetes resource created by a job."""
 
     resource_type: str
@@ -183,7 +201,7 @@ class KubernetesResourceLink(BaseModel):
     url: str
 
 
-class JobResponse(BaseModel):
+class JobResponse(_ApiModel):
     """A materialization job, its targets, partitions, and aggregate lifecycle state."""
 
     id: UUID
@@ -198,7 +216,7 @@ class JobResponse(BaseModel):
     kubernetes_resources: list[KubernetesResourceLink] = Field(default_factory=list)
 
 
-class PartitionUpdateRequestResponse(BaseModel):
+class PartitionUpdateRequestResponse(_ApiModel):
     """A pending or terminal dataset or feature partition update request."""
 
     partition_id: UUID
@@ -212,17 +230,15 @@ class PartitionUpdateRequestResponse(BaseModel):
     updated_at: datetime
 
 
-class MaterializationJobResponse(BaseModel):
+class MaterializationJobResponse(_ApiModel):
     """A newly created job with all of its requested partitions."""
 
     job: JobResponse | None
     partitions: list[PartitionUpdateRequestResponse]
 
 
-class PartitionCompletionRequest(BaseModel):
+class PartitionCompletionRequest(_ApiModel):
     """A Spark worker's receipt for a committed Iceberg partition write."""
-
-    model_config = ConfigDict(extra="forbid")
 
     content_hash: str = Field(min_length=1)
     snapshot_id: int
@@ -234,7 +250,7 @@ class FeaturePartitionCompletionRequest(PartitionCompletionRequest):
     dataset_partition_ids: list[UUID] = Field(min_length=1)
 
 
-class PartitionResultResponse(BaseModel):
+class PartitionResultResponse(_ApiModel):
     """The recorded receipt for one successfully materialized partition."""
 
     partition_id: UUID
@@ -243,13 +259,13 @@ class PartitionResultResponse(BaseModel):
     created_at: datetime
 
 
-class ErrorResponse(BaseModel):
+class ErrorResponse(_ApiModel):
     """Structured error response returned by the control plane."""
 
     detail: str
 
 
-class ValidationErrorDetail(BaseModel):
+class ValidationErrorDetail(_ApiModel):
     """One field-level request validation failure."""
 
     loc: list[str | int]
@@ -259,7 +275,7 @@ class ValidationErrorDetail(BaseModel):
     ctx: dict[str, Any] | None = None
 
 
-class ValidationErrorResponse(BaseModel):
+class ValidationErrorResponse(_ApiModel):
     """Structured request validation response returned with HTTP 422."""
 
     detail: list[ValidationErrorDetail]
