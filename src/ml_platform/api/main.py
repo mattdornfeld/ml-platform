@@ -31,6 +31,9 @@ from ml_platform.api.dtos import (
     FeaturePartitionMaterializationRequest,
     FeatureResponse,
     JobResponse,
+    LabelCreateRequest,
+    LabelPartitionMaterializationRequest,
+    LabelResponse,
     MaterializationJobResponse,
     PartitionCompletionRequest,
     PartitionMaterializationRequest,
@@ -392,22 +395,36 @@ def _resource_jobs(
     cursor: Any, resource_type: str, name: str, version: int
 ) -> list[dict[str, Any]]:
     """Return jobs which targeted one immutable resource version."""
-    if resource_type == "dataset":
-        cursor.execute(
-            """SELECT DISTINCT jobs.id, jobs.type, jobs.status, jobs.created_at, jobs.updated_at
-                FROM jobs JOIN partition_update_requests AS request ON request.job_id = jobs.id
-                WHERE request.dataset_name = %s AND request.dataset_version = %s
-                ORDER BY jobs.created_at DESC""",
-            (name, version),
-        )
-    else:
-        cursor.execute(
-            """SELECT DISTINCT jobs.id, jobs.type, jobs.status, jobs.created_at, jobs.updated_at
-                FROM jobs JOIN feature_partition_update_requests AS request ON request.job_id = jobs.id
-                WHERE request.feature_name = %s AND request.feature_version = %s
-                ORDER BY jobs.created_at DESC""",
-            (name, version),
-        )
+    match resource_type:
+        case "dataset":
+            table, name_column, version_column = (
+                "partition_update_requests",
+                "dataset_name",
+                "dataset_version",
+            )
+        case "feature":
+            table, name_column, version_column = (
+                "feature_partition_update_requests",
+                "feature_name",
+                "feature_version",
+            )
+        case "label":
+            table, name_column, version_column = (
+                "label_partition_update_requests",
+                "label_name",
+                "label_version",
+            )
+        case _ as unsupported_resource_type:
+            raise ValueError(
+                f"Unsupported resource type {unsupported_resource_type!r}."
+            )
+    cursor.execute(
+        f"""SELECT DISTINCT jobs.id, jobs.type, jobs.status, jobs.created_at, jobs.updated_at
+            FROM jobs JOIN {table} AS request ON request.job_id = jobs.id
+            WHERE request.{name_column} = %s AND request.{version_column} = %s
+            ORDER BY jobs.created_at DESC""",
+        (name, version),
+    )
     return list(cursor.fetchall())
 
 
@@ -637,7 +654,8 @@ def get_feature(
             )
         cursor.execute(
             """SELECT dependencies.dataset_name AS name, dependencies.dataset_version AS version,
-            datasets.dataset_type, dependencies.argument_name, dependencies.num_lookback_partitions
+            datasets.dataset_type, dependencies.argument_name, dependencies.num_lookback_partitions,
+            dependencies.num_lookahead_partitions
             FROM feature_dataset_dependencies AS dependencies
             JOIN datasets ON datasets.name = dependencies.dataset_name AND datasets.version = dependencies.dataset_version
             WHERE dependencies.feature_name = %s AND dependencies.feature_version = %s
@@ -749,8 +767,8 @@ def create_feature(
             for dependency in payload.datasets:
                 cursor.execute(
                     """INSERT INTO feature_dataset_dependencies
-                    (feature_name, feature_version, dataset_name, dataset_version, argument_name, num_lookback_partitions)
-                    VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (feature_name, feature_version, dataset_name, dataset_version, argument_name, num_lookback_partitions, num_lookahead_partitions)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                     (
                         payload.name,
                         payload.version,
@@ -758,6 +776,7 @@ def create_feature(
                         dependency.version,
                         dependency.argument_name,
                         dependency.num_lookback_partitions,
+                        dependency.num_lookahead_partitions,
                     ),
                 )
         connection.commit()
@@ -1074,6 +1093,426 @@ def materialize_feature_partitions(
                     cursor.execute(
                         """INSERT INTO feature_partition_update_request_dataset_dependencies
                         (feature_partition_request_id, dataset_partition_id) VALUES (%s, %s)""",
+                        (request["partition_id"], dataset_partition_id),
+                    )
+                created.append(request)
+    connection.commit()
+    return MaterializationJobResponse.model_validate(
+        {"job": job, "partitions": [*existing, *created]}
+    )
+
+
+@app.get("/labels", tags=["labels"])
+def list_labels(
+    connection: DatabaseConnection, *, include_deleted: bool = False
+) -> list[dict[str, Any]]:
+    """List label definitions with logical partition status counts."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """SELECT labels.name, labels.version, labels.dtype, labels.frequency,
+            labels.feature_keys, labels.description, labels.created_at,
+            labels.deleted_at, labels.deprecated_at,
+            COUNT(request.partition_id) AS partition_count,
+            COUNT(request.partition_id) FILTER (WHERE request.status = 'created')
+                AS created_partition_count,
+            COUNT(request.partition_id) FILTER (WHERE request.status = 'pending')
+                AS pending_partition_count,
+            COUNT(request.partition_id) FILTER (WHERE request.status IN ('failed', 'cancelled'))
+                AS failed_partition_count
+            FROM labels LEFT JOIN label_partition_update_requests AS request
+              ON request.label_name = labels.name
+             AND request.label_version = labels.version
+            WHERE (%s OR labels.deleted_at IS NULL)
+            GROUP BY labels.name, labels.version, labels.dtype, labels.frequency,
+              labels.feature_keys, labels.description, labels.created_at,
+              labels.deleted_at, labels.deprecated_at
+            ORDER BY labels.name, labels.version DESC""",
+            (include_deleted,),
+        )
+        return list(cursor.fetchall())
+
+
+@app.get("/labels/{name}/versions/{version}", tags=["labels"])
+def get_label(
+    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+) -> dict[str, Any]:
+    """Return one label definition, dependencies, and logical partitions."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """SELECT name, version, dtype, frequency, feature_keys, validations,
+            transform, description, parameters, created_at, deleted_at, deprecated_at
+            FROM labels WHERE name = %s AND version = %s""",
+            (name, version),
+        )
+        label = cursor.fetchone()
+        if label is None:
+            raise HTTPException(
+                status_code=404, detail="Label version does not exist."
+            )
+        cursor.execute(
+            """SELECT dependencies.dataset_name AS name,
+            dependencies.dataset_version AS version, datasets.dataset_type,
+            dependencies.argument_name, dependencies.num_lookback_partitions,
+            dependencies.num_lookahead_partitions
+            FROM label_dataset_dependencies AS dependencies
+            JOIN datasets ON datasets.name = dependencies.dataset_name
+              AND datasets.version = dependencies.dataset_version
+            WHERE dependencies.label_name = %s AND dependencies.label_version = %s
+            ORDER BY dependencies.dataset_name, dependencies.dataset_version""",
+            (name, version),
+        )
+        label["datasets"] = list(cursor.fetchall())
+        cursor.execute(
+            """SELECT DISTINCT ON (request.timestamp) request.partition_id,
+            request.timestamp, request.status, request.created_at, request.updated_at,
+            receipt.content_hash, receipt.snapshot_id
+            FROM label_partition_update_requests AS request
+            LEFT JOIN label_partitions AS receipt ON receipt.partition_id = request.partition_id
+            WHERE request.label_name = %s AND request.label_version = %s
+            ORDER BY request.timestamp DESC, request.created_at DESC""",
+            (name, version),
+        )
+        label["partitions"] = list(cursor.fetchall())
+        label["jobs"] = _resource_jobs(cursor, "label", name, version)
+    _attach_minio_locations(label, f"labels/{name}-v{version}")
+    return label
+
+
+@app.post(
+    "/labels",
+    response_model=LabelResponse,
+    status_code=201,
+    responses=error_responses(FEATURE_VALIDATION),
+    tags=["labels"],
+)
+def create_label(
+    payload: LabelCreateRequest, connection: DatabaseConnection
+) -> LabelResponse:
+    """Register an immutable label definition with active dataset dependencies."""
+    try:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            for dependency in payload.datasets:
+                cursor.execute(
+                    """SELECT dataset_type, deleted_at FROM datasets
+                    WHERE name = %s AND version = %s""",
+                    (dependency.name, dependency.version),
+                )
+                dataset = cursor.fetchone()
+                if dataset is None or dataset["deleted_at"] is not None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Label datasets must reference active dataset versions.",
+                    )
+                if dataset["dataset_type"] != dependency.dataset_type.value:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Label dataset type must match the registered dataset version.",
+                    )
+            cursor.execute(
+                """INSERT INTO labels
+                (name, version, dtype, frequency, feature_keys, validations, transform,
+                 description, parameters)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING name, version, dtype, frequency, feature_keys, validations,
+                  transform, description, parameters, created_at""",
+                (
+                    payload.name,
+                    payload.version,
+                    payload.dtype,
+                    payload.frequency,
+                    Json([key.value for key in payload.feature_keys]),
+                    Json(
+                        [
+                            validation.model_dump()
+                            for validation in payload.validations
+                        ]
+                    ),
+                    payload.transform,
+                    payload.description,
+                    Json(payload.parameters),
+                ),
+            )
+            row = cursor.fetchone()
+            for dependency in payload.datasets:
+                cursor.execute(
+                    """INSERT INTO label_dataset_dependencies
+                    (label_name, label_version, dataset_name, dataset_version,
+                     argument_name, num_lookback_partitions, num_lookahead_partitions)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        payload.name,
+                        payload.version,
+                        dependency.name,
+                        dependency.version,
+                        dependency.argument_name,
+                        dependency.num_lookback_partitions,
+                        dependency.num_lookahead_partitions,
+                    ),
+                )
+        connection.commit()
+    except errors.ForeignKeyViolation as error:
+        raise HTTPException(
+            status_code=422,
+            detail="Label datasets must reference registered dataset versions.",
+        ) from error
+    except errors.UniqueViolation as error:
+        raise HTTPException(
+            status_code=409, detail="Label name and version already exist."
+        ) from error
+    if row is None:
+        raise RuntimeError("Label insert did not return a row.")
+    return LabelResponse.model_validate(
+        {**row, "datasets": [item.model_dump() for item in payload.datasets]}
+    )
+
+
+@app.delete(
+    "/labels/{name}/versions/{version}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["labels"],
+)
+def delete_label(
+    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+) -> None:
+    """Soft-delete a label version and cancel its unstarted materialization."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """UPDATE labels SET deleted_at = COALESCE(deleted_at, now())
+            WHERE name = %s AND version = %s RETURNING name""",
+            (name, version),
+        )
+        if cursor.fetchone() is None:
+            raise HTTPException(
+                status_code=404, detail="Label version does not exist."
+            )
+        cursor.execute(
+            """UPDATE label_partition_update_requests
+            SET status = 'cancelled', updated_at = now()
+            WHERE label_name = %s AND label_version = %s AND status = 'pending'""",
+            (name, version),
+        )
+        cursor.execute(
+            """UPDATE jobs SET status = 'cancelled', updated_at = now()
+            WHERE status = 'submitted' AND id IN (
+              SELECT DISTINCT job_id FROM label_partition_update_requests
+              WHERE label_name = %s AND label_version = %s
+            )""",
+            (name, version),
+        )
+    connection.commit()
+
+
+def _plan_label_inputs(
+    cursor: Any, name: str, version: int, timestamp: datetime
+) -> list[UUID]:
+    """Resolve exact successful dataset revisions needed by a label partition."""
+    cursor.execute(
+        """SELECT dataset_name, dataset_version, num_lookback_partitions,
+        num_lookahead_partitions
+        FROM label_dataset_dependencies
+        WHERE label_name = %s AND label_version = %s
+        ORDER BY dataset_name, dataset_version""",
+        (name, version),
+    )
+    dependencies = cursor.fetchall()
+    planned: list[UUID] = []
+    for dependency in dependencies:
+        start = timestamp - timedelta(
+            days=dependency["num_lookback_partitions"]
+        )
+        end = timestamp + timedelta(days=dependency["num_lookahead_partitions"])
+        expected = {
+            start + timedelta(days=offset)
+            for offset in range(
+                dependency["num_lookback_partitions"]
+                + dependency["num_lookahead_partitions"]
+                + 1
+            )
+        }
+        cursor.execute(
+            """SELECT DISTINCT ON (request.timestamp) request.timestamp,
+            partition.partition_id
+            FROM partition_update_requests AS request
+            JOIN dataset_partitions AS partition ON partition.partition_id = request.partition_id
+            WHERE request.dataset_name = %s AND request.dataset_version = %s
+              AND request.status = 'created'
+              AND request.timestamp >= %s AND request.timestamp <= %s
+            ORDER BY request.timestamp, partition.created_at DESC, request.created_at DESC""",
+            (
+                dependency["dataset_name"],
+                dependency["dataset_version"],
+                start,
+                end,
+            ),
+        )
+        revisions = {
+            row["timestamp"]: row["partition_id"] for row in cursor.fetchall()
+        }
+        missing = sorted(
+            item.isoformat() for item in expected.difference(revisions)
+        )
+        if missing:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Label partition cannot be materialized because its required "
+                    f"{dependency['dataset_name']}:{dependency['dataset_version']} "
+                    f"input partitions are missing: {missing}"
+                ),
+            )
+        planned.extend(revisions[item] for item in sorted(expected))
+    return planned
+
+
+def _completed_label_request(
+    cursor: Any, name: str, version: int, timestamp: datetime
+) -> dict[str, Any] | None:
+    """Fetch the latest completed revision of one label partition."""
+    cursor.execute(
+        """SELECT request.partition_id, request.job_id, request.timestamp,
+        request.status, request.created_at, request.updated_at
+        FROM label_partition_update_requests AS request
+        JOIN label_partitions AS partition ON partition.partition_id = request.partition_id
+        WHERE request.label_name = %s AND request.label_version = %s
+          AND request.timestamp = %s AND request.status = 'created'
+        ORDER BY partition.created_at DESC, request.created_at DESC LIMIT 1""",
+        (name, version, timestamp),
+    )
+    row = cursor.fetchone()
+    return (
+        None if row is None else {str(key): value for key, value in row.items()}
+    )
+
+
+def _label_plan_ids(
+    cursor: Any, request_id: UUID, *, completed: bool
+) -> set[UUID]:
+    """Read immutable planned or completed parent revisions for a label partition."""
+    table = (
+        "label_partition_dataset_dependencies"
+        if completed
+        else "label_partition_update_request_dataset_dependencies"
+    )
+    column = "label_partition_id" if completed else "label_partition_request_id"
+    cursor.execute(
+        f"SELECT dataset_partition_id FROM {table} WHERE {column} = %s",
+        (request_id,),
+    )
+    return {row["dataset_partition_id"] for row in cursor.fetchall()}
+
+
+@app.post(
+    "/labels/{name}/versions/{version}/partitions",
+    response_model=MaterializationJobResponse,
+    status_code=202,
+    responses=error_responses(PARTITION_VALIDATION),
+    tags=["label materialization"],
+)
+def materialize_label_partitions(
+    name: ResourceName,
+    version: ResourceVersion,
+    payload: LabelPartitionMaterializationRequest,
+    connection: DatabaseConnection,
+) -> MaterializationJobResponse:
+    """Materialize missing or stale label partitions from pinned dataset revisions."""
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "SELECT 1 FROM labels WHERE name = %s AND version = %s AND deleted_at IS NULL",
+            (name, version),
+        )
+        if cursor.fetchone() is None:
+            raise HTTPException(
+                status_code=404, detail="Label version does not exist."
+            )
+        cursor.execute(
+            """SELECT 1 FROM label_dataset_dependencies AS dependency
+            JOIN datasets ON datasets.name = dependency.dataset_name
+              AND datasets.version = dependency.dataset_version
+            WHERE dependency.label_name = %s AND dependency.label_version = %s
+              AND datasets.deleted_at IS NOT NULL""",
+            (name, version),
+        )
+        if cursor.fetchone() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Label partition cannot be materialized because an input dataset version is deleted.",
+            )
+        existing: list[dict[str, Any]] = []
+        plans: dict[datetime, list[UUID]] = {}
+        for timestamp in sorted(payload.timestamps):
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"label:{name}:{version}:{timestamp.isoformat()}",),
+            )
+        for timestamp in payload.timestamps:
+            plan = _plan_label_inputs(cursor, name, version, timestamp)
+            completed = _completed_label_request(
+                cursor, name, version, timestamp
+            )
+            if completed is not None:
+                recorded = _label_plan_ids(
+                    cursor, completed["partition_id"], completed=True
+                )
+                is_current = recorded == set(plan) and bool(recorded)
+                if payload.mode is FeatureMaterializationMode.CREATE_ONLY or (
+                    payload.mode is FeatureMaterializationMode.ENSURE_CURRENT
+                    and is_current
+                ):
+                    existing.append(completed)
+                    continue
+            cursor.execute(
+                """SELECT partition_id, job_id, timestamp, status, created_at, updated_at
+                FROM label_partition_update_requests
+                WHERE label_name = %s AND label_version = %s AND timestamp = %s
+                  AND status = 'pending' ORDER BY created_at DESC LIMIT 1""",
+                (name, version, timestamp),
+            )
+            active = cursor.fetchone()
+            if active is not None:
+                if _label_plan_ids(
+                    cursor, active["partition_id"], completed=False
+                ) == set(plan):
+                    existing.append(active)
+                    continue
+                raise HTTPException(
+                    status_code=409,
+                    detail="Label partition is already being materialized against a different input revision plan.",
+                )
+            plans[timestamp] = plan
+        job: dict[str, Any] | None = None
+        created: list[dict[str, Any]] = []
+        if plans:
+            cursor.execute(
+                """INSERT INTO jobs (type, status) VALUES ('label_materialization', 'submitted')
+                RETURNING id, type, status, created_at, updated_at"""
+            )
+            job = cursor.fetchone()
+            if job is None:
+                raise RuntimeError("Label job insert did not return a row.")
+            for timestamp, plan in plans.items():
+                cursor.execute(
+                    """INSERT INTO label_partition_update_requests
+                    (job_id, label_name, label_version, timestamp, status, callback_token)
+                    VALUES (%s, %s, %s, %s, 'pending', %s)
+                    RETURNING partition_id, job_id, timestamp, status, created_at, updated_at""",
+                    (
+                        job["id"],
+                        name,
+                        version,
+                        timestamp,
+                        secrets.token_urlsafe(32),
+                    ),
+                )
+                request = cursor.fetchone()
+                if request is None:
+                    raise RuntimeError(
+                        "Label partition request insert did not return a row."
+                    )
+                for dataset_partition_id in plan:
+                    cursor.execute(
+                        """INSERT INTO label_partition_update_request_dataset_dependencies
+                        (label_partition_request_id, dataset_partition_id)
+                        VALUES (%s, %s)""",
                         (request["partition_id"], dataset_partition_id),
                     )
                 created.append(request)

@@ -24,6 +24,8 @@ class SchedulerTest(unittest.TestCase):
                 "version": 3,
                 "dataset_type": "market_data",
                 "config": {
+                    "description": "Market data.",
+                    "validations": [],
                     "keys": ["symbol"],
                     "partition_type": "daily",
                     "symbols": ["AAPL"],

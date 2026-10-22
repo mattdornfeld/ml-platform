@@ -172,6 +172,7 @@ class TransformMaterializerContractTest(unittest.TestCase):
                     "dataset_type": "market_data",
                     "argument_name": "market_data",
                     "num_lookback_partitions": 1,
+                    "num_lookahead_partitions": 0,
                 }
             ],
             "transform": "ml_platform.data_sdk.LogReturnTransform",

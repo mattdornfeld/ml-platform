@@ -235,6 +235,7 @@ class TransformMaterializer[
                     dataset.name,
                     dataset.version,
                     dataset.num_lookback_partitions,
+                    dataset.num_lookahead_partitions,
                 ),
                 frame=data_frame,
             )

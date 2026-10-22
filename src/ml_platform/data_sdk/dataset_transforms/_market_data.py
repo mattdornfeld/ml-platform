@@ -79,13 +79,12 @@ class MarketDataTransform(DatasetTransform):
             raise MarketDataPartitionError(
                 "Market-data materialization requires at least one requested output partition."
             )
-        frames: list[DataFrame] = []
+        rows: list[tuple[object, ...]] = []
         for symbol in self.symbols:
             for start_date, end_date in _contiguous_date_ranges(requested_days):
                 try:
-                    frames.append(
-                        fetch_hourly_ohlcv(
-                            self.spark,
+                    rows.extend(
+                        fetch_hourly_ohlcv_rows(
                             symbol,
                             start_date=start_date,
                             end_date=end_date,
@@ -100,15 +99,14 @@ class MarketDataTransform(DatasetTransform):
                     sys.stdout.write(
                         f"Skipping unavailable Yahoo Finance range for {symbol}: {error}\n"
                     )
-        if not frames:
+        if not rows:
             raise YahooFinanceDataUnavailableError(
                 "Yahoo Finance returned no hourly data for any configured symbol "
                 f"({', '.join(self.symbols)})."
             )
-        result = frames[0]
-        for frame in frames[1:]:
-            result = result.unionByName(frame)
-        return result
+        return _with_market_session(
+            self.spark.createDataFrame(rows, schema=OHLCV_SCHEMA)
+        )
 
 
 def _contiguous_date_ranges(partitions: list[date]) -> list[tuple[date, date]]:
@@ -130,6 +128,22 @@ def fetch_hourly_ohlcv(
     spark: SparkSession, symbol: str, *, start_date: date, end_date: date
 ) -> DataFrame:
     """Fetch one symbol's extended-hours bars into a typed Spark DataFrame."""
+    return _with_market_session(
+        spark.createDataFrame(
+            fetch_hourly_ohlcv_rows(
+                symbol,
+                start_date=start_date,
+                end_date=end_date,
+            ),
+            schema=OHLCV_SCHEMA,
+        )
+    )
+
+
+def fetch_hourly_ohlcv_rows(
+    symbol: str, *, start_date: date, end_date: date
+) -> list[tuple[object, ...]]:
+    """Fetch one symbol's complete extended-hours OHLCV rows from Yahoo Finance."""
     normalized = symbol.upper()
     rows = _yahoo_chart_rows(
         _request_yahoo_chart(normalized, start_date, end_date), normalized
@@ -139,9 +153,7 @@ def fetch_hourly_ohlcv(
             f"Yahoo Finance returned no hourly data for symbol {normalized!r} "
             f"from {start_date.isoformat()} through {end_date.isoformat()}."
         )
-    return _with_market_session(
-        spark.createDataFrame(rows, schema=OHLCV_SCHEMA)
-    )
+    return rows
 
 
 def _request_yahoo_chart(

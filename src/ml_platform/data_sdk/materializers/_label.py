@@ -43,3 +43,7 @@ class LabelMaterializer(
     def _transform_type(self) -> type[LabelTransform]:
         """Return the transform contract used by label materialization."""
         return LabelTransform
+
+
+if __name__ == "__main__":
+    LabelMaterializer.main()

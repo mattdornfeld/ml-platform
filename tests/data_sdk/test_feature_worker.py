@@ -46,7 +46,9 @@ class TwoInputTransform(FeatureTransform):
 class PlannedInputTest(unittest.TestCase):
     """Verify the worker reads the immutable Iceberg plan supplied by the API."""
 
-    @patch("ml_platform.data_sdk.materializers._transform_materializer.F")
+    @patch(
+        "ml_platform.data_sdk.materializers._transform_materializer.spark_functions"
+    )
     def test_reads_each_parent_at_its_pinned_snapshot(
         self, functions: MagicMock
     ) -> None:
@@ -89,6 +91,7 @@ class PlannedInputTest(unittest.TestCase):
                 dataset_type=DatasetType.MARKET_DATA,
                 argument_name="market_data",
                 num_lookback_partitions=0,
+                num_lookahead_partitions=0,
             ),
         )
 
@@ -112,6 +115,7 @@ class PlannedInputTest(unittest.TestCase):
                     dataset_type=DatasetType.MARKET_DATA,
                     argument_name="market_data",
                     num_lookback_partitions=0,
+                    num_lookahead_partitions=0,
                 ),
             )
 
@@ -137,6 +141,7 @@ class PlannedInputTest(unittest.TestCase):
                         "dataset_type": DatasetType.MARKET_DATA,
                         "argument_name": "prices",
                         "num_lookback_partitions": 1,
+                        "num_lookahead_partitions": 0,
                     },
                     {
                         "name": "company_facts",
@@ -144,6 +149,7 @@ class PlannedInputTest(unittest.TestCase):
                         "dataset_type": DatasetType.MARKET_DATA,
                         "argument_name": "fundamentals",
                         "num_lookback_partitions": 0,
+                        "num_lookahead_partitions": 0,
                     },
                 ],
                 "partitions": [
@@ -221,6 +227,7 @@ class TransformMaterializerTest(unittest.TestCase):
                         "dataset_type": DatasetType.MARKET_DATA,
                         "argument_name": "market_data",
                         "num_lookback_partitions": 1,
+                        "num_lookahead_partitions": 0,
                     }
                 ],
                 "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",

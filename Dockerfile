@@ -18,7 +18,7 @@ RUN uv python install 3.12 --install-dir /opt/python \
  && uv pip install --python /opt/venv/bin/python \
       'fastapi>=0.115' 'uvicorn[standard]>=0.30' 'psycopg[binary]>=3.2' \
       'pydantic>=2.0' 'kubernetes>=32.0' 'omegaconf>=2.3' \
-      'simple-classproperty>=4.0.2' \
+      'simple-classproperty>=4.0.2' 'exchange-calendars>=4.13,<5' 'pyarrow>=26.0.0' 'ipython>=9.0' \
  && mkdir -p /tmp/.ivy2 /tmp/.cache \
  && chown -R 185:0 /app /opt/venv /tmp/.ivy2 /tmp/.cache
 ENV PATH=/opt/venv/bin:${PATH}

@@ -12,7 +12,11 @@ from urllib.request import Request, urlopen
 
 from omegaconf import OmegaConf
 
-from ml_platform.data_sdk.configs import FeatureConfig, MarketDataConfig
+from ml_platform.data_sdk.configs import (
+    FeatureConfig,
+    LabelConfig,
+    MarketDataConfig,
+)
 
 DEFAULT_CONFIG_DIR = Path("configs")
 
@@ -123,6 +127,7 @@ def _feature_payload(config: dict[str, Any]) -> dict[str, Any]:
             "dataset_type": dataset["dataset_type"],
             "argument_name": dataset["argument_name"],
             "num_lookback_partitions": dataset["num_lookback_partitions"],
+            "num_lookahead_partitions": dataset["num_lookahead_partitions"],
         }
         for dataset in values["datasets"]
     ]
@@ -143,15 +148,40 @@ def _feature_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
     return resources
 
 
+def _label_payload(config: dict[str, Any]) -> dict[str, Any]:
+    """Validate one label YAML mapping and convert it to the API request shape."""
+    return LabelConfig.model_validate_json(
+        json.dumps(config, default=str)
+    ).model_dump(mode="json")
+
+
+def _label_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
+    """Load and validate label YAML definitions for API registration."""
+    resources: dict[tuple[str, int], dict[str, Any]] = {}
+    for path in sorted((config_dir / "labels").glob("*.yaml")):
+        payload = _label_payload(_load_yaml(path))
+        identity = (str(payload["name"]), int(payload["version"]))
+        if identity in resources:
+            raise ValueError(
+                f"Duplicate label config identity: {identity[0]} v{identity[1]}"
+            )
+        resources[identity] = payload
+    return resources
+
+
 def sync_resources(
     base_url: str, resource: str, config_dir: Path = DEFAULT_CONFIG_DIR
 ) -> dict[str, list[str]]:
     """Reconcile API resource definitions with checked-in configs by soft-deleting removed identities."""
-    desired = (
-        _dataset_configs(config_dir)
-        if resource == "dataset"
-        else _feature_configs(config_dir)
-    )
+    match resource:
+        case "dataset":
+            desired = _dataset_configs(config_dir)
+        case "feature":
+            desired = _feature_configs(config_dir)
+        case "label":
+            desired = _label_configs(config_dir)
+        case _ as unsupported_resource:
+            raise ValueError(f"Unsupported resource {unsupported_resource!r}.")
     existing = _api_request(
         base_url, "GET", f"/{resource}s?include_deleted=true"
     )
@@ -201,7 +231,7 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     create = commands.add_parser("create")
     create_resources = create.add_subparsers(dest="resource", required=True)
-    for resource in ("dataset", "feature"):
+    for resource in ("dataset", "feature", "label"):
         resource_parser = create_resources.add_parser(resource)
         resource_parser.add_argument("--config", required=True)
         if resource == "dataset":
@@ -211,7 +241,7 @@ def main() -> None:
     materialize_resources = materialize.add_subparsers(
         dest="resource", required=True
     )
-    for resource in ("dataset", "feature"):
+    for resource in ("dataset", "feature", "label"):
         resource_parser = materialize_resources.add_parser(resource)
         resource_parser.add_argument("--name", required=True)
         resource_parser.add_argument("--version", type=int, required=True)
@@ -231,7 +261,11 @@ def main() -> None:
     describe_resources = describe.add_subparsers(dest="resource", required=True)
     job = describe_resources.add_parser("job")
     job.add_argument("job_id")
-    for plural, resource in (("datasets", "dataset"), ("features", "feature")):
+    for plural, resource in (
+        ("datasets", "dataset"),
+        ("features", "feature"),
+        ("labels", "label"),
+    ):
         resource_commands = commands.add_parser(plural)
         resource_actions = resource_commands.add_subparsers(
             dest="action", required=True
@@ -258,6 +292,13 @@ def main() -> None:
             "/features",
             _feature_payload(_load_yaml(args.config)),
         )
+    elif args.command == "create" and args.resource == "label":
+        result = _api_request(
+            args.api_url,
+            "POST",
+            "/labels",
+            _label_payload(_load_yaml(args.config)),
+        )
     elif args.command == "materialize":
         result = _api_request(
             args.api_url,
@@ -265,7 +306,7 @@ def main() -> None:
             f"/{args.resource}s/{args.name}/versions/{args.version}/partitions",
             _timestamps(args.timestamp),
         )
-    elif args.command in {"datasets", "features"}:
+    elif args.command in {"datasets", "features", "labels"}:
         result = sync_resources(
             args.api_url, args.sync_resource, args.config_dir
         )

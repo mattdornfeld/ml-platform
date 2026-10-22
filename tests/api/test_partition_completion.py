@@ -187,22 +187,29 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
                 connection.execute("""INSERT INTO features
                     (name, version, dtype, frequency, feature_keys, transform, description)
                     VALUES ('derived', 1, 'double', 'daily', '["symbol"]'::jsonb, 'example.Transform', 'Derived data')""")
+                request_statement = """INSERT INTO feature_partition_update_requests
+                    (partition_id, job_id, feature_name, feature_version, timestamp, callback_token)
+                    VALUES (%s, %s, 'derived', 1, '2026-01-01T00:00:00Z', 'derived-token')"""
+                dependency_statement = """INSERT INTO feature_partition_update_request_dataset_dependencies
+                    (feature_partition_request_id, dataset_partition_id) VALUES (%s, %s)"""
             else:
                 connection.execute("""INSERT INTO labels (name, version, transform, description)
                     VALUES ('derived', 1, 'example.Transform', 'Derived labels')""")
+                request_statement = """INSERT INTO label_partition_update_requests
+                    (partition_id, job_id, label_name, label_version, timestamp, callback_token)
+                    VALUES (%s, %s, 'derived', 1, '2026-01-01T00:00:00Z', 'derived-token')"""
+                dependency_statement = """INSERT INTO label_partition_update_request_dataset_dependencies
+                    (label_partition_request_id, dataset_partition_id) VALUES (%s, %s)"""
             connection.execute(
                 "INSERT INTO jobs (id, type) VALUES (%s, %s::job_type)",
                 (job_id, f"{resource_type}_materialization"),
             )
             connection.execute(
-                f"""INSERT INTO {resource_type}_partition_update_requests
-                (partition_id, job_id, {resource_type}_name, {resource_type}_version, timestamp, callback_token)
-                VALUES (%s, %s, 'derived', 1, '2026-01-01T00:00:00Z', 'derived-token')""",
+                request_statement,
                 (partition_id, job_id),
             )
             connection.execute(
-                f"""INSERT INTO {resource_type}_partition_update_request_dataset_dependencies
-                ({resource_type}_partition_request_id, dataset_partition_id) VALUES (%s, %s)""",
+                dependency_statement,
                 (partition_id, self.partition_ids[0]),
             )
         return partition_id, job_id
