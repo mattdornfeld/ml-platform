@@ -6,7 +6,7 @@ from simple_classproperty import classproperty
 from pyspark.sql import DataFrame, SparkSession, functions as F
 
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, WriteMode
-from ml_platform.data_sdk.materializers._validation import MaterializationValidator
+from ml_platform.data_sdk.materializers._materialization_validator import MaterializationValidator
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
 

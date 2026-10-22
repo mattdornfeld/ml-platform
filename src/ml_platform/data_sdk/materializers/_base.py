@@ -16,7 +16,7 @@ from simple_classproperty import ClasspropertyMeta, classproperty
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import materialization_api_url, spark_master
-from ml_platform.data_sdk.materializers._validation import MaterializationValidator, MaterializerValidations
+from ml_platform.data_sdk.materializers._materialization_validator import MaterializationValidator, MaterializerValidations
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._types import DatasetDependency
 from pyspark.sql import DataFrame, SparkSession

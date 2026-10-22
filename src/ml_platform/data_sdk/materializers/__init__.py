@@ -7,7 +7,7 @@ from ml_platform.data_sdk.materializers._base import (
     MaterializerPartition,
     WriteMode,
 )
-from ml_platform.data_sdk.materializers._validation import MaterializationValidator, MaterializerValidations
+from ml_platform.data_sdk.materializers._materialization_validator import MaterializationValidator, MaterializerValidations
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializationConfig, DatasetMaterializer
 from ml_platform.data_sdk.materializers._feature import (
     FeatureMaterializationConfig,
