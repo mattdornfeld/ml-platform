@@ -36,7 +36,7 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
     def _assert_resource_properties(self, worker: object, resource_type: str, frequency: str) -> None:
         """Read back shared metadata from the committed Iceberg table."""
         metadata_directory = (
-            self.warehouse / worker.iceberg_namespace / worker.config._iceberg_table_name / "metadata"
+            self.warehouse / worker.iceberg_namespace() / worker.config._iceberg_table_name / "metadata"
         )
         metadata_file = max(
             metadata_directory.glob("v*.metadata.json"),

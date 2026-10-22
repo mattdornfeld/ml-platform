@@ -1,6 +1,6 @@
 """Private common contracts and Iceberg plumbing for API-dispatched materializers."""
 
-from abc import ABC, ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -11,7 +11,7 @@ from typing import ClassVar, Generic, Mapping, TypeVar
 from urllib.request import Request, urlopen
 
 from pydantic import Field
-from simple_classproperty import ClasspropertyMeta, classproperty
+from simple_classproperty import classproperty
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import materialization_api_url, spark_master
@@ -88,19 +88,9 @@ class MaterializerConfig(BaseConfig):
 
 
 Config = TypeVar("Config", bound=MaterializerConfig)
-class MaterializerMeta(ClasspropertyMeta, ABCMeta):
-    """Combine abstract-method and class-property support for materializers."""
-
-    def __new__(mcls, name: str, bases: tuple[type, ...], namespace: dict[str, object], **kwargs: object) -> type:
-        """Retain abstractness when the descriptor package resolves inherited properties."""
-        cls = super().__new__(mcls, name, bases, namespace, **kwargs)
-        if any(isinstance(base, MaterializerMeta) for base in bases) and "iceberg_namespace" not in namespace:
-            cls.__abstractmethods__ = frozenset((*cls.__abstractmethods__, "iceberg_namespace"))
-        return cls
-
 
 @dataclass(frozen=True)
-class Materializer(ABC, Generic[Config], metaclass=MaterializerMeta):
+class Materializer(ABC, Generic[Config]):
     """Shared Spark and Iceberg lifecycle for one API-delivered materialization."""
 
     config_model: ClassVar[type[Config]]
@@ -118,7 +108,7 @@ class Materializer(ABC, Generic[Config], metaclass=MaterializerMeta):
     }
     config: Config
 
-    @classproperty
+    @classmethod
     @abstractmethod
     def iceberg_namespace(cls) -> str:
         """Return the Iceberg namespace owned by this materializer type."""
@@ -151,7 +141,7 @@ class Materializer(ABC, Generic[Config], metaclass=MaterializerMeta):
     @classmethod
     def _iceberg_table_identifier(cls, name: str, version: int) -> str:
         """Resolve an immutable resource version to its Iceberg identifier."""
-        namespace = cls.iceberg_namespace
+        namespace = cls.iceberg_namespace()
         table = cls.config_model._iceberg_table_name_for(name, version)
         return f"{cls.config_model.iceberg_catalog}.{namespace}.`{table}`"
 
@@ -193,7 +183,7 @@ class Materializer(ABC, Generic[Config], metaclass=MaterializerMeta):
         cls, spark: SparkSession, *, name: str, version: int, schema: str, partition_spec: str, properties: Mapping[str, str]
     ) -> None:
         """Create the resource table or reconcile its declared table properties."""
-        namespace = cls.iceberg_namespace
+        namespace = cls.iceberg_namespace()
         catalog = cls.config_model.iceberg_catalog
         if not schema or not partition_spec:
             raise NotImplementedError(f"{cls.__name__} must declare an Iceberg schema and partition spec.")

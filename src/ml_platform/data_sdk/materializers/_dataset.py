@@ -49,7 +49,7 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
         "timestamp", "symbol", "market_session", "Open", "High", "Low", "Close", "Volume"
     )
 
-    @classproperty
+    @classmethod
     def iceberg_namespace(cls) -> str:
         """Store market-data resources in their dedicated Iceberg namespace."""
         return "market_data"

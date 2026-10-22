@@ -65,7 +65,7 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
     callback_resource: ClassVar[str] = "label"
     datasets: Mapping[str, Dataset]
 
-    @classproperty
+    @classmethod
     def iceberg_namespace(cls) -> str:
         """Store label resources in their dedicated Iceberg namespace."""
         return "labels"
@@ -148,7 +148,7 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
     @classmethod
     def _storage_path(cls, warehouse_dir: str | Path, resource: LabelResource) -> Path:
         """Return the resource's versioned warehouse directory."""
-        return Path(warehouse_dir).resolve() / cls.iceberg_namespace / cls._label_id(resource)
+        return Path(warehouse_dir).resolve() / cls.iceberg_namespace() / cls._label_id(resource)
 
     @staticmethod
     def _load_transform(import_path: str) -> type[LabelTransform]:

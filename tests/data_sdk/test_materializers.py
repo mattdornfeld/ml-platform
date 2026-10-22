@@ -107,13 +107,19 @@ class MaterializerContractTest(unittest.TestCase):
             }))
 
     def test_materializer_requires_a_class_namespace_implementation(self) -> None:
-        """A concrete worker cannot omit its Iceberg namespace contract."""
+        """ABC keeps the class-level Iceberg namespace as an explicit requirement."""
+        self.assertIn("iceberg_namespace", Materializer.__abstractmethods__)
+
         class MissingNamespaceMaterializer(Materializer[MaterializerConfig]):
             config_model = MaterializerConfig
 
-            def materialize(self, spark: object) -> None:
-                pass
+            def _create_transform(self, spark: object) -> object:
+                raise NotImplementedError
 
+            def materialize(self, spark: object, transform: object) -> object:
+                raise NotImplementedError
+
+        self.assertIn("iceberg_namespace", MissingNamespaceMaterializer.__abstractmethods__)
         with self.assertRaises(TypeError):
             MissingNamespaceMaterializer.__new__(MissingNamespaceMaterializer)
 

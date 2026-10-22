@@ -81,7 +81,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     FEATURE_VALUE_COLUMN: ClassVar[str] = "feature_value"
     _dependency_write_lock: ClassVar[Lock] = Lock()
 
-    @classproperty
+    @classmethod
     def iceberg_namespace(cls) -> str:
         """Store feature resources in their dedicated Iceberg namespace."""
         return "features"
@@ -98,7 +98,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     @classproperty
     def _dependency_manifest_table_identifier(cls) -> str:
         """Return the shared feature-to-dataset dependency manifest identifier."""
-        return f"{cls.config_model.iceberg_catalog}.{cls.iceberg_namespace}.dependencies"
+        return f"{cls.config_model.iceberg_catalog}.{cls.iceberg_namespace()}.dependencies"
 
     @staticmethod
     def _planned_dataset(spark: Any, callbacks: list[MaterializerPartition], dataset: DatasetDependency) -> DataFrame:
@@ -513,7 +513,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     def _feature_storage_path(warehouse_dir: str | Path, config: FeatureMaterializationConfig) -> Path:
         """Return the versioned feature directory under the configured data root."""
         table_name = FeatureMaterializer.config_model._iceberg_table_name_for(config.name, config.version)
-        return Path(warehouse_dir).resolve() / FeatureMaterializer.iceberg_namespace / table_name
+        return Path(warehouse_dir).resolve() / FeatureMaterializer.iceberg_namespace() / table_name
 
 
     def _additional_table_properties(self) -> dict[str, str]:
