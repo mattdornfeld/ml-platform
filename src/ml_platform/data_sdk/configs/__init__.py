@@ -31,7 +31,7 @@ __all__ = [
     "MarketDataConfig",
     "PartitionType",
     "RunFrequency",
-    "TripleBarrierConfig",
     "TimeRange",
     "TransformConfig",
+    "TripleBarrierConfig",
 ]

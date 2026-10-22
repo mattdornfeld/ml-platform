@@ -8,7 +8,9 @@ DEFAULT_MATERIALIZATION_API_URL = "http://ml-control-plane:8000"
 
 def materialization_api_url() -> str:
     """Return the control-plane callback endpoint configured for this worker."""
-    return os.environ.get("MATERIALIZATION_API_URL", DEFAULT_MATERIALIZATION_API_URL)
+    return os.environ.get(
+        "MATERIALIZATION_API_URL", DEFAULT_MATERIALIZATION_API_URL
+    )
 
 
 def spark_master() -> str | None:

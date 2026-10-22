@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,7 +12,8 @@ from urllib.request import Request, urlopen
 
 from pydantic import Field, field_validator
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
+from pyspark.sql import functions as spark_functions
+from pyspark.sql.column import Column
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import (
@@ -80,7 +82,8 @@ class MaterializerConfig(BaseConfig):
     """Strict immutable API runtime contract shared by all materializers."""
 
     name: str = Field(
-        pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase resource name."
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Stable lowercase resource name.",
     )
     version: int = Field(
         ge=1,
@@ -95,7 +98,8 @@ class MaterializerConfig(BaseConfig):
         description="Declared runtime validation checks applied to materialized output.",
     )
     partitions: list[MaterializerPartition] = Field(
-        min_length=1, description="Logical output partitions this job must materialize."
+        min_length=1,
+        description="Logical output partitions this job must materialize.",
     )
     warehouse_dir: str = Field(
         min_length=1,
@@ -140,9 +144,9 @@ class Materializer[Config: MaterializerConfig](ABC):
     """Shared Spark lifecycle and partition callbacks for one materialization."""
 
     @property
+    @abstractmethod
     def _partition_type(self) -> PartitionType:
-        """Return the output cadence declared by this concrete materializer config."""
-        return self.config.partition_type  # type: ignore[attr-defined]
+        """Return the output cadence declared by this concrete materializer."""
 
     config: Config
 
@@ -184,7 +188,8 @@ class Materializer[Config: MaterializerConfig](ABC):
                 "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
             )
             .config(
-                f"spark.sql.catalog.{catalog}", "org.apache.iceberg.spark.SparkCatalog"
+                f"spark.sql.catalog.{catalog}",
+                "org.apache.iceberg.spark.SparkCatalog",
             )
             .config(f"spark.sql.catalog.{catalog}.type", "hadoop")
             .config(f"spark.sql.catalog.{catalog}.warehouse", warehouse)
@@ -220,11 +225,13 @@ class Materializer[Config: MaterializerConfig](ABC):
             + self.validation_configs,
             override_validation_configs=tuple(self.config.validations),
         )
-        MaterializationValidator(validation_configs=validation_configs).validate(
-            data_frame
-        )
+        MaterializationValidator(
+            validation_configs=validation_configs
+        ).validate(data_frame)
 
-    def _complete_partitions(self, spark: SparkSession, snapshot_id: int) -> None:
+    def _complete_partitions(
+        self, spark: SparkSession, snapshot_id: int
+    ) -> None:
         """Report committed partition revisions through the control-plane API."""
         table = self.iceberg_table
         timestamps = self.config.partition_timestamps
@@ -271,7 +278,7 @@ class Materializer[Config: MaterializerConfig](ABC):
             pass
 
     @abstractmethod
-    def _row_digest(self) -> F.Column:
+    def _row_digest(self) -> Column:
         """Return a digest expression for one persisted output row."""
 
     @abstractmethod
@@ -281,7 +288,9 @@ class Materializer[Config: MaterializerConfig](ABC):
     def _requested_partitions(self, spark: SparkSession) -> DataFrame:
         """Return requested output boundaries for the shared output filter."""
         rows = [(timestamp,) for timestamp in self.config.partition_timestamps]
-        return spark.createDataFrame(rows, "requested_partition timestamp").distinct()
+        return spark.createDataFrame(
+            rows, "requested_partition timestamp"
+        ).distinct()
 
     def _filter_partitions(
         self, data_frame: DataFrame, requested_partitions: DataFrame
@@ -290,7 +299,10 @@ class Materializer[Config: MaterializerConfig](ABC):
         return (
             data_frame.withColumn(
                 "requested_partition",
-                F.date_trunc(self._partition_type.partition_unit, F.col("timestamp")),
+                spark_functions.date_trunc(
+                    self._partition_type.partition_unit,
+                    spark_functions.col("timestamp"),
+                ),
             )
             .join(requested_partitions, "requested_partition", "left_semi")
             .drop("requested_partition")
@@ -313,7 +325,9 @@ class Materializer[Config: MaterializerConfig](ABC):
         spark_session = materializer._create_spark_session(config.warehouse_dir)
         try:
             transform = materializer._transform(spark_session)
-            requested_partitions = materializer._requested_partitions(spark_session)
+            requested_partitions = materializer._requested_partitions(
+                spark_session
+            )
             transformed_data_frame = transform()
             data_frame = materializer._filter_partitions(
                 transformed_data_frame, requested_partitions
@@ -325,4 +339,4 @@ class Materializer[Config: MaterializerConfig](ABC):
             materializer._complete_partitions(spark_session, snapshot_id)
         finally:
             materializer._stop_spark_session(spark_session)
-        print("Materialization completed.")
+        sys.stdout.write("Materialization completed.\n")

@@ -100,7 +100,9 @@ class RecordTest(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             value.config = "replacement"  # type: ignore[misc]
 
-    def test_partition_type_preserves_its_enum_type_for_case_matching(self) -> None:
+    def test_partition_type_preserves_its_enum_type_for_case_matching(
+        self,
+    ) -> None:
         """Pattern matching receives the declared PartitionType enum rather than a string."""
         value = TypedPartitionedRecord(
             partition_type=PartitionType.HOURLY, name="market_data"

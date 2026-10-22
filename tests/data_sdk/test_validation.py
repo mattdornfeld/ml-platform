@@ -3,14 +3,16 @@
 import os
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
+from pyspark.sql import functions as spark_functions
 
-from ml_platform.data_sdk.dataset_transforms._market_data import MarketDataTransform
+from ml_platform.data_sdk.dataset_transforms._market_data import (
+    MarketDataTransform,
+)
 from ml_platform.data_sdk.exceptions import (
     FiniteValuesValidationError,
     InputFeatureKeysValidationError,
@@ -66,7 +68,7 @@ class MaterializerValidationTest(unittest.TestCase):
         return MarketDataTransform(
             spark=self.spark,
             symbols=["AAA"],
-            partitions=[datetime(2026, 1, 1, tzinfo=timezone.utc)],
+            partitions=[datetime(2026, 1, 1, tzinfo=UTC)],
             keys=["symbol"],
             partition_type="daily",
         )
@@ -80,30 +82,32 @@ class MaterializerValidationTest(unittest.TestCase):
         calendar = xcals.get_calendar("XNYS")
         self.assertFalse(
             MinimumRowsValidation._overlaps_xnys_regular_session(
-                datetime(2026, 1, 1, tzinfo=timezone.utc), timedelta(days=1), calendar
+                datetime(2026, 1, 1, tzinfo=UTC), timedelta(days=1), calendar
             )
         )
         self.assertTrue(
             MinimumRowsValidation._overlaps_xnys_regular_session(
-                datetime(2026, 1, 2, tzinfo=timezone.utc), timedelta(days=1), calendar
+                datetime(2026, 1, 2, tzinfo=UTC), timedelta(days=1), calendar
             )
         )
         self.assertTrue(
             MinimumRowsValidation._overlaps_xnys_regular_session(
-                datetime(2026, 1, 2, 14, tzinfo=timezone.utc),
+                datetime(2026, 1, 2, 14, tzinfo=UTC),
                 timedelta(hours=1),
                 calendar,
             )
         )
         self.assertFalse(
             MinimumRowsValidation._overlaps_xnys_regular_session(
-                datetime(2026, 1, 2, 21, tzinfo=timezone.utc),
+                datetime(2026, 1, 2, 21, tzinfo=UTC),
                 timedelta(hours=1),
                 calendar,
             )
         )
 
-    def test_validator_runs_only_the_injected_dataframe_validations(self) -> None:
+    def test_validator_runs_only_the_injected_dataframe_validations(
+        self,
+    ) -> None:
         """The shared validator has no dependency on any materializer resource type."""
         frame = self.spark.createDataFrame([("AAA",)], "symbol string")
         validator = MaterializationValidator(
@@ -128,7 +132,7 @@ class MaterializerValidationTest(unittest.TestCase):
         """Market rows may leave requested days empty but cannot mutate other days."""
         requested = MaterializerPartition(
             partition_id="day",
-            timestamp=datetime(2026, 1, 3, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 1, 3, tzinfo=UTC),
             callback_token="token",
         )
         worker = DatasetMaterializer(
@@ -174,7 +178,9 @@ class MaterializerValidationTest(unittest.TestCase):
         self.assertIsNone(worker.validate(prepared))
         with self.assertRaisesRegex(ValueError, "duplicate"):
             worker.validate(prepared.unionByName(prepared))
-        next_day = source.withColumn("timestamp", F.lit("2026-01-04 15:30:00"))
+        next_day = source.withColumn(
+            "timestamp", spark_functions.lit("2026-01-04 15:30:00")
+        )
         with self.assertRaisesRegex(
             RequestedPartitionsValidationError, "outside requested"
         ):
@@ -225,14 +231,14 @@ class MaterializerValidationTest(unittest.TestCase):
                 "partitions": [
                     {
                         "partition_id": "output",
-                        "timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc),
+                        "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
                         "callback_token": "token",
                         "partition_dependencies": [
                             {
                                 "partition_id": "input",
                                 "dataset_name": "sp500",
                                 "dataset_version": 3,
-                                "timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc),
+                                "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
                                 "snapshot_id": 1,
                             }
                         ],
@@ -260,10 +266,14 @@ class MaterializerValidationTest(unittest.TestCase):
                 worker.validate(frame)
 
         accepted = feature("AAA", 1.0).selectExpr(
-            "cast(timestamp as timestamp) as timestamp", "symbol", "feature_value"
+            "cast(timestamp as timestamp) as timestamp",
+            "symbol",
+            "feature_value",
         )
         self.assertIsNone(validate_feature(accepted))
-        with self.assertRaisesRegex(FiniteValuesValidationError, "NaN, infinity"):
+        with self.assertRaisesRegex(
+            FiniteValuesValidationError, "NaN, infinity"
+        ):
             validate_feature(
                 feature("AAA", float("nan")).selectExpr(
                     "cast(timestamp as timestamp) as timestamp",
@@ -285,7 +295,9 @@ class MaterializerValidationTest(unittest.TestCase):
             [("2026-01-01", "AAA", "invalid")],
             "timestamp string, symbol string, feature_value string",
         )
-        with self.assertRaisesRegex(FiniteValuesValidationError, "NaN, infinity"):
+        with self.assertRaisesRegex(
+            FiniteValuesValidationError, "NaN, infinity"
+        ):
             validate_feature(
                 uncastable.selectExpr(
                     "cast(timestamp as timestamp) as timestamp",
@@ -299,7 +311,7 @@ class MaterializerValidationTest(unittest.TestCase):
         callbacks = [
             MaterializerPartition(
                 partition_id=f"output-{hour}",
-                timestamp=datetime(2026, 1, 1, hour, tzinfo=timezone.utc),
+                timestamp=datetime(2026, 1, 1, hour, tzinfo=UTC),
                 callback_token="token",
             )
             for hour in (10, 11)
@@ -322,7 +334,9 @@ class MaterializerValidationTest(unittest.TestCase):
             ],
             "timestamp string, symbol string, feature_value double",
         ).selectExpr(
-            "cast(timestamp as timestamp) as timestamp", "symbol", "feature_value"
+            "cast(timestamp as timestamp) as timestamp",
+            "symbol",
+            "feature_value",
         )
 
         requested = worker._requested_partitions(self.spark)

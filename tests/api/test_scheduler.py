@@ -34,18 +34,22 @@ class SchedulerTest(unittest.TestCase):
 
         scheduler._ensure_dataset_application(job_id, "dataset-job")
 
-        manifest = (
-            custom_objects.return_value.create_namespaced_custom_object.call_args.args[
-                -1
-            ]
-        )
+        manifest = custom_objects.return_value.create_namespaced_custom_object.call_args.args[
+            -1
+        ]
         self.assertEqual(
-            manifest["metadata"]["annotations"]["kueue.x-k8s.io/admission-gated-by"],
+            manifest["metadata"]["annotations"][
+                "kueue.x-k8s.io/admission-gated-by"
+            ],
             ADMISSION_GATE,
         )
         self.assertTrue(manifest["spec"]["suspend"])
-        self.assertEqual(manifest["spec"]["arguments"].count("--config-json"), 1)
-        self.assertNotIn("--partition-callbacks-json", manifest["spec"]["arguments"])
+        self.assertEqual(
+            manifest["spec"]["arguments"].count("--config-json"), 1
+        )
+        self.assertNotIn(
+            "--partition-callbacks-json", manifest["spec"]["arguments"]
+        )
         self.assertNotIn("--dataset-type", manifest["spec"]["arguments"])
         config = json.loads(
             manifest["spec"]["arguments"][

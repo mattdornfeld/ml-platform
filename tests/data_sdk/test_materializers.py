@@ -84,7 +84,9 @@ class MaterializerContractTest(unittest.TestCase):
         self.assertEqual(table.id, "ml_platform.market_data.`sp500-v3`")
         self.assertEqual(table.resource_type, "dataset")
 
-    def test_table_identifier_is_independent_of_materializer_classes(self) -> None:
+    def test_table_identifier_is_independent_of_materializer_classes(
+        self,
+    ) -> None:
         """Iceberg table IDs are owned by the table value object."""
         self.assertEqual(
             IcebergTable.id_for("ml_platform", "features", "log_return", 1),
@@ -93,7 +95,13 @@ class MaterializerContractTest(unittest.TestCase):
 
     def test_shared_fields_are_declared_by_materializer_config(self) -> None:
         """All runtime contracts inherit shared resource and partition metadata."""
-        for field in ("name", "version", "description", "validations", "partitions"):
+        for field in (
+            "name",
+            "version",
+            "description",
+            "validations",
+            "partitions",
+        ):
             self.assertIn(field, MaterializerConfig.model_fields)
             self.assertIn(field, DatasetMaterializationConfig.model_fields)
             self.assertIn(field, FeatureMaterializationConfig.model_fields)
@@ -125,7 +133,9 @@ class MaterializerContractTest(unittest.TestCase):
                 if not field.description
             ]
             self.assertEqual(
-                missing, [], f"{model.__name__} has undocumented fields: {missing}"
+                missing,
+                [],
+                f"{model.__name__} has undocumented fields: {missing}",
             )
 
     def test_transforms_remain_decoupled_from_configs_and_tables(self) -> None:
@@ -143,7 +153,9 @@ if __name__ == "__main__":
 class TransformMaterializerContractTest(unittest.TestCase):
     """Verify labels and features share their table lifecycle contract."""
 
-    def test_feature_and_label_tables_use_the_shared_transform_definition(self) -> None:
+    def test_feature_and_label_tables_use_the_shared_transform_definition(
+        self,
+    ) -> None:
         """Only static table values differ between the two transform resource kinds."""
         common = {
             "name": "signal",
@@ -203,7 +215,9 @@ class TransformMaterializerContractTest(unittest.TestCase):
                 "label_value": "double",
             },
         )
-        self.assertEqual(feature_table.partition_type, label_table.partition_type)
+        self.assertEqual(
+            feature_table.partition_type, label_table.partition_type
+        )
         self.assertEqual(feature_table.resource_type, "feature")
         self.assertEqual(label_table.resource_type, "label")
 
@@ -213,7 +227,7 @@ class PublicExceptionContractTest(unittest.TestCase):
 
     def test_public_exception_types_share_the_data_sdk_root(self) -> None:
         """The exceptions entrypoint exposes one typed hierarchy for callers."""
-        import ml_platform.data_sdk.exceptions as exceptions
+        from ml_platform.data_sdk import exceptions
 
         for exception_name in exceptions.__all__:
             exception_type = getattr(exceptions, exception_name)

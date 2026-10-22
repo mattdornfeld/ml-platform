@@ -1,7 +1,7 @@
 """Shared output table contract for dataset, feature, and label transforms."""
 
 from abc import ABC, abstractmethod
-from typing import Sequence
+from collections.abc import Sequence
 
 from pyspark.sql import DataFrame
 
@@ -23,7 +23,10 @@ class DataTransform(ABC):
 
     @property
     def key_schema(self) -> dict[str, str]:
-        return {"timestamp": "timestamp", **{key.value: "string" for key in self.keys}}
+        return {
+            "timestamp": "timestamp",
+            **{key.value: "string" for key in self.keys},
+        }
 
     @property
     @abstractmethod

@@ -1,7 +1,7 @@
 """Private runtime types shared by data transformations and materializers."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import assert_never
 
@@ -89,7 +89,9 @@ class PartitionType(StrEnum):
                 )
 
     @classmethod
-    def from_iceberg_partition_spec(cls, partition_spec: str) -> "PartitionType":
+    def from_iceberg_partition_spec(
+        cls, partition_spec: str
+    ) -> "PartitionType":
         """Resolve an Iceberg timestamp transform to its explicit cadence."""
         match partition_spec:
             case "hours(timestamp)":
@@ -104,7 +106,7 @@ class PartitionType(StrEnum):
 
     def normalize_timestamp(self, timestamp: datetime) -> datetime:
         """Normalize one timestamp to this cadence's UTC partition boundary."""
-        normalized = timestamp.astimezone(timezone.utc).replace(
+        normalized = timestamp.astimezone(UTC).replace(
             minute=0, second=0, microsecond=0
         )
         if self is PartitionType.DAILY:
@@ -119,7 +121,9 @@ class DatasetDependency(BaseConfig):
         pattern=r"^[a-z][a-z0-9_]*$",
         description="Stable lowercase name of the upstream dataset.",
     )
-    version: int = Field(ge=1, description="Immutable version of the upstream dataset.")
+    version: int = Field(
+        ge=1, description="Immutable version of the upstream dataset."
+    )
     dataset_type: DatasetType = Field(
         description="Kind of upstream dataset used to resolve its Iceberg namespace."
     )

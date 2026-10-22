@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 
 import pandas as pd
 import pyarrow.dataset as ds
-import pyarrow.fs as fs
 from IPython import embed
+from pyarrow import fs
 
 from ml_platform.data_sdk._exceptions import DataSdkError
 
@@ -46,10 +46,14 @@ def _parquet_source(
         return path, _minio_filesystem()
     root = Path(value).expanduser().resolve()
     if not root.is_dir():
-        raise ParquetExplorerSourceError(f"Parquet directory does not exist: {root}.")
+        raise ParquetExplorerSourceError(
+            f"Parquet directory does not exist: {root}."
+        )
     files = sorted(root.rglob("*.parquet"))
     if not files:
-        raise ParquetExplorerSourceError(f"No Parquet files were found below: {root}.")
+        raise ParquetExplorerSourceError(
+            f"No Parquet files were found below: {root}."
+        )
     return [str(file) for file in files], None
 
 
@@ -57,7 +61,7 @@ def load_partitioned_parquet(directory: str | Path) -> pd.DataFrame:
     """Load every local or MinIO Parquet file below ``directory`` into pandas."""
     source, filesystem = _parquet_source(directory)
     dataset = ds.dataset(source, filesystem=filesystem, format="parquet")
-    return dataset.to_table().to_pandas()
+    return pd.DataFrame(dataset.to_table().to_pandas())
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,7 +82,12 @@ def main() -> None:
     frame = load_partitioned_parquet(args.directory)
     embed(
         header="Data explorer: `frame` and `data` contain the loaded pandas DataFrame.",
-        user_ns={"data": frame, "directory": args.directory, "frame": frame, "pd": pd},
+        user_ns={
+            "data": frame,
+            "directory": args.directory,
+            "frame": frame,
+            "pd": pd,
+        },
     )
 
 

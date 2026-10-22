@@ -5,7 +5,7 @@ from pathlib import Path
 import lightning.pytorch as pl
 import torch
 from torch import nn
-from torch.nn import functional as F
+from torch.nn import functional
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
@@ -46,7 +46,7 @@ class MNISTDataModule(pl.LightningDataModule):
                 self.data_dir, train=False, transform=self.transform
             )
 
-    def train_dataloader(self) -> DataLoader:
+    def train_dataloader(self) -> DataLoader[tuple[torch.Tensor, torch.Tensor]]:
         """Return shuffled batches from the MNIST training dataset."""
         if self.train_dataset is None:
             raise RuntimeError(
@@ -59,7 +59,7 @@ class MNISTDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
         )
 
-    def val_dataloader(self) -> DataLoader:
+    def val_dataloader(self) -> DataLoader[tuple[torch.Tensor, torch.Tensor]]:
         """Return ordered batches from the MNIST test dataset for validation."""
         if self.test_dataset is None:
             raise RuntimeError(
@@ -71,10 +71,12 @@ class MNISTDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
         )
 
-    def test_dataloader(self) -> DataLoader:
+    def test_dataloader(self) -> DataLoader[tuple[torch.Tensor, torch.Tensor]]:
         """Return ordered batches from the MNIST test dataset for final testing."""
         if self.test_dataset is None:
-            raise RuntimeError("Call setup('test') before requesting the test loader.")
+            raise RuntimeError(
+                "Call setup('test') before requesting the test loader."
+            )
         return DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
@@ -100,7 +102,10 @@ class MNISTClassifier(pl.LightningModule):
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """Convert a batch of images into unnormalized class scores."""
-        return self.model(images)
+        output = self.model(images)
+        if not isinstance(output, torch.Tensor):
+            raise TypeError("MNIST classifier must produce a tensor.")
+        return output
 
     def _shared_step(
         self, batch: tuple[torch.Tensor, torch.Tensor], stage: str
@@ -108,28 +113,34 @@ class MNISTClassifier(pl.LightningModule):
         """Calculate loss and accuracy for one batch and log stage-specific metrics."""
         images, labels = batch
         logits = self(images)
-        loss = F.cross_entropy(logits, labels)
+        loss = functional.cross_entropy(logits, labels)
         accuracy = (logits.argmax(dim=1) == labels).float().mean()
-        self.log(f"{stage}_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log(
-            f"{stage}_accuracy", accuracy, on_step=False, on_epoch=True, prog_bar=True
+            f"{stage}_loss", loss, on_step=False, on_epoch=True, prog_bar=True
+        )
+        self.log(
+            f"{stage}_accuracy",
+            accuracy,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
         )
         return loss
 
     def training_step(
-        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+        self, batch: tuple[torch.Tensor, torch.Tensor], _batch_idx: int
     ) -> torch.Tensor:
         """Run one optimization batch and return its cross-entropy loss."""
         return self._shared_step(batch, "train")
 
     def validation_step(
-        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+        self, batch: tuple[torch.Tensor, torch.Tensor], _batch_idx: int
     ) -> None:
         """Evaluate and log metrics for one validation batch."""
         self._shared_step(batch, "val")
 
     def test_step(
-        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+        self, batch: tuple[torch.Tensor, torch.Tensor], _batch_idx: int
     ) -> None:
         """Evaluate and log metrics for one final test batch."""
         self._shared_step(batch, "test")

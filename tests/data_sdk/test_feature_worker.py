@@ -1,7 +1,7 @@
 """Unit coverage for the API-dispatched feature Spark worker."""
 
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 from pyspark.sql import DataFrame
@@ -52,26 +52,28 @@ class PlannedInputTest(unittest.TestCase):
     ) -> None:
         """A newer table head cannot replace the parent snapshot selected by the API."""
         spark = MagicMock()
-        frame = spark.read.option.return_value.table.return_value.where.return_value
+        frame = (
+            spark.read.option.return_value.table.return_value.where.return_value
+        )
         frame.dropDuplicates.return_value = frame
         callbacks = [
             MaterializerPartition(
                 partition_id="output",
-                timestamp=datetime(2026, 10, 19, tzinfo=timezone.utc),
+                timestamp=datetime(2026, 10, 19, tzinfo=UTC),
                 callback_token="token",
                 partition_dependencies=[
                     PartitionDependency(
                         partition_id="parent",
                         dataset_name="sp500",
                         dataset_version=3,
-                        timestamp=datetime(2026, 10, 19, tzinfo=timezone.utc),
+                        timestamp=datetime(2026, 10, 19, tzinfo=UTC),
                         snapshot_id=42,
                     ),
                     PartitionDependency(
                         partition_id="other-parent",
                         dataset_name="company_facts",
                         dataset_version=2,
-                        timestamp=datetime(2026, 10, 19, tzinfo=timezone.utc),
+                        timestamp=datetime(2026, 10, 19, tzinfo=UTC),
                         snapshot_id=99,
                     ),
                 ],
@@ -118,7 +120,7 @@ class PlannedInputTest(unittest.TestCase):
         self, planned_dataset: MagicMock
     ) -> None:
         """Multiple datasets retain their own identity, snapshot plan, and constructor slot."""
-        timestamp = datetime(2026, 10, 19, tzinfo=timezone.utc)
+        timestamp = datetime(2026, 10, 19, tzinfo=UTC)
         config = FeatureMaterializationConfig.model_validate(
             {
                 "name": "joined_feature",
@@ -179,7 +181,9 @@ class PlannedInputTest(unittest.TestCase):
         self.assertEqual(set(datasets), {"prices", "fundamentals"})
         self.assertIs(feature, price_frame)
         self.assertIs(datasets["fundamentals"].frame, facts_frame)
-        self.assertEqual(planned_dataset.call_args_list[0].args[2].name, "prices_v2")
+        self.assertEqual(
+            planned_dataset.call_args_list[0].args[2].name, "prices_v2"
+        )
         self.assertEqual(
             planned_dataset.call_args_list[1].args[2].name, "company_facts"
         )
@@ -190,7 +194,9 @@ class TransformMaterializerTest(unittest.TestCase):
 
     @patch.object(LabelMaterializer, "_planned_dataset")
     @patch.object(
-        LabelMaterializer, "_load_transform", return_value=TripleBarrierLabelTransform
+        LabelMaterializer,
+        "_load_transform",
+        return_value=TripleBarrierLabelTransform,
     )
     def test_label_injects_pinned_datasets_through_the_shared_mixin(
         self,
@@ -198,7 +204,7 @@ class TransformMaterializerTest(unittest.TestCase):
         planned_dataset: MagicMock,
     ) -> None:
         """Labels use the same dataset read and constructor injection contract as features."""
-        timestamp = datetime(2026, 10, 19, tzinfo=timezone.utc)
+        timestamp = datetime(2026, 10, 19, tzinfo=UTC)
         config = LabelMaterializationConfig.model_validate(
             {
                 "name": "triple_barrier",

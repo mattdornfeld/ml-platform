@@ -1,13 +1,12 @@
 """Immutable record decorator for transform contracts."""
 
 from abc import update_abstractmethods
+from collections.abc import Callable
 from dataclasses import dataclass
 from inspect import Signature, signature
-from typing import Callable, TypeVar, dataclass_transform
+from typing import dataclass_transform
 
 from ml_platform.data_sdk._exceptions import DataSdkError
-
-Record = TypeVar("Record")
 
 
 class RecordIdentityError(DataSdkError):
@@ -19,7 +18,7 @@ class RecordInitializationError(DataSdkError):
 
 
 @dataclass_transform(frozen_default=True)
-def record(record_type: type[Record]) -> type[Record]:
+def record[Record](record_type: type[Record]) -> type[Record]:
     """Create a frozen dataclass that fulfills inherited property contracts.
 
     ``dataclass_transform`` exposes the dataclass constructor and the annotated
@@ -44,7 +43,9 @@ def record(record_type: type[Record]) -> type[Record]:
         for base in record_type.__mro__[1:]
         for field_name in getattr(base, "__dataclass_fields__", {})
         if field_name.startswith("_")
-        and isinstance(getattr(base, field_name.removeprefix("_"), None), property)
+        and isinstance(
+            getattr(base, field_name.removeprefix("_"), None), property
+        )
     }
     property_fields = tuple(
         dict.fromkeys((*declared_properties, *inherited_record_properties))
@@ -85,15 +86,12 @@ def record(record_type: type[Record]) -> type[Record]:
         name.removeprefix("_") if name in private_names else name: annotation
         for name, annotation in generated_annotations.items()
     }
-    setattr(
-        public_init,
-        "__signature__",
-        Signature(
-            public_parameters, return_annotation=generated_signature.return_annotation
-        ),
+    public_init.__dict__["__signature__"] = Signature(
+        public_parameters,
+        return_annotation=generated_signature.return_annotation,
     )
-    setattr(public_init, "__annotations__", public_annotations)
-    setattr(frozen_record, "__init__", public_init)
+    public_init.__annotations__ = public_annotations
+    type.__setattr__(frozen_record, "__init__", public_init)
 
     for name in declared_properties:
         private_name = f"_{name}"

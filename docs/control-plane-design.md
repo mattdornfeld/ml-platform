@@ -205,8 +205,7 @@ class TrailingVolatilityTransform(FeatureTransform):
     market_data: Dataset
     lookback_bars: int
 
-    def __call__(self) -> DataFrame:
-        ...
+    def __call__(self) -> DataFrame: ...
 ```
 
 The materialization harness verifies that declared dependency names exactly match dataset constructor arguments, validates parameter names and types, and invokes the transform. The transform can perform arbitrary Spark operations, but it does not choose input partitions, write output storage, or create lineage records.

@@ -9,7 +9,10 @@ from ml_platform.model_sdk.mnist import MNISTClassifier, MNISTDataModule
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train a Lightning MLP on MNIST.")
+    """Parse training command-line options."""
+    parser = argparse.ArgumentParser(
+        description="Train a Lightning MLP on MNIST."
+    )
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -25,6 +28,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Train and evaluate the MNIST Lightning model."""
     args = parse_args()
     pl.seed_everything(args.seed, workers=True)
 

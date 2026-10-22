@@ -1,14 +1,15 @@
 """Yahoo Finance market-data dataset transform."""
 
 import json
-from datetime import date, datetime, time, timedelta, timezone
+import sys
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
+from pyspark.sql import functions as spark_functions
 from pyspark.sql.types import (
     DoubleType,
     LongType,
@@ -26,13 +27,13 @@ OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
 OHLCV_SCHEMA = StructType(
     [
-        StructField("timestamp", TimestampType(), False),
-        StructField("symbol", StringType(), False),
-        StructField("Open", DoubleType(), False),
-        StructField("High", DoubleType(), False),
-        StructField("Low", DoubleType(), False),
-        StructField("Close", DoubleType(), False),
-        StructField("Volume", LongType(), False),
+        StructField("timestamp", TimestampType(), nullable=False),
+        StructField("symbol", StringType(), nullable=False),
+        StructField("Open", DoubleType(), nullable=False),
+        StructField("High", DoubleType(), nullable=False),
+        StructField("Low", DoubleType(), nullable=False),
+        StructField("Close", DoubleType(), nullable=False),
+        StructField("Volume", LongType(), nullable=False),
     ]
 )
 
@@ -71,7 +72,9 @@ class MarketDataTransform(DatasetTransform):
 
     def __call__(self) -> DataFrame:
         """Fetch contiguous Yahoo ranges for the requested partition days."""
-        requested_days = sorted({partition.date() for partition in self.partitions})
+        requested_days = sorted(
+            {partition.date() for partition in self.partitions}
+        )
         if not requested_days:
             raise MarketDataPartitionError(
                 "Market-data materialization requires at least one requested output partition."
@@ -82,14 +85,20 @@ class MarketDataTransform(DatasetTransform):
                 try:
                     frames.append(
                         fetch_hourly_ohlcv(
-                            self.spark, symbol, start_date=start_date, end_date=end_date
+                            self.spark,
+                            symbol,
+                            start_date=start_date,
+                            end_date=end_date,
                         )
                     )
                 except (HTTPError, ValueError) as error:
-                    if isinstance(error, HTTPError) and error.code not in {404, 422}:
+                    if isinstance(error, HTTPError) and error.code not in {
+                        404,
+                        422,
+                    }:
                         raise
-                    print(
-                        f"Skipping unavailable Yahoo Finance range for {symbol}: {error}"
+                    sys.stdout.write(
+                        f"Skipping unavailable Yahoo Finance range for {symbol}: {error}\n"
                     )
         if not frames:
             raise YahooFinanceDataUnavailableError(
@@ -130,23 +139,32 @@ def fetch_hourly_ohlcv(
             f"Yahoo Finance returned no hourly data for symbol {normalized!r} "
             f"from {start_date.isoformat()} through {end_date.isoformat()}."
         )
-    return _with_market_session(spark.createDataFrame(rows, schema=OHLCV_SCHEMA))
+    return _with_market_session(
+        spark.createDataFrame(rows, schema=OHLCV_SCHEMA)
+    )
 
 
 def _request_yahoo_chart(
     symbol: str, start_date: date, end_date: date
 ) -> dict[str, Any]:
     """Request one Yahoo chart response and return decoded JSON."""
-    start = int(datetime.combine(start_date, time.min, timezone.utc).timestamp())
-    end = int(datetime.combine(end_date, time.min, timezone.utc).timestamp())
+    start = int(datetime.combine(start_date, time.min, UTC).timestamp())
+    end = int(datetime.combine(end_date, time.min, UTC).timestamp())
     url = f"{YAHOO_CHART_URL}/{quote(symbol, safe='')}?period1={start}&period2={end}&interval=1h&includePrePost=true&events=history"
     with urlopen(
         Request(url, headers={"User-Agent": "ml-platform/0.1"}), timeout=30
     ) as response:
-        return json.load(response)
+        payload = json.load(response)
+    if not isinstance(payload, dict):
+        raise YahooFinancePayloadError(
+            f"Yahoo Finance response for {symbol!r} is not a JSON object."
+        )
+    return {str(key): value for key, value in payload.items()}
 
 
-def _yahoo_chart_rows(payload: dict[str, Any], symbol: str) -> list[tuple[object, ...]]:
+def _yahoo_chart_rows(
+    payload: dict[str, Any], symbol: str
+) -> list[tuple[object, ...]]:
     """Validate Yahoo chart JSON and convert complete bars into typed row tuples."""
     chart = payload.get("chart")
     if not isinstance(chart, dict):
@@ -204,7 +222,7 @@ def _yahoo_chart_rows(payload: dict[str, Any], symbol: str) -> list[tuple[object
         )
     return [
         (
-            datetime.fromtimestamp(timestamp, tz=timezone.utc),
+            datetime.fromtimestamp(timestamp, tz=UTC),
             symbol,
             float(open_),
             float(high),
@@ -227,12 +245,15 @@ def _yahoo_chart_rows(payload: dict[str, Any], symbol: str) -> list[tuple[object
 
 def _with_market_session(frame: DataFrame) -> DataFrame:
     """Add a pre-market, regular, or after-hours session label."""
-    eastern = F.date_format(
-        F.from_utc_timestamp("timestamp", "America/New_York"), "HH:mm:ss"
+    eastern = spark_functions.date_format(
+        spark_functions.from_utc_timestamp("timestamp", "America/New_York"),
+        "HH:mm:ss",
     )
     return frame.withColumn(
         "market_session",
-        F.when((eastern >= "04:00:00") & (eastern < "09:30:00"), "pre_market")
+        spark_functions.when(
+            (eastern >= "04:00:00") & (eastern < "09:30:00"), "pre_market"
+        )
         .when((eastern >= "09:30:00") & (eastern < "16:00:00"), "regular")
         .otherwise("after_hours"),
     ).select("timestamp", "symbol", "market_session", *OHLCV_COLUMNS)
