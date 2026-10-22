@@ -6,7 +6,7 @@ from simple_classproperty import classproperty
 from pyspark.sql import DataFrame, SparkSession, functions as F
 
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, WriteMode
-from ml_platform.data_sdk.materializers._materialization_validator import MaterializationValidator
+from ml_platform.data_sdk.materializers._materialization_validator import _DatasetValidationInput, MaterializationValidator
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
 
@@ -72,17 +72,9 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
     ) -> int:
         """Validate and merge one transform's OHLCV frame into its versioned table."""
         materializer = cls(config)
-        validator = MaterializationValidator(config.validations, "Dataset transform")
-        validator.required_columns(frame, {"timestamp", "symbol", "market_session", *_OHLCV_COLUMNS})
-        incoming = frame.select(
-            F.col("timestamp").cast("timestamp").alias("timestamp"),
-            F.col("symbol").cast("string").alias("symbol"),
-            F.col("market_session").cast("string").alias("market_session"),
-            *[F.col(column).cast("long" if column == "Volume" else "double").alias(column) for column in _OHLCV_COLUMNS],
-        )
-        validator.non_null_columns(incoming, ("timestamp", "symbol"))
-        validator.non_empty(incoming)
+        incoming = materializer._prepare_frame(frame)
         transform = materializer._create_transform(spark)
+        materializer.validate(incoming, spark, transform)
         materializer._ensure_table(
             spark,
             schema=transform.iceberg_schema,
@@ -107,7 +99,6 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
 
     def _prepare_frame(self, frame: DataFrame) -> DataFrame:
         """Cast OHLCV values to the dataset's persisted types."""
-        self._validator.required_columns(frame, set(_CONTENT_HASH_COLUMNS))
         return frame.select(
             F.col("timestamp").try_cast("timestamp").alias("timestamp"),
             F.col("symbol").cast("string").alias("symbol"),
@@ -118,10 +109,9 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
             ],
         )
 
-    def _validate_frame(self, frame: DataFrame, spark: SparkSession, partition_spec: str) -> None:
-        """Require complete, unique market rows in only the requested days."""
-        self._validator.non_null_columns(frame, _CONTENT_HASH_COLUMNS)
-        self._validator.unique_key(frame, ("timestamp", "symbol"))
+    def validate(self, frame: DataFrame, spark: SparkSession, transform: DatasetTransform) -> None:
+        """Require complete, unique market rows in only the requested partitions."""
+        partition_spec = transform.iceberg_partition_spec
         requested_partitions = spark.createDataFrame(
             [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
             "output_partition timestamp",
@@ -129,7 +119,18 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
         partitioned = frame.withColumn(
             "output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp"))
         )
-        self._validator.partition_coverage(partitioned, requested_partitions, partition_column="output_partition", partition_interval=self._partition_interval(partition_spec))
+        self._validator.validate(
+            _DatasetValidationInput(
+                frame=frame,
+                partitioned_frame=partitioned,
+                requested_partitions=requested_partitions,
+                partition_column="output_partition",
+                partition_interval=self._partition_interval(partition_spec),
+                exact_columns=frozenset(_CONTENT_HASH_COLUMNS),
+                non_null_columns=_CONTENT_HASH_COLUMNS,
+                unique_key_columns=_MERGE_KEYS,
+            )
+        )
 
     def _write_frame(self, frame: DataFrame) -> None:
         """Cluster source rows by day before the base class merges them."""

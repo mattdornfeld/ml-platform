@@ -17,6 +17,7 @@ from ml_platform.data_sdk.materializers import (
     MaterializationValidator,
 )
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
+from ml_platform.data_sdk.dataset_transforms._market_data import MarketDataTransform
 from ml_platform.data_sdk.materializers._feature import FeatureMaterializationConfig, FeatureMaterializer
 from ml_platform.data_sdk.transforms._types import Dataset, DatasetReference
 
@@ -40,44 +41,16 @@ class MaterializerValidationTest(unittest.TestCase):
         else:
             os.environ["PYSPARK_PYTHON"] = cls.previous_python
 
-    def test_schema_null_and_duplicate_key_checks(self) -> None:
-        """Reject malformed, uncastable, and duplicate output rows."""
-        validator = MaterializationValidator([], "Feature transform")
-        source = self.spark.createDataFrame(
-            [("2026-01-01", "AAA", "1"), ("2026-01-01", "BBB", "invalid")],
-            "timestamp string, symbol string, feature_value string",
+    def _daily_dataset_transform(self) -> MarketDataTransform:
+        """Return the static transform layout required by dataset validation tests."""
+        return MarketDataTransform(
+            spark=self.spark,
+            symbols=["AAA"],
+            partitions=[datetime(2026, 1, 1, tzinfo=timezone.utc)],
+            keys=["symbol"],
+            partition_type="daily",
         )
-        validator.exact_columns(source, {"timestamp", "symbol", "feature_value"})
-        with self.assertRaisesRegex(ValueError, "unexpected: feature_value"):
-            validator.exact_columns(source, {"timestamp", "symbol"})
 
-        typed = source.selectExpr("timestamp", "symbol", "try_cast(feature_value as double) as feature_value")
-        with self.assertRaisesRegex(ValueError, "non-null, castable"):
-            validator.non_null_columns(typed, ("timestamp", "symbol", "feature_value"))
-        duplicate = source.unionByName(source.limit(1))
-        with self.assertRaisesRegex(ValueError, "duplicate"):
-            validator.unique_key(duplicate, ("timestamp", "symbol"))
-
-    def test_partition_coverage_and_minimum_rows(self) -> None:
-        """Require the exact requested partitions and configured row minimum."""
-        validator = MaterializationValidator([MinimumRowsValidationConfig(minimum_rows=2)], "Feature transform")
-        requested = self.spark.createDataFrame([("2026-01-01",), ("2026-01-02",)], "day string")
-        valid = self.spark.createDataFrame(
-            [("2026-01-01", "AAA"), ("2026-01-01", "BBB"),
-             ("2026-01-02", "AAA"), ("2026-01-02", "BBB")],
-            "day string, symbol string",
-        )
-        validator.partition_coverage(valid, requested, partition_column="day", partition_interval=timedelta(days=1))
-        with self.assertRaisesRegex(ValueError, "fewer than 3 rows"):
-            MaterializationValidator(
-                [MinimumRowsValidationConfig(minimum_rows=3)], "Feature transform"
-            ).partition_coverage(valid, requested, partition_column="day", partition_interval=timedelta(days=1))
-        missing = valid.where("day = '2026-01-01'")
-        with self.assertRaisesRegex(ValueError, "fewer than 2 rows"):
-            validator.partition_coverage(missing, requested, partition_column="day", partition_interval=timedelta(days=1))
-        extra = valid.unionByName(self.spark.createDataFrame([("2026-01-03", "AAA")], valid.schema))
-        with self.assertRaisesRegex(ValueError, "requested partitions"):
-            validator.partition_coverage(extra, requested, partition_column="day", partition_interval=timedelta(days=1))
 
     def test_xnys_regular_session_filter_selects_sessions_and_skips_closed_periods(self) -> None:
         """XNYS recognizes holidays, regular session hours, and post-close hours."""
@@ -123,13 +96,13 @@ class MaterializerValidationTest(unittest.TestCase):
             "Low double, Close double, Volume long",
         )
         prepared = worker._prepare_frame(source)
-        self.assertIsNone(worker._validate_frame(prepared, self.spark, "days(timestamp)"))
-        self.assertIsNone(worker._validate_frame(prepared.limit(0), self.spark, "days(timestamp)"))
+        self.assertIsNone(worker.validate(prepared, self.spark, self._daily_dataset_transform()))
+        self.assertIsNone(worker.validate(prepared.limit(0), self.spark, self._daily_dataset_transform()))
         with self.assertRaisesRegex(ValueError, "duplicate"):
-            worker._validate_frame(prepared.unionByName(prepared), self.spark, "days(timestamp)")
+            worker.validate(prepared.unionByName(prepared), self.spark, self._daily_dataset_transform())
         next_day = source.withColumn("timestamp", F.lit("2026-01-02 15:30:00"))
         with self.assertRaisesRegex(ValueError, "requested partitions"):
-            worker._validate_frame(worker._prepare_frame(next_day), self.spark, "days(timestamp)")
+            worker.validate(worker._prepare_frame(next_day), self.spark, self._daily_dataset_transform())
 
     def test_feature_specific_value_and_input_key_policies(self) -> None:
         """Feature policy checks remain enforced after shared structural validation."""

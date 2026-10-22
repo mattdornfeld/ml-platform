@@ -16,7 +16,7 @@ from simple_classproperty import ClasspropertyMeta, classproperty
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import materialization_api_url, spark_master
-from ml_platform.data_sdk.materializers._materialization_validator import MaterializationValidator, Validation
+from ml_platform.data_sdk.materializers._materialization_validator import _CompletionValidationInput, MaterializationValidator, Validation
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._types import DatasetDependency
 from pyspark.sql import DataFrame, SparkSession
@@ -298,9 +298,10 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
     @property
     def _validator(self) -> MaterializationValidator:
         """Return the validation contract bound to this materialization job."""
-        return MaterializationValidator(self.config.validations, f"{type(self).__name__} transform")
+        return MaterializationValidator(self.config.validations)
 
-    def _validate_frame(self, frame: DataFrame, spark: SparkSession, partition_spec: str) -> None:
+    @abstractmethod
+    def validate(self, frame: DataFrame, spark: SparkSession, transform: DataTransform) -> None:
         """Allow resource materializers to apply the shared validation policy before writing."""
 
     def _write_frame(self, frame: DataFrame) -> None:
@@ -398,10 +399,12 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         """Report committed partition revisions through the control-plane API."""
         target_partition_keys = self._target_partition_keys(partition_spec)
         content_hashes = self._partition_content_hashes(spark, partition_spec)
-        if self._validator.requires_rows_for_all_partitions():
-            missing = set(target_partition_keys) - content_hashes.keys()
-            if missing:
-                raise ValueError(f"Transform produced no rows for required partitions: {sorted(missing)}.")
+        self._validator.validate(
+            _CompletionValidationInput(
+                target_partition_keys=target_partition_keys,
+                content_hashes=content_hashes,
+            )
+        )
         row_counts = self._partition_row_counts(spark, partition_spec)
         table_schema = {
             field.name: field.dataType.simpleString()
@@ -484,7 +487,7 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
             transform = self._create_transform(spark)
             schema, partition_spec = self._iceberg_layout(transform)
             frame = self._prepare_frame(self.materialize(spark, transform))
-            self._validate_frame(frame, spark, partition_spec)
+            self.validate(frame, spark, transform)
             self._ensure_table(spark, schema=schema, partition_spec=partition_spec)
             self._write_frame(frame)
             snapshot_id = self._latest_snapshot_id(spark, self._table_identifier)

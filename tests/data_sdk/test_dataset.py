@@ -37,7 +37,7 @@ class DatasetWorkerTest(unittest.TestCase):
         worker = DatasetMaterializer(config)
         with (
             patch.object(type(worker), "_prepare_frame", return_value=MagicMock()) as prepare,
-            patch.object(type(worker), "_validate_frame") as validate,
+            patch.object(type(worker), "validate") as validate,
             patch.object(type(worker), "_ensure_table") as ensure,
             patch.object(type(worker), "_write_frame") as write,
             patch.object(type(worker), "_latest_snapshot_id", return_value=7),
@@ -81,10 +81,10 @@ class DatasetWorkerTest(unittest.TestCase):
 
     @patch("ml_platform.data_sdk.materializers._dataset.F")
     @patch.object(DatasetMaterializer, "_ensure_table")
-    @patch("ml_platform.data_sdk.materializers._dataset.MaterializationValidator")
+    @patch.object(DatasetMaterializer, "validate")
     def test_dataset_frame_uses_dataframe_merge_api(
         self,
-        validator_class: MagicMock,
+        validate: MagicMock,
         _ensure_table: MagicMock,
         _functions: MagicMock,
     ) -> None:
@@ -115,7 +115,7 @@ class DatasetWorkerTest(unittest.TestCase):
             )
 
         self.assertEqual(count, 3)
-        validator_class.return_value.non_null_columns.assert_called_once_with(incoming, ("timestamp", "symbol"))
+        validate.assert_called_once()
         aliased_source.mergeInto.assert_called_once_with(
             "ml_platform.market_data.`sp500-v3`",
             unittest.mock.ANY,

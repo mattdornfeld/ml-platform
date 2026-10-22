@@ -108,7 +108,7 @@ class MaterializerLifecycleTest(unittest.TestCase):
             patch.object(type(worker), "_create_transform", return_value=transform),
             patch.object(type(worker), "materialize", return_value=source) as materialize,
             patch.object(type(worker), "_prepare_frame", return_value=prepared) as prepare,
-            patch.object(type(worker), "_validate_frame") as validate,
+            patch.object(type(worker), "validate") as validate,
             patch.object(type(worker), "_ensure_table") as ensure,
             patch.object(type(worker), "_write_frame") as write,
             patch.object(type(worker), "_latest_snapshot_id", return_value=42) as latest_snapshot,
@@ -125,7 +125,7 @@ class MaterializerLifecycleTest(unittest.TestCase):
         self.assertEqual(calls.mock_calls, [
             call.materialize(spark, transform),
             call.prepare(source),
-            call.validate(prepared, spark, "days(timestamp)"),
+            call.validate(prepared, spark, transform),
             call.ensure(spark, schema="timestamp TIMESTAMP", partition_spec="days(timestamp)"),
             call.write(prepared),
             call.snapshot(spark, "ml_platform.market_data.`sp500-v3`"),
@@ -141,7 +141,7 @@ class MaterializerLifecycleTest(unittest.TestCase):
             patch.object(type(worker), "_create_spark_session", return_value=spark),
             patch.object(type(worker), "materialize", return_value=MagicMock()),
             patch.object(type(worker), "_prepare_frame", return_value=MagicMock()),
-            patch.object(type(worker), "_validate_frame", side_effect=ValueError("invalid")),
+            patch.object(type(worker), "validate", side_effect=ValueError("invalid")),
             patch.object(type(worker), "_write_frame") as write,
             patch.object(type(worker), "_complete_partitions") as complete,
         ):
