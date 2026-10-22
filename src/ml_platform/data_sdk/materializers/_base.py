@@ -4,10 +4,11 @@ from abc import ABC, ABCMeta, abstractmethod
 import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import StrEnum
 from hashlib import sha256
 import json
 from pathlib import Path
-from typing import Generic, Literal, Mapping, TypeVar
+from typing import Generic, Mapping, TypeVar
 from urllib.request import Request, urlopen
 
 from pydantic import Field
@@ -90,6 +91,13 @@ class MaterializerConfig(BaseConfig):
         return self._iceberg_table_name_for(self.name, self.version)
 
 
+class WriteMode(StrEnum):
+    """Iceberg persistence strategies available to materializer implementations."""
+
+    MERGE = "merge"
+    OVERWRITE = "overwrite"
+
+
 Config = TypeVar("Config", bound=MaterializerConfig)
 
 _REQUIRED_MATERIALIZER_CLASS_PROPERTIES = frozenset({
@@ -151,7 +159,7 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
 
     @classproperty
     @abstractmethod
-    def write_mode(cls) -> Literal["merge", "overwrite"]:
+    def write_mode(cls) -> WriteMode:
         """Return the declared Iceberg persistence strategy for this resource."""
 
     @classproperty
@@ -308,7 +316,7 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
 
     def _write_frame(self, frame: DataFrame) -> None:
         """Merge keyed rows or replace touched Iceberg partitions atomically."""
-        if self.write_mode == "overwrite":
+        if self.write_mode is WriteMode.OVERWRITE:
             frame.writeTo(self._table_identifier).overwritePartitions()
             return
         raise NotImplementedError(f"{type(self).__name__} must implement merge writes.")

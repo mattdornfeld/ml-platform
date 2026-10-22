@@ -1,12 +1,11 @@
 """API-dispatched Spark materializer for market-data datasets."""
 from dataclasses import dataclass
-from typing import Literal
 
 from pydantic import Field, field_validator
 from simple_classproperty import classproperty
 from pyspark.sql import DataFrame, SparkSession, functions as F
 
-from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig
+from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, WriteMode
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
 
@@ -67,9 +66,9 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
         return True
 
     @classproperty
-    def write_mode(cls) -> Literal["merge", "overwrite"]:
+    def write_mode(cls) -> WriteMode:
         """Merge market rows by their stable timestamp and symbol identity."""
-        return "merge"
+        return WriteMode.MERGE
 
     @classmethod
     def _materialize_frame(

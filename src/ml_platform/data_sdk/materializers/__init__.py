@@ -6,6 +6,7 @@ from ml_platform.data_sdk.materializers._base import (
     PartionDependency,
     MaterializerPartition,
     MaterializerValidations,
+    WriteMode,
 )
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializationConfig, DatasetMaterializer
 from ml_platform.data_sdk.materializers._feature import (
@@ -19,5 +20,5 @@ __all__ = [
     "DatasetMaterializationConfig", "DatasetMaterializer", "DatasetDependency",
     "FeatureDatasetDependency", "FeatureMaterializationConfig", "FeatureMaterializer",
 "LabelMaterializationConfig", "LabelMaterializer", "Materializer",
-    "MaterializerConfig", "PartionDependency", "MaterializerPartition", "MaterializerValidations",
+    "MaterializerConfig", "PartionDependency", "MaterializerPartition", "MaterializerValidations", "WriteMode",
 ]

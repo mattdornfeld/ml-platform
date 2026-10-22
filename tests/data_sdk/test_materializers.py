@@ -29,6 +29,7 @@ from ml_platform.data_sdk.materializers import (
     PartionDependency,
     MaterializerPartition,
     MaterializerValidations,
+    WriteMode,
 )
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
@@ -173,6 +174,12 @@ class MaterializerContractTest(unittest.TestCase):
         self.assertEqual(DatasetMaterializer._iceberg_table_identifier("sp500", 3), "ml_platform.market_data.`sp500-v3`")
         self.assertEqual(FeatureMaterializer._iceberg_table_identifier("log_return", 1), "ml_platform.features.`log_return-v1`")
         self.assertEqual(LabelMaterializer._iceberg_table_identifier("triple_barrier", 2), "ml_platform.labels.`triple_barrier-v2`")
+
+    def test_materializers_declare_an_enum_write_mode(self) -> None:
+        """Every worker selects a closed, typed Iceberg persistence strategy."""
+        self.assertIs(DatasetMaterializer.write_mode, WriteMode.MERGE)
+        self.assertIs(FeatureMaterializer.write_mode, WriteMode.OVERWRITE)
+        self.assertIs(LabelMaterializer.write_mode, WriteMode.MERGE)
 
     def test_shared_fields_are_declared_by_materializer_config(self) -> None:
         """All materializer contracts inherit the common resource and partition fields."""

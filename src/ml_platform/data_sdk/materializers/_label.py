@@ -5,14 +5,14 @@ from importlib import import_module
 from inspect import Parameter, signature
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, Mapping, cast, get_type_hints
+from typing import Mapping, cast, get_type_hints
 
 from pydantic import Field, field_validator
 from simple_classproperty import classproperty
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition
+from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition, WriteMode
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.transforms._types import DataType, Dataset, DatasetDependency, FeatureKey, PartitionType
 
@@ -86,9 +86,9 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
         return False
 
     @classproperty
-    def write_mode(cls) -> Literal["merge", "overwrite"]:
+    def write_mode(cls) -> WriteMode:
         """Merge labels by their timestamp and configured feature-key identity."""
-        return "merge"
+        return WriteMode.MERGE
 
     datasets: Mapping[str, Dataset]
 

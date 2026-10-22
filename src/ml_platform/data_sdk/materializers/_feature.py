@@ -13,7 +13,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
-from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition
+from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition, WriteMode
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._types import (
     DataType,
@@ -104,9 +104,9 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         return False
 
     @classproperty
-    def write_mode(cls) -> Literal["merge", "overwrite"]:
+    def write_mode(cls) -> WriteMode:
         """Replace only the feature partitions emitted by the transform."""
-        return "overwrite"
+        return WriteMode.OVERWRITE
 
     def _partition_receipt_data(self, partition: MaterializerPartition) -> dict[str, object]:
         """Pin the exact dataset revisions consumed by this feature partition."""
