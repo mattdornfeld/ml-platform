@@ -26,10 +26,11 @@ time_range: {start_date: 2026-01-01, end_date: 2026-01-02}
 version: 1
 dtype: double
 frequency: daily
-feature_key: symbol
+feature_keys: [symbol]
 datasets:
   - name: prices
     version: 2
+    argument_name: market_data
     num_lookback_partitions: 1
 transform: ml_platform.data_sdk.LogReturnTransform
 description: Returns
@@ -52,4 +53,4 @@ validations: {min_rows_per_partition: 1}
         result = sync_resources("http://api", "feature", self.root)
         self.assertEqual(result, {"created": ["returns v1"], "deleted": []})
         payload = request.call_args_list[1].args[3]
-        self.assertEqual(payload["datasets"], [{"name": "prices", "version": 2, "num_lookback_partitions": 1}])
+        self.assertEqual(payload["datasets"], [{"name": "prices", "version": 2, "argument_name": "market_data", "num_lookback_partitions": 1}])

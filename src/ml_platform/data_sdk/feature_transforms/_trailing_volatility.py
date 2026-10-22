@@ -1,14 +1,13 @@
 """Trailing log-return volatility feature transformation."""
 
-from dataclasses import dataclass
-
 from pyspark.sql import DataFrame, Window, functions as F
 
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._types import Dataset
+from ml_platform.data_sdk.utils import record
 
 
-@dataclass(frozen=True)
+@record
 class TrailingVolatilityTransform(FeatureTransform):
     """Compute volatility from a transform-specific number of preceding bars."""
 

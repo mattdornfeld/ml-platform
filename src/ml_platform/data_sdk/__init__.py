@@ -11,10 +11,11 @@ from ml_platform.data_sdk.materializers import (
     MaterializerConfig,
 )
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
+from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.materializers._label import LabelResource
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
-from ml_platform.data_sdk.transforms._types import Dataset, DatasetDependency
+from ml_platform.data_sdk.transforms._types import Dataset, DatasetDependency, FeatureDatasetDependency
 from ml_platform.data_sdk.dataset_transforms._market_data import MarketDataTransform
 from ml_platform.data_sdk.feature_transforms._log_return import LogReturnTransform
 from ml_platform.data_sdk.feature_transforms._relative_volume import RelativeVolumeTransform
@@ -24,7 +25,9 @@ from ml_platform.data_sdk.label_transforms._triple_barrier import TripleBarrierL
 __all__ = [
     "Dataset",
     "DatasetDependency",
+    "FeatureDatasetDependency",
     "DatasetTransform",
+    "DataTransform",
     "FeatureTransform",
     "LabelTransform",
     "LabelResource",

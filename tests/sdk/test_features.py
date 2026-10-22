@@ -15,6 +15,7 @@ from ml_platform.data_sdk.materializers._feature import (
     FeatureMaterializer,
 )
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
+from tests.sdk.materializer_support import market_config
 
 
 def feature_config(
@@ -30,6 +31,7 @@ def feature_config(
             {
                 "name": "sp500",
                 "version": 3,
+                "argument_name": "market_data",
                 "num_lookback_partitions": dataset_lookback_partitions,
             }
         ],
@@ -90,7 +92,9 @@ class FeaturesIntegrationTest(unittest.TestCase):
             "timestamp", "symbol", "'regular' AS market_session", "Close AS Open", "Close AS High",
             "Close AS Low", "Close", "Volume",
         )
-        DatasetMaterializer._materialize_test_frame(source, name="sp500", version=3, spark=self.spark)
+        DatasetMaterializer._materialize_test_frame(
+            source, config=market_config(self.warehouse), spark=self.spark
+        )
 
     def test_materializes_three_configured_features(self) -> None:
         """Write each PySpark feature to its own table with expected values."""
@@ -117,9 +121,9 @@ class FeaturesIntegrationTest(unittest.TestCase):
                 ["timestamp", "symbol", "feature_value"],
             )
         properties = dict(self.spark.sql(f"SHOW TBLPROPERTIES {FeatureMaterializer._feature_table_identifier(log_returns)}").collect())
-        self.assertEqual(properties["feature.version"], "1")
+        self.assertEqual(properties["resource.version"], "1")
         self.assertEqual(properties["feature.transform"], "ml_platform.data_sdk.LogReturnTransform")
-        self.assertEqual(properties["feature.frequency"], "daily")
+        self.assertEqual(properties["resource.frequency"], "daily")
         self.assertEqual(
             self.spark.table(FeatureMaterializer._dependency_manifest_table_identifier)
             .where("feature_name = 'test_log_return' AND feature_version = 1")
@@ -134,7 +138,9 @@ class FeaturesIntegrationTest(unittest.TestCase):
             "timestamp", "symbol", "'regular' AS market_session", "Close AS Open", "Close AS High",
             "Close AS Low", "Close", "Volume",
         )
-        DatasetMaterializer._materialize_test_frame(corrected_source, name="sp500", version=3, spark=self.spark)
+        DatasetMaterializer._materialize_test_frame(
+            corrected_source, config=market_config(self.warehouse), spark=self.spark
+        )
         self.assertEqual(self.spark.table(DatasetMaterializer._iceberg_table_identifier('sp500', 3)).where("timestamp = TIMESTAMP '2026-01-02 16:30:00'").first().Close, 122.0)
         self.assertEqual(FeatureMaterializer._materialize_definition(self.spark, log_returns), 4)
         repaired_rows = self.spark.table(FeatureMaterializer._feature_table_identifier(log_returns)).orderBy("timestamp").collect()
@@ -310,14 +316,18 @@ class FeaturesUnitTest(unittest.TestCase):
             ),
             frame=MagicMock(),
         )
+        invalid_parameters = feature_config(
+            "returns", "ml_platform.data_sdk.TrailingVolatilityTransform",
+            parameters={"lookback_bars": "24"},
+        )
         with self.assertRaisesRegex(ValueError, "parameter discrepancy"):
-            FeatureMaterializer._instantiate_transform(
-                TrailingVolatilityTransform,
-                {"lookback_bars": "24"},
-                {"market_data": dataset},
-            )
+            FeatureMaterializer(invalid_parameters)._feature_transform({"market_data": dataset})
+        valid_parameters = feature_config(
+            "returns", "ml_platform.data_sdk.TrailingVolatilityTransform",
+            parameters={"lookback_bars": 24},
+        )
         with self.assertRaisesRegex(ValueError, "dataset discrepancy"):
-            FeatureMaterializer._instantiate_transform(TrailingVolatilityTransform, {}, {})
+            FeatureMaterializer(valid_parameters)._feature_transform({})
 
     def test_rejects_missing_market_table(self) -> None:
         """Fail before applying a feature when no market source table exists."""

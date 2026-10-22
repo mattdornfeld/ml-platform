@@ -4,10 +4,11 @@ name: log_return
 version: 1
 dtype: double
 frequency: daily
-feature_key: symbol
+feature_keys: [symbol]
 datasets:
   - name: sp500
     version: 3
+    argument_name: market_data
     # Use one preceding daily market-data partition for lineage.
     num_lookback_partitions: 1
 transform: ml_platform.data_sdk.LogReturnTransform

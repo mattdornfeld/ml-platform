@@ -4,10 +4,11 @@ name: relative_volume
 version: 1
 dtype: double
 frequency: hourly
-feature_key: symbol
+feature_keys: [symbol]
 datasets:
   - name: sp500
     version: 3
+    argument_name: market_data
     # Market data is daily-partitioned; use one preceding daily partition.
     num_lookback_partitions: 1
 transform: ml_platform.data_sdk.RelativeVolumeTransform

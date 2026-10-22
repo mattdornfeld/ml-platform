@@ -1,13 +1,17 @@
 """Base interface and parameter validation for Spark feature transforms."""
+from abc import ABC
 
-from abc import ABC, abstractmethod
+from ml_platform.data_sdk.transforms._base import DataTransform
+from ml_platform.data_sdk.transforms._types import DataType
+from ml_platform.data_sdk.utils import record
 
-from pyspark.sql import DataFrame
 
-
-class FeatureTransform(ABC):
+@record
+class FeatureTransform(DataTransform, ABC):
     """A configured transformation from injected datasets to a feature DataFrame."""
+    data_type: DataType
 
-    @abstractmethod
-    def __call__(self) -> DataFrame:
-        """Return ``timestamp``, ``symbol``, and ``feature_value`` columns."""
+    @property
+    def value_schema(self) -> dict[str, str]:
+        """Declare the single typed value column emitted by every feature transform."""
+        return {"feature_value": self.data_type.value}

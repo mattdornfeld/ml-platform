@@ -1,14 +1,13 @@
 """Triple-barrier label strategy."""
 
-from dataclasses import dataclass
-
 from pyspark.sql import DataFrame, Window, functions as F
 
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.transforms._types import Dataset
+from ml_platform.data_sdk.utils import record
 
 
-@dataclass(frozen=True)
+@record
 class TripleBarrierLabelTransform(LabelTransform):
     """Create volatility-scaled triple-barrier labels from market-data observations."""
 
@@ -17,7 +16,6 @@ class TripleBarrierLabelTransform(LabelTransform):
     volatility_lookback_bars: int
     profit_taking_multiplier: float
     stop_loss_multiplier: float
-
     def __call__(self) -> DataFrame:
         """Return profit-taking, stop-loss, or timeout labels without future leakage."""
         by_symbol = Window.partitionBy("symbol").orderBy("timestamp")
@@ -116,13 +114,6 @@ class TripleBarrierLabelTransform(LabelTransform):
             .select(
                 "timestamp",
                 "symbol",
-                "vertical_barrier_timestamp",
-                "close",
-                "volatility",
-                "upper_barrier",
-                "lower_barrier",
-                "horizon_bars",
-                "barrier_outcome",
-                "long_short_label",
+                F.col("long_short_label").alias("label_value"),
             )
         )

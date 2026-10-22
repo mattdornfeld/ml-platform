@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, computed_field, field_validator
+from pydantic import ConfigDict, Field, computed_field, field_validator, model_validator
 
 from ml_platform.common.types import BaseConfig
 
@@ -21,6 +21,7 @@ class JobType(StrEnum):
 
     DATASET_MATERIALIZATION = "dataset_materialization"
     FEATURE_MATERIALIZATION = "feature_materialization"
+    LABEL_MATERIALIZATION = "label_materialization"
 
 
 class JobStatus(StrEnum):
@@ -73,6 +74,8 @@ class MarketDataDatasetConfig(_ApiModel):
 
     description: str = Field(default="Market data.", min_length=1)
     validations: dict[str, Any] = Field(default_factory=dict)
+    keys: list[FeatureKey] = Field(min_length=1)
+    partition_type: Literal["hourly", "daily"]
     symbols: list[str] = Field(min_length=1)
     time_range: DatasetTimeRange
 
@@ -110,6 +113,7 @@ class FeatureDatasetDependency(_ApiModel):
 
     name: str = Field(min_length=1)
     version: int = Field(gt=0)
+    argument_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     num_lookback_partitions: int = Field(ge=0)
 
 
@@ -120,12 +124,25 @@ class FeatureCreateRequest(_ApiModel):
     version: int = Field(gt=0)
     dtype: Literal["double", "float", "int", "bigint"]
     frequency: Literal["hourly", "daily"]
-    feature_key: FeatureKey = FeatureKey.SYMBOL
+    feature_keys: list[FeatureKey] = Field(default_factory=lambda: [FeatureKey.SYMBOL], min_length=1)
     datasets: list[FeatureDatasetDependency] = Field(min_length=1)
     transform: str = Field(min_length=1)
     description: str = Field(min_length=1)
     parameters: dict[str, Any] = Field(default_factory=dict)
     validations: FeatureValidations = Field(default_factory=FeatureValidations)
+
+    @model_validator(mode="after")
+    def validate_dataset_arguments(self) -> "FeatureCreateRequest":
+        """Keep every dataset identity and transform argument unambiguous."""
+        identities = {(dataset.name, dataset.version) for dataset in self.datasets}
+        arguments = {dataset.argument_name for dataset in self.datasets}
+        if len(identities) != len(self.datasets):
+            raise ValueError("Feature datasets must have unique name and version identities.")
+        if len(arguments) != len(self.datasets):
+            raise ValueError("Feature datasets must have unique transform argument names.")
+        if len(set(self.feature_keys)) != len(self.feature_keys):
+            raise ValueError("Feature keys must be unique.")
+        return self
 
 
 class FeatureResponse(FeatureCreateRequest):
@@ -178,7 +195,7 @@ class FeaturePartitionMaterializationRequest(PartitionMaterializationRequest):
 class JobTarget(_ApiModel):
     """A versioned resource targeted by a materialization job."""
 
-    resource_type: Literal["dataset", "feature"]
+    resource_type: Literal["dataset", "feature", "label"]
     name: str
     version: int
 
@@ -186,7 +203,7 @@ class JobTarget(_ApiModel):
 class JobPartition(_ApiModel):
     """One resource partition targeted by a materialization job."""
 
-    resource_type: Literal["dataset", "feature"]
+    resource_type: Literal["dataset", "feature", "label"]
     name: str
     version: int
     timestamp: datetime
@@ -238,22 +255,45 @@ class MaterializationJobResponse(_ApiModel):
 
 
 class PartitionCompletionRequest(_ApiModel):
-    """A Spark worker's receipt for a committed Iceberg partition write."""
+    """One authenticated receipt in an atomic Iceberg completion batch."""
 
+    partition_id: UUID
+    resource_type: Literal["dataset", "feature", "label"]
+    row_count: int = Field(ge=0)
+    schema_: dict[str, str] = Field(alias="schema", min_length=1)
     content_hash: str = Field(min_length=1)
-    snapshot_id: int
+    snapshot_id: int = Field(ge=0)
+    callback_token: str = Field(min_length=1)
+    dataset_partition_ids: list[UUID] | None = None
 
+    @field_validator("schema_")
+    @classmethod
+    def require_named_schema_fields(cls, schema: dict[str, str]) -> dict[str, str]:
+        """Reject empty column names or type declarations in committed schemas."""
+        if any(not name.strip() or not dtype.strip() for name, dtype in schema.items()):
+            raise ValueError("Completion schema requires non-empty column names and types.")
+        return schema
 
-class FeaturePartitionCompletionRequest(PartitionCompletionRequest):
-    """A feature callback confirms the immutable dataset revision plan it used."""
-
-    dataset_partition_ids: list[UUID] = Field(min_length=1)
+    @model_validator(mode="after")
+    def validate_dependencies(self) -> "PartitionCompletionRequest":
+        """Derived resources must report their exact pinned dataset revisions."""
+        if self.resource_type == "dataset" and self.dataset_partition_ids is not None:
+            raise ValueError("Dataset receipts must not include dataset_partition_ids.")
+        if self.resource_type != "dataset":
+            if not self.dataset_partition_ids:
+                raise ValueError("Derived receipts require dataset_partition_ids.")
+            if len(set(self.dataset_partition_ids)) != len(self.dataset_partition_ids):
+                raise ValueError("dataset_partition_ids must be unique.")
+        return self
 
 
 class PartitionResultResponse(_ApiModel):
     """The recorded receipt for one successfully materialized partition."""
 
     partition_id: UUID
+    resource_type: Literal["dataset", "feature", "label"]
+    row_count: int
+    schema_: dict[str, str] = Field(alias="schema")
     content_hash: str
     snapshot_id: int
     created_at: datetime

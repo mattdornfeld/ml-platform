@@ -2,6 +2,9 @@
 name: hourly_triple_barrier
 version: 1
 description: Triple-barrier long-short labels from hourly market data.
+dtype: int
+frequency: daily
+feature_keys: [symbol]
 validations: {}
 horizon_bars: 24
 volatility_lookback_bars: 24

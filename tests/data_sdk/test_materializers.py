@@ -30,15 +30,31 @@ from ml_platform.data_sdk.materializers import (
     MaterializerPartition,
     MaterializerValidations,
 )
+from ml_platform.data_sdk.transforms._base import DataTransform
+from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
+from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
+from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 
 
 class MaterializerContractTest(unittest.TestCase):
     """Keep Spark job contracts distinct from checked-in YAML config models."""
 
+    def test_data_transform_requires_explicit_storage_layouts(self) -> None:
+        """Every transform must statically declare its own Iceberg storage layout."""
+        for transform in (DataTransform, DatasetTransform, FeatureTransform, LabelTransform):
+            with self.subTest(transform=transform.__name__):
+                self.assertTrue(issubclass(transform, DataTransform))
+        self.assertIn("value_schema", DataTransform.__abstractmethods__)
+        self.assertIn("value_schema", DatasetTransform.__abstractmethods__)
+        self.assertNotIn("value_schema", FeatureTransform.__abstractmethods__)
+        self.assertNotIn("value_schema", LabelTransform.__abstractmethods__)
+        self.assertNotIn("iceberg_schema", DataTransform.__abstractmethods__)
+        self.assertNotIn("iceberg_partition_spec", DataTransform.__abstractmethods__)
+
     def test_dataset_materializer_deserializes_its_own_job_config(self) -> None:
         """Dataset worker JSON contains the API-supplied identity and type."""
         config = DatasetMaterializer._config_from_json(json.dumps({
-            "name": "sp500", "version": 3, "dataset_type": "market_data",
+            "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily",
             "description": "Hourly prices.", "validations": {}, "symbols": ["aapl"],
             "warehouse_dir": "s3a://warehouse",
             "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
@@ -47,7 +63,7 @@ class MaterializerContractTest(unittest.TestCase):
         self.assertEqual(config.dataset_type, "market_data")
         with self.assertRaises(ValueError):
             DatasetMaterializer._config_from_json(json.dumps({
-                "name": "sp500", "version": 3, "dataset_type": "market_data", "description": "Hourly prices.",
+                "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily", "description": "Hourly prices.",
                 "validations": {}, "symbols": ["AAPL"], "warehouse_dir": "s3a://warehouse",
                 "time_range": {"start_date": "2026-01-01", "end_date": "2026-01-02"},
                 "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
@@ -56,10 +72,10 @@ class MaterializerContractTest(unittest.TestCase):
     def test_feature_materializer_deserializes_its_own_job_config(self) -> None:
         """Feature worker JSON carries dependencies and validation behavior."""
         config = FeatureMaterializer._config_from_json(json.dumps({
-            "name": "log_return", "version": 1, "dtype": "double", "frequency": "hourly",
-            "feature_key": "symbol", "description": "Returns.", "warehouse_dir": "s3a://warehouse",
-            "partitions": [{"partition_id": "feature-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "dataset_partitions": [{"partition_id": "dataset-partition", "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}],
-            "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 1}],
+            "name": "log_return", "version": 1, "dtype": "double", "frequency": "daily",
+            "feature_keys": ["symbol"], "description": "Returns.", "warehouse_dir": "s3a://warehouse",
+            "partitions": [{"partition_id": "feature-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "dataset_partitions": [{"partition_id": "dataset-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}],
+            "datasets": [{"name": "sp500", "version": 3, "argument_name": "market_data", "num_lookback_partitions": 1}],
             "transform": "ml_platform.data_sdk.feature_transforms._log_return.LogReturnTransform",
             "parameters": {"lookback_bars": 1},
             "validations": {"min_rows_per_partition": 2, "require_finite_feature_value": True, "require_feature_keys_from_input": True},
@@ -71,19 +87,32 @@ class MaterializerContractTest(unittest.TestCase):
         """Label worker JSON describes its transform, inputs, and parameters."""
         config = LabelMaterializer._config_from_json(json.dumps({
             "name": "hourly_triple_barrier", "version": 1, "description": "Labels.", "warehouse_dir": "s3a://warehouse",
-            "validations": {}, "partitions": [{"partition_id": "label-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}], "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 2}],
+            "validations": {}, "partitions": [{"partition_id": "label-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "dataset_partitions": [{"partition_id": "parent-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}], "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 2}],
             "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
             "parameters": {"horizon_bars": 24, "volatility_lookback_bars": 24, "profit_taking_multiplier": 1.0, "stop_loss_multiplier": 1.0},
         }))
         self.assertEqual(config.name, "hourly_triple_barrier")
+
+    def test_label_materializer_requires_pinned_inputs(self) -> None:
+        """A label worker cannot acknowledge output without exact upstream revisions."""
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            LabelMaterializationConfig.model_validate_json(json.dumps({
+                "name": "hourly_triple_barrier", "version": 1, "description": "Labels.",
+                "warehouse_dir": "s3a://warehouse",
+                "partitions": [{"partition_id": "label-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
+                "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 2}],
+                "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
+            }))
 
     def test_materializer_requires_a_class_namespace_implementation(self) -> None:
         """A concrete worker cannot omit its Iceberg namespace contract."""
         class MissingNamespaceMaterializer(Materializer[MaterializerConfig]):
             config_model = MaterializerConfig
 
-            def materialize(self, spark: object) -> int:
-                return 0
+            def materialize(self, spark: object) -> None:
+                pass
 
         with self.assertRaises(TypeError):
             MissingNamespaceMaterializer.__new__(MissingNamespaceMaterializer)
@@ -94,7 +123,7 @@ class MaterializerContractTest(unittest.TestCase):
             (
                 DatasetMaterializer,
                 {
-                    "name": "sp500", "version": 3, "dataset_type": "market_data",
+                    "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily",
                     "description": "Hourly prices.", "validations": {}, "symbols": ["AAPL"],
                     "warehouse_dir": "s3a://warehouse",
                     "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
@@ -103,10 +132,10 @@ class MaterializerContractTest(unittest.TestCase):
             (
                 FeatureMaterializer,
                 {
-                    "name": "log_return", "version": 1, "dtype": "double", "frequency": "hourly",
-                    "feature_key": "symbol", "description": "Returns.", "warehouse_dir": "s3a://warehouse",
-                    "partitions": [{"partition_id": "feature-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "dataset_partitions": [{"partition_id": "dataset-partition", "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}],
-                    "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 1}],
+                    "name": "log_return", "version": 1, "dtype": "double", "frequency": "daily",
+                    "feature_keys": ["symbol"], "description": "Returns.", "warehouse_dir": "s3a://warehouse",
+                    "partitions": [{"partition_id": "feature-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "dataset_partitions": [{"partition_id": "dataset-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}],
+                    "datasets": [{"name": "sp500", "version": 3, "argument_name": "market_data", "num_lookback_partitions": 1}],
                     "transform": "ml_platform.data_sdk.feature_transforms._log_return.LogReturnTransform",
                     "parameters": {"lookback_bars": 1}, "validations": {},
                 },
@@ -115,19 +144,19 @@ class MaterializerContractTest(unittest.TestCase):
         for materializer, document in configurations:
             with (
                 self.subTest(materializer=materializer.__name__),
-                patch.object(materializer, "_run_config", return_value=7) as _run_config,
+                patch.object(materializer, "_run_config") as _run_config,
                 patch("sys.argv", [materializer.__name__, "--config-json", json.dumps(document)]),
                 patch("builtins.print") as output,
             ):
                 materializer.main()
                 self.assertEqual(_run_config.call_args.args[0].name, document["name"])
-                output.assert_called_once_with("Materialized 7 rows.")
+                output.assert_called_once_with("Materialization completed.")
 
     def test_materializers_use_versioned_tables_in_the_shared_catalog(self) -> None:
         """Runtime table names derive from the resource identity and materializer namespace."""
-        self.assertEqual(DatasetMaterializer._iceberg_table_identifier("sp500", 3), "ml_platform.market_data.sp500-v3")
-        self.assertEqual(FeatureMaterializer._iceberg_table_identifier("log_return", 1), "ml_platform.features.log_return-v1")
-        self.assertEqual(LabelMaterializer._iceberg_table_identifier("triple_barrier", 2), "ml_platform.labels.triple_barrier-v2")
+        self.assertEqual(DatasetMaterializer._iceberg_table_identifier("sp500", 3), "ml_platform.market_data.`sp500-v3`")
+        self.assertEqual(FeatureMaterializer._iceberg_table_identifier("log_return", 1), "ml_platform.features.`log_return-v1`")
+        self.assertEqual(LabelMaterializer._iceberg_table_identifier("triple_barrier", 2), "ml_platform.labels.`triple_barrier-v2`")
 
     def test_shared_fields_are_declared_by_materializer_config(self) -> None:
         """All materializer contracts inherit the common resource and partition fields."""
@@ -168,7 +197,7 @@ class MaterializerContractTest(unittest.TestCase):
             MaterializerConfig.model_validate({"warehouse_dir": 123})
         with self.assertRaises(ValueError):
             DatasetMaterializer._config_from_json(json.dumps({
-                "name": "sp500", "version": 3, "dataset_type": "market_data", "description": "Hourly prices.",
+                "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily", "description": "Hourly prices.",
                 "validations": {}, "symbols": ["AAPL"], "warehouse_dir": "s3a://warehouse",
                 "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
                 "unexpected": True,
@@ -179,6 +208,19 @@ class MaterializerContractTest(unittest.TestCase):
         root = Path("src/ml_platform/data_sdk/transforms")
         for source in root.glob("*.py"):
             self.assertNotIn("data_sdk.configs", source.read_text(), source)
+
+    def test_materialization_mutations_use_the_dataframe_dsl(self) -> None:
+        """Keep row and table mutations readable as PySpark method chains."""
+        materializers = Path("src/ml_platform/data_sdk/materializers")
+        for filename in ("_dataset.py", "_feature.py", "_label.py"):
+            self.assertNotIn(".sql(", (materializers / filename).read_text())
+
+        base = (materializers / "_base.py").read_text()
+        self.assertEqual(base.count("spark.sql("), 4)
+        self.assertIn("CREATE NAMESPACE IF NOT EXISTS", base)
+        self.assertIn("SHOW TBLPROPERTIES", base)
+        self.assertIn("SET TBLPROPERTIES", base)
+        self.assertIn("UNSET TBLPROPERTIES", base)
 
 
 if __name__ == "__main__":

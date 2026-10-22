@@ -29,7 +29,12 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         """Registration creates the authoritative submitted materialization job."""
         row = {
             "name": "sp500", "version": 1, "dataset_type": "market_data",
-            "config": {"symbols": ["AAPL"], "time_range": {"start_date": "2026-01-01", "end_date": "2026-01-02"}},
+            "config": {
+                "keys": ["symbol"],
+                "partition_type": "daily",
+                "symbols": ["AAPL"],
+                "time_range": {"start_date": "2026-01-01", "end_date": "2026-01-02"},
+            },
             "created_at": datetime.now(timezone.utc),
         }
         cursor = MagicMock()
@@ -55,6 +60,18 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("aligned to an exact hour", response.text)
+
+    def test_completion_endpoint_requires_top_level_receipt_array(self) -> None:
+        """OpenAPI and request validation expose only the batch callback route."""
+        self.assertEqual(self.client.post("/partitions/complete", json=[]).status_code, 422)
+        spec = self.client.get("/openapi.json").json()
+        self.assertIn("/partitions/complete", spec["paths"])
+        self.assertEqual(
+            spec["paths"]["/partitions/complete"]["post"]["requestBody"]["content"]["application/json"]["schema"]["type"],
+            "array",
+        )
+        self.assertNotIn("/dataset-partition-update-requests/{partition_id}/complete", spec["paths"])
+        self.assertNotIn("/feature-partition-update-requests/{partition_id}/complete", spec["paths"])
 
     def test_feature_partition_request_accepts_hour_aligned_utc_timestamp(self) -> None:
         """Hour-aligned UTC timestamps create a feature materialization job."""
@@ -217,19 +234,23 @@ class MaterializationBehaviorTest(unittest.TestCase):
     def test_feature_completion_rejects_unplanned_parent_revisions(self) -> None:
         """A worker cannot report a receipt for a different input plan."""
         from fastapi import HTTPException
-        from ml_platform.api.dtos import FeaturePartitionCompletionRequest
-        from ml_platform.api.main import complete_feature_partition
+        from ml_platform.api.dtos import PartitionCompletionRequest
+        from ml_platform.api.main import complete_partitions
 
         partition_id = "00000000-0000-0000-0000-000000000002"
-        connection, cursor = self._connection([{"callback_token": "token"}])
-        with patch.object(api_main, "_feature_plan_ids", return_value={"planned"}):
+        connection, cursor = self._connection([{"name": "returns", "version": 1}, {
+            "callback_token": "token", "name": "returns", "version": 1,
+            "deleted_at": None, "status": "pending", "job_status": "submitted",
+            "job_id": "00000000-0000-0000-0000-000000000001",
+        }])
+        with patch.object(api_main, "_completion_plan_ids", return_value={"planned"}):
             with self.assertRaises(HTTPException) as raised:
-                complete_feature_partition(
-                    partition_id,
-                    FeaturePartitionCompletionRequest(content_hash="hash", snapshot_id=1, dataset_partition_ids=["00000000-0000-0000-0000-000000000003"]),
-                    "token",
-                    connection,
-                )
+                complete_partitions([PartitionCompletionRequest.model_validate({
+                    "partition_id": partition_id, "resource_type": "feature", "row_count": 1,
+                    "schema": {"timestamp": "timestamp", "symbol": "string", "feature_value": "double"},
+                    "content_hash": "hash", "snapshot_id": 1, "callback_token": "token",
+                    "dataset_partition_ids": ["00000000-0000-0000-0000-000000000003"],
+                })], connection)
         self.assertEqual(raised.exception.status_code, 409)
         self.assertFalse(any("INSERT INTO feature_partitions" in str(call) for call in cursor.execute.call_args_list))
 

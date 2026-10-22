@@ -1,17 +1,11 @@
 """Base interface for transforms that construct partition-targeted dataset DataFrames."""
 
-from abc import ABC, abstractmethod
-from datetime import datetime
-from typing import Sequence
+from abc import ABC
 
-from pyspark.sql import DataFrame
+from ml_platform.data_sdk.transforms._base import DataTransform
+from ml_platform.data_sdk.utils import record
 
 
-class DatasetTransform(ABC):
+@record
+class DatasetTransform(DataTransform, ABC):
     """A transform that constructs rows for exactly the injected logical partitions."""
-
-    partitions: Sequence[datetime]
-
-    @abstractmethod
-    def __call__(self) -> DataFrame:
-        """Return only rows belonging to the injected logical partitions."""

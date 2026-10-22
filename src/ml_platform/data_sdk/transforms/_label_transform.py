@@ -1,13 +1,17 @@
 """Base interface for Spark label transformations."""
+from abc import ABC
 
-from abc import ABC, abstractmethod
+from ml_platform.data_sdk.transforms._base import DataTransform
+from ml_platform.data_sdk.transforms._types import DataType
+from ml_platform.data_sdk.utils import record
 
-from pyspark.sql import DataFrame
 
-
-class LabelTransform(ABC):
+@record
+class LabelTransform(DataTransform, ABC):
     """A configured transformation from one injected dataset to label rows."""
+    data_type: DataType
 
-    @abstractmethod
-    def __call__(self) -> DataFrame:
-        """Return labels computed from datasets injected at construction."""
+    @property
+    def value_schema(self) -> dict[str, str]:
+        """Declare the single typed value column emitted by every label transform."""
+        return {"label_value": self.data_type.value}

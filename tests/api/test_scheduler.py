@@ -16,7 +16,7 @@ class SchedulerTest(unittest.TestCase):
         """The API, rather than Kueue, owns initial partition eligibility."""
         scheduler = JobScheduler("postgresql://unused")
         job_id = UUID("00000000-0000-0000-0000-000000000001")
-        scheduler._dataset_job = MagicMock(return_value={"name": "sp500", "version": 3, "dataset_type": "market_data", "config": {"symbols": ["AAPL"]}, "callbacks": []})
+        scheduler._dataset_job = MagicMock(return_value={"name": "sp500", "version": 3, "dataset_type": "market_data", "config": {"keys": ["symbol"], "partition_type": "daily", "symbols": ["AAPL"]}, "callbacks": []})
 
         scheduler._ensure_dataset_application(job_id, "dataset-job")
 

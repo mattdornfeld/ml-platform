@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from ml_platform.data_sdk.configs import BaseConfig, DataConfig, DatasetConfig, LabelConfig, MarketDataConfig, TripleBarrierConfig
 from ml_platform.data_sdk.dataset_transforms._market_data import _contiguous_date_ranges, fetch_hourly_ohlcv
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
+from tests.sdk.materializer_support import market_config
 
 TEST_START_DATE = date(2026, 1, 1)
 TEST_END_DATE = date(2026, 1, 10)
@@ -61,7 +62,11 @@ class MarketDataIntegrationTest(unittest.TestCase):
         request.return_value = yahoo_payload()
         frame = fetch_hourly_ohlcv(self.spark, "mock", start_date=TEST_START_DATE, end_date=TEST_END_DATE)
         self.assertNotIn("timestamp_day", frame.columns)
-        self.assertEqual(DatasetMaterializer._materialize_test_frame(frame, name="sp500", version=3, spark=self.spark), 2)
+        self.assertEqual(
+            DatasetMaterializer._materialize_test_frame(
+                frame, config=market_config(self.warehouse), spark=self.spark
+            ), 3
+        )
 
         rows = self.spark.table(DatasetMaterializer._iceberg_table_identifier('sp500', 3)).orderBy("timestamp").collect()
         self.assertEqual([row.symbol for row in rows], ["MOCK"] * 3)

@@ -163,8 +163,8 @@ class JobScheduler:
         """Load immutable feature metadata, dependencies, and authenticated callbacks."""
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("""SELECT features.name, features.version, features.dtype, features.frequency, features.feature_key, features.validations, features.transform, features.description, features.parameters,
-                    json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'num_lookback_partitions', dependencies.num_lookback_partitions)) AS datasets,
+                cursor.execute("""SELECT features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters,
+                    json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'argument_name', dependencies.argument_name, 'num_lookback_partitions', dependencies.num_lookback_partitions)) AS datasets,
                     (SELECT json_agg(json_build_object(
                         'partition_id', request.partition_id,
                         'timestamp', request.timestamp,
@@ -172,6 +172,8 @@ class JobScheduler:
                         'dataset_partitions', COALESCE((
                             SELECT json_agg(json_build_object(
                                 'partition_id', planned.dataset_partition_id,
+                                'dataset_name', parent_request.dataset_name,
+                                'dataset_version', parent_request.dataset_version,
                                 'timestamp', parent_request.timestamp,
                                 'snapshot_id', parent.snapshot_id
                             ) ORDER BY parent_request.timestamp, planned.dataset_partition_id)
@@ -183,11 +185,11 @@ class JobScheduler:
                     ) ORDER BY request.timestamp) FROM feature_partition_update_requests request WHERE request.job_id = %s) AS callbacks
                     FROM feature_partition_update_requests target JOIN features ON features.name = target.feature_name AND features.version = target.feature_version
                     JOIN feature_dataset_dependencies dependencies ON dependencies.feature_name = features.name AND dependencies.feature_version = features.version
-                    WHERE target.job_id = %s GROUP BY features.name, features.version, features.dtype, features.frequency, features.feature_key, features.validations, features.transform, features.description, features.parameters""", (job_id, job_id))
+                    WHERE target.job_id = %s GROUP BY features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters""", (job_id, job_id))
                 row = cursor.fetchone()
         if row is None:
             raise ValueError(f"No feature partitions are associated with job {job_id}.")
-        config = {key: row[key] for key in ("name", "version", "dtype", "frequency", "feature_key", "validations", "transform", "description", "parameters", "datasets")}
+        config = {key: row[key] for key in ("name", "version", "dtype", "frequency", "feature_keys", "validations", "transform", "description", "parameters", "datasets")}
         return {"config": config, "callbacks": row["callbacks"]}
 
     def _is_eligible(self, job_id: UUID, job_type: str) -> bool:

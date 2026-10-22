@@ -87,6 +87,7 @@ def _feature_payload(config: dict[str, Any]) -> dict[str, Any]:
         {
             "name": dataset["name"],
             "version": dataset["version"],
+            "argument_name": dataset["argument_name"],
             "num_lookback_partitions": dataset["num_lookback_partitions"],
         }
         for dataset in values["datasets"]

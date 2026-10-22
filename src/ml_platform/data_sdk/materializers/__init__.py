@@ -13,11 +13,11 @@ from ml_platform.data_sdk.materializers._feature import (
     FeatureMaterializer,
 )
 from ml_platform.data_sdk.materializers._label import LabelMaterializationConfig, LabelMaterializer
-from ml_platform.data_sdk.transforms._types import DatasetDependency
+from ml_platform.data_sdk.transforms._types import DatasetDependency, FeatureDatasetDependency
 
 __all__ = [
     "DatasetMaterializationConfig", "DatasetMaterializer", "DatasetDependency",
-    "FeatureMaterializationConfig", "FeatureMaterializer",
+    "FeatureDatasetDependency", "FeatureMaterializationConfig", "FeatureMaterializer",
 "LabelMaterializationConfig", "LabelMaterializer", "Materializer",
     "MaterializerConfig", "MaterializerInputPartition", "MaterializerPartition", "MaterializerValidations",
 ]

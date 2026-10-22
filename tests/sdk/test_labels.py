@@ -1,5 +1,6 @@
 """Unit and Spark/Iceberg integration coverage for triple-barrier labels."""
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -7,12 +8,12 @@ from tempfile import TemporaryDirectory
 import unittest
 from pyspark.sql import SparkSession
 
-from ml_platform.data_sdk.configs import DatasetConfig
-from ml_platform.data_sdk.transforms._types import Dataset
+from ml_platform.data_sdk.transforms._types import DataType, Dataset, DatasetReference, FeatureKey, PartitionType
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.label_transforms._triple_barrier import TripleBarrierLabelTransform
-from ml_platform.data_sdk.materializers._label import LabelMaterializer, LabelResource
+from ml_platform.data_sdk.materializers._label import LabelMaterializationConfig, LabelMaterializer, LabelResource
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
+from tests.sdk.materializer_support import market_config
 
 
 
@@ -24,6 +25,9 @@ def label_resource() -> LabelResource:
 def triple_barrier_transform(market_data: Dataset) -> TripleBarrierLabelTransform:
     """Build the test strategy with API-delivered parameters."""
     return TripleBarrierLabelTransform(
+        keys=[FeatureKey.SYMBOL],
+        partition_type=PartitionType.DAILY,
+        data_type=DataType.INT,
         market_data=market_data,
         horizon_bars=1,
         volatility_lookback_bars=2,
@@ -68,8 +72,11 @@ class TripleBarrierTransformTest(unittest.TestCase):
         )
         transform = TripleBarrierLabelTransform(
             market_data=Dataset(
-                DatasetConfig(name="sp500", version=3, num_lookback_partitions=0), source
+                DatasetReference(name="sp500", version=3, num_lookback_partitions=0), source
             ),
+            keys=[FeatureKey.SYMBOL],
+            partition_type=PartitionType.DAILY,
+            data_type=DataType.INT,
             horizon_bars=1,
             volatility_lookback_bars=2,
             profit_taking_multiplier=0.5,
@@ -81,12 +88,9 @@ class TripleBarrierTransformTest(unittest.TestCase):
         self.assertTrue(rows)
         self.assertEqual(
             set(rows[0].asDict()),
-            {
-                "timestamp", "symbol", "vertical_barrier_timestamp", "close", "volatility",
-                "upper_barrier", "lower_barrier", "horizon_bars", "barrier_outcome", "long_short_label",
-            },
+            {"timestamp", "symbol", "label_value"},
         )
-        self.assertIn(rows[0].long_short_label, {-1, 0, 1})
+        self.assertIn(rows[0].label_value, {-1, 0, 1})
 
 
 class LabelsIntegrationTest(unittest.TestCase):
@@ -127,32 +131,53 @@ class LabelsIntegrationTest(unittest.TestCase):
             "timestamp", "symbol", "market_session", "Close AS Open", "Close AS High",
             "Close AS Low", "Close", "CAST(1000 AS BIGINT) AS Volume",
         )
-        DatasetMaterializer._materialize_test_frame(bars, name="sp500", version=3, spark=self.spark)
+        DatasetMaterializer._materialize_test_frame(
+            bars, config=market_config(self.warehouse), spark=self.spark
+        )
+
+    def _label_worker(self) -> LabelMaterializer:
+        """Construct the runtime label definition used by direct Spark writes."""
+        config = LabelMaterializationConfig.model_validate_json(json.dumps({
+            "name": label_resource().name,
+            "version": label_resource().version,
+            "description": "Synthetic triple-barrier labels.",
+            "warehouse_dir": str(self.warehouse),
+            "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 0}],
+            "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
+            "parameters": {"horizon_bars": 1, "volatility_lookback_bars": 2,
+                           "profit_taking_multiplier": 0.5, "stop_loss_multiplier": 0.5},
+            "partitions": [{
+                "partition_id": "synthetic-label-day",
+                "timestamp": "2026-01-02T00:00:00Z",
+                "callback_token": "synthetic-label-token",
+                "dataset_partitions": [{"partition_id": "synthetic-market-day", "dataset_name": "sp500",
+                                        "dataset_version": 3, "timestamp": "2026-01-02T00:00:00Z", "snapshot_id": 1}],
+            }],
+        }))
+        return LabelMaterializer(config, datasets={})
 
     def test_writes_expected_outcomes_and_is_idempotent(self) -> None:
         """Materialize profit, stop, and timeout labels without future leakage."""
-        first_count = LabelMaterializer._materialize_transform(
-            label_resource(),
+        first_count = self._label_worker()._materialize_transform(
             triple_barrier_transform(
                 Dataset(
-                    DatasetConfig(name="sp500", version=3, num_lookback_partitions=0),
+                    DatasetReference(name="sp500", version=3, num_lookback_partitions=0),
                     self.spark.table(DatasetMaterializer._iceberg_table_identifier('sp500', 3)),
                 )
             ),
             spark=self.spark,
         )
         rows = self.spark.table(LabelMaterializer._table_identifier_for(label_resource())).orderBy("timestamp").collect()
-        outcomes = {(row.barrier_outcome, row.long_short_label) for row in rows}
+        outcomes = {row.label_value for row in rows}
 
         self.assertGreaterEqual(first_count, 3)
-        self.assertTrue({("profit_taking", 1), ("stop_loss", -1), ("timeout", 0)} <= outcomes)
+        self.assertTrue({-1, 0, 1} <= outcomes)
         self.assertNotIn("timestamp_day", self.spark.table(LabelMaterializer._table_identifier_for(label_resource())).columns)
         self.assertEqual(
-            LabelMaterializer._materialize_transform(
-            label_resource(),
+            self._label_worker()._materialize_transform(
             triple_barrier_transform(
                 Dataset(
-                    DatasetConfig(name="sp500", version=3, num_lookback_partitions=0),
+                    DatasetReference(name="sp500", version=3, num_lookback_partitions=0),
                     self.spark.table(DatasetMaterializer._iceberg_table_identifier('sp500', 3)),
                 )
             ),

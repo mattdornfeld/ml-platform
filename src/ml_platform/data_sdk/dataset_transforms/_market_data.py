@@ -1,6 +1,5 @@
 """Yahoo Finance market-data dataset transform."""
 
-from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import json
 from typing import Any
@@ -12,19 +11,31 @@ from pyspark.sql import DataFrame, SparkSession, functions as F
 from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType, TimestampType
 
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
+from ml_platform.data_sdk.utils import record
 
 OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
 OHLCV_SCHEMA = StructType([StructField("timestamp", TimestampType(), False), StructField("symbol", StringType(), False), StructField("Open", DoubleType(), False), StructField("High", DoubleType(), False), StructField("Low", DoubleType(), False), StructField("Close", DoubleType(), False), StructField("Volume", LongType(), False)])
 
 
-@dataclass(frozen=True)
+@record
 class MarketDataTransform(DatasetTransform):
     """Download configured Yahoo Finance bars and construct the OHLCV DataFrame."""
 
     spark: SparkSession
     symbols: list[str]
     partitions: list[datetime]
+    @property
+    def value_schema(self) -> dict[str, str]:
+        """Declare the OHLCV columns persisted beside the shared transform keys."""
+        return {
+            "market_session": "string",
+            "Open": "double",
+            "High": "double",
+            "Low": "double",
+            "Close": "double",
+            "Volume": "bigint",
+        }
 
     def __call__(self) -> DataFrame:
         """Fetch contiguous Yahoo ranges and return rows only for requested partition days."""

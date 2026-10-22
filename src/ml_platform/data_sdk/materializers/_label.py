@@ -4,20 +4,25 @@ from dataclasses import dataclass
 from importlib import import_module
 from inspect import Parameter, signature
 from pathlib import Path
-from typing import ClassVar, cast, get_type_hints
+from types import MappingProxyType
+from typing import ClassVar, Mapping, cast, get_type_hints
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from simple_classproperty import classproperty
-from pyspark.sql import SparkSession
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
 
-from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig
+from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
-from ml_platform.data_sdk.transforms._types import Dataset, DatasetDependency
+from ml_platform.data_sdk.transforms._types import DataType, Dataset, DatasetDependency, FeatureKey, PartitionType
 
 
 class LabelMaterializationConfig(MaterializerConfig):
     """Complete JSON contract consumed by a label Spark materializer."""
 
+    dtype: str = Field(default="int", pattern=r"^(double|float|int|bigint)$", description="Spark SQL type used to persist label values.")
+    frequency: str = Field(default="daily", pattern=r"^(hourly|daily)$", description="Cadence of the label's logical output partitions.")
+    feature_keys: list[str] = Field(default_factory=lambda: ["symbol"], min_length=1, description="Ordered entity-key columns that identify each label value.")
     datasets: list[DatasetDependency] = Field(min_length=1, description="Versioned dataset dependencies consumed by the label transform.")
     transform: str = Field(
         pattern=r"^[a-z_][a-z0-9_.]*\.[A-Za-z_][A-Za-z0-9_]*$",
@@ -26,6 +31,21 @@ class LabelMaterializationConfig(MaterializerConfig):
     parameters: dict[str, int | float | str | bool] = Field(
         default_factory=dict, description="Typed keyword arguments passed to the label transform constructor."
     )
+
+    @field_validator("partitions")
+    @classmethod
+    def _require_input_partition_plans(cls, partitions: list[MaterializerPartition]) -> list[MaterializerPartition]:
+        if any(not partition.dataset_partitions for partition in partitions):
+            raise ValueError("Label partitions must include pinned dataset_partitions.")
+        return partitions
+
+    @field_validator("feature_keys")
+    @classmethod
+    def _unique_feature_keys(cls, feature_keys: list[str]) -> list[str]:
+        """Require an unambiguous label row identity."""
+        if len(set(feature_keys)) != len(feature_keys):
+            raise ValueError("Feature keys must be unique.")
+        return feature_keys
 
 
 @dataclass(frozen=True)
@@ -36,26 +56,84 @@ class LabelResource:
     version: int
 
 
+@dataclass(frozen=True)
 class LabelMaterializer(Materializer[LabelMaterializationConfig]):
     """Construct, validate, persist, and report one label materialization."""
 
     config_model = LabelMaterializationConfig
     spark_application_name: ClassVar[str] = "ml-platform-label-materializer"
-    iceberg_schema: ClassVar[str] = (
-        "timestamp TIMESTAMP, symbol STRING, vertical_barrier_timestamp TIMESTAMP, close DOUBLE, "
-        "volatility DOUBLE, upper_barrier DOUBLE, lower_barrier DOUBLE, horizon_bars INT, "
-        "barrier_outcome STRING, long_short_label INT"
-    )
-    iceberg_partition_spec: ClassVar[str] = "days(timestamp)"
+    callback_resource: ClassVar[str] = "label"
+    datasets: Mapping[str, Dataset]
 
     @classproperty
     def iceberg_namespace(cls) -> str:
         """Store label resources in their dedicated Iceberg namespace."""
         return "labels"
 
-    def __init__(self, config: LabelMaterializationConfig, datasets: dict[str, Dataset]) -> None:
-        super().__init__(config)
-        self.datasets = datasets
+    def __post_init__(self) -> None:
+        """Freeze a snapshot of the datasets supplied at construction."""
+        object.__setattr__(self, "datasets", MappingProxyType(dict(self.datasets)))
+
+    def _partition_receipt_data(self, partition: MaterializerPartition) -> dict[str, object]:
+        """Pin the input dataset revisions used for this label partition."""
+        return {"dataset_partition_ids": [parent.partition_id for parent in partition.dataset_partitions]}
+
+    @property
+    def _feature_key_columns(self) -> tuple[str, ...]:
+        """Return the immutable configured entity columns for one label row."""
+        return tuple(self.config.feature_keys)
+
+    def _prepare_frame(self, frame: DataFrame) -> DataFrame:
+        """Cast a strategy result to the canonical label table schema."""
+        expected_columns = {"timestamp", *self._feature_key_columns, "label_value"}
+        self._validate_exact_columns(frame, expected_columns, context="Label transform")
+        return frame.select(
+            F.col("timestamp").try_cast("timestamp").alias("timestamp"),
+            *(F.col(key).cast("string").alias(key) for key in self._feature_key_columns),
+            F.col("label_value").try_cast(self.config.dtype).alias("label_value"),
+        )
+
+    def _validate_declared_layout(self, transform: LabelTransform) -> None:
+        """Require checked-in label metadata to agree with the transform's static layout."""
+        expected_schema = (
+            "timestamp TIMESTAMP, "
+            f"{', '.join(f'{key} STRING' for key in self._feature_key_columns)}, "
+            f"label_value {self.config.dtype.upper()}"
+        )
+        expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[self.config.frequency]
+        if transform.iceberg_schema != expected_schema:
+            raise ValueError(
+                "Label transform iceberg_schema does not match the explicitly configured "
+                "feature keys and dtype."
+            )
+        if transform.iceberg_partition_spec != expected_partition_spec:
+            raise ValueError(
+                "Label transform iceberg_partition_spec does not match the explicitly configured frequency."
+            )
+
+    def _validate_frame(self, frame: DataFrame, spark: SparkSession, partition_spec: str) -> None:
+        """Validate the canonical label contract before its Iceberg write."""
+        required_columns = ("timestamp", *self._feature_key_columns, "label_value")
+        self._validate_non_null_columns(frame, required_columns, context="Label transform")
+        self._validate_unique_key(frame, ("timestamp", *self._feature_key_columns), context="Label transform")
+        partitioned = frame.withColumn("output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp")))
+        requested = spark.createDataFrame(
+            [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
+            "output_partition timestamp",
+        ).distinct()
+        self._validate_partition_coverage(
+            partitioned, requested, partition_column="output_partition",
+            min_rows=self.config.validations.min_rows_per_partition, context="Label transform",
+        )
+
+    def _row_digest(self) -> F.Column:
+        """Hash the canonical persisted fields for one label row."""
+        columns = ("timestamp", *self._feature_key_columns, "label_value")
+        return F.sha2(F.to_json(F.struct(*(F.col(column) for column in columns))), 256)
+
+    def _write_frame(self, frame: DataFrame) -> None:
+        """Merge labels using their canonical timestamp and feature-key identity."""
+        self._merge_frame(frame, self._table_identifier, ("timestamp", *self._feature_key_columns))
 
     @classmethod
     def _label_id(cls, resource: LabelResource) -> str:
@@ -84,9 +162,8 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
             raise ValueError(f"Label transform must inherit LabelTransform: {import_path}")
         return cast(type[LabelTransform], transform)
 
-    @staticmethod
     def _instantiate_transform(
-        transform_class: type[LabelTransform], parameters: dict[str, object], datasets: dict[str, Dataset]
+        self, transform_class: type[LabelTransform], parameters: dict[str, object], datasets: Mapping[str, Dataset]
     ) -> LabelTransform:
         """Require the transform constructor to match declared datasets and parameters."""
         constructor_parameters = {
@@ -95,6 +172,11 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
             if parameter.kind in {Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY}
         }
         annotations = get_type_hints(transform_class.__init__)
+        injected_parameters = {
+            "keys": [FeatureKey(key) for key in self.config.feature_keys],
+            "partition_type": PartitionType(self.config.frequency),
+            "data_type": DataType(self.config.dtype),
+        }
         dataset_parameters = {name for name in constructor_parameters if annotations.get(name) is Dataset}
         if dataset_parameters != set(datasets):
             raise ValueError(
@@ -103,7 +185,9 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
                 f"declared: {', '.join(sorted(datasets)) or 'none'})."
             )
         parameter_definitions = {
-            name: parameter for name, parameter in constructor_parameters.items() if name not in dataset_parameters
+            name: parameter
+            for name, parameter in constructor_parameters.items()
+            if name not in dataset_parameters and name not in injected_parameters
         }
         required = {name for name, parameter in parameter_definitions.items() if parameter.default is Parameter.empty}
         missing, unexpected = required.difference(parameters), set(parameters).difference(parameter_definitions)
@@ -122,60 +206,27 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
                     f"(type for {name}: expected {expected_type.__name__}, got {type(value).__name__})."
                 )
         try:
-            return transform_class(**datasets, **parameters)
+            return transform_class(**datasets, **injected_parameters, **parameters)
         except TypeError as error:
             raise ValueError(f"Label transform parameter discrepancy for {transform_class.__name__}: {error}") from error
 
-    @classmethod
-    def _materialize_transform(
-        cls, resource: LabelResource, transform: LabelTransform, *, spark: SparkSession
-    ) -> int:
+    def _materialize_transform(self, transform: LabelTransform, *, spark: SparkSession) -> int:
         """Persist one transform result through the label table lifecycle."""
-        labels = transform().localCheckpoint(eager=True)
-        cls._validate_non_empty(labels, context="Label transform")
-        cls._ensure_iceberg_table(
-            spark,
-            name=resource.name,
-            version=resource.version,
-            properties=(
-                *cls.iceberg_table_properties,
-                f"'label.name' = '{resource.name}'",
-                f"'label.version' = '{resource.version}'",
-            ),
-        )
-        labels.createOrReplaceTempView("incoming_labels")
-        spark.sql(
-            f"""
-            MERGE INTO {cls._table_identifier_for(resource)} AS target
-            USING incoming_labels AS source
-            ON target.symbol = source.symbol
-               AND target.timestamp = source.timestamp
-               AND target.horizon_bars = source.horizon_bars
-            WHEN MATCHED THEN UPDATE SET
-                target.vertical_barrier_timestamp = source.vertical_barrier_timestamp,
-                target.close = source.close,
-                target.volatility = source.volatility,
-                target.upper_barrier = source.upper_barrier,
-                target.lower_barrier = source.lower_barrier,
-                target.barrier_outcome = source.barrier_outcome,
-                target.long_short_label = source.long_short_label
-            WHEN NOT MATCHED THEN INSERT (
-                timestamp, symbol, vertical_barrier_timestamp, close, volatility,
-                upper_barrier, lower_barrier, horizon_bars, barrier_outcome, long_short_label
-            ) VALUES (
-                source.timestamp, source.symbol, source.vertical_barrier_timestamp, source.close,
-                source.volatility, source.upper_barrier, source.lower_barrier,
-                source.horizon_bars, source.barrier_outcome, source.long_short_label
-            )
-            """
-        )
+        schema, partition_spec = self._iceberg_layout(transform)
+        labels = self._prepare_frame(transform().localCheckpoint(eager=True))
+        self._validate_frame(labels, spark, partition_spec)
+        self._ensure_table(spark, schema=schema, partition_spec=partition_spec)
+        self._write_frame(labels)
         return labels.count()
 
-    def materialize(self, spark: SparkSession) -> int:
-        """Instantiate the configured transform and persist its labels."""
+    def _create_transform(self, spark: SparkSession) -> LabelTransform:
+        """Instantiate the configured label transform with its pinned inputs."""
         transform = self._instantiate_transform(
             self._load_transform(self.config.transform), self.config.parameters, self.datasets
         )
-        return self._materialize_transform(
-            LabelResource(name=self.config.name, version=self.config.version), transform, spark=spark
-        )
+        self._validate_declared_layout(transform)
+        return transform
+
+    def materialize(self, spark: SparkSession, transform: LabelTransform) -> DataFrame:
+        """Return the configured transform's checkpointed label DataFrame."""
+        return transform().localCheckpoint(eager=True)

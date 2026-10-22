@@ -8,7 +8,7 @@ The initial database schema is [src/ml_platform/api/sql/schema.sql](../src/ml_pl
 
 Datasets and features are distinct resources, each identified by an immutable `(name, version)` pair. A dataset has a typed `dataset_type` and an opaque `config JSONB` document. The initial supported type is `market_data`. Spark and Iceberg own the dataset's physical schema.
 
-Feature registration is normalized rather than stored as an opaque configuration. A feature has `dtype`, `frequency`, `feature_key`, `transform`, `description`, `parameters`, and `validations` fields. Its `datasets` payload creates rows in `feature_dataset_dependencies`; each row identifies an existing `(dataset_name, dataset_version)` and its `num_lookback_partitions`. Foreign keys prevent registering a feature dependency on a dataset version that does not exist.
+Feature registration is normalized rather than stored as an opaque configuration. A feature has `dtype`, `frequency`, ordered `feature_keys`, `transform`, `description`, `parameters`, and `validations` fields. Its `datasets` payload creates rows in `feature_dataset_dependencies`; each row identifies an existing `(dataset_name, dataset_version)` and its `num_lookback_partitions`. Foreign keys prevent registering a feature dependency on a dataset version that does not exist.
 
 A new dataset or feature configuration version creates a new resource version rather than mutating an existing one.
 
@@ -55,12 +55,12 @@ The normal lifecycle is:
 2. Create a job and its partition update requests.
 3. Dispatch a Spark job for the requests.
 4. Spark writes the requested partitions in an Iceberg transaction.
-5. After a successful Iceberg commit, the worker calls the API with the request UUID, content hash, and Iceberg snapshot ID.
-6. In one PostgreSQL transaction, the API creates the partition result and marks its request `created`.
+5. After a successful Iceberg commit, the worker sends one top-level JSON array to `POST /partitions/complete`. Each receipt carries its own request UUID, resource type, row count, full committed schema, content hash, snapshot ID, and callback token. Feature and label receipts also carry their pinned `dataset_partition_ids`.
+6. In one PostgreSQL transaction, the API validates the entire batch, creates its partition results and lineage, marks requests `created`, and updates completed jobs.
 
-A `dataset_partitions` or `feature_partitions` row is therefore a receipt for a successful Iceberg write. It is keyed by the request UUID and stores only `content_hash`, `snapshot_id`, and `created_at`; its dataset or feature identity, timestamp, job, and lifecycle status are obtained by joining to the corresponding request.
+A `dataset_partitions`, `feature_partitions`, or `label_partitions` row is a receipt for a successful Iceberg write. It is keyed by the request UUID and records the content hash, snapshot, row count, schema, and creation time. Its resource identity, timestamp, job, and lifecycle status come from the corresponding request. Existing historical receipts predate row-count collection; the migration preserves their unknown counts without inventing values, while requiring complete new receipts.
 
-The API must make completion callbacks idempotent. A repeated callback with the same hash and snapshot may succeed without changing state. A callback for an existing request with different materialization metadata must fail with a conflict.
+The API rejects duplicate partition IDs, invalid tokens, ineligible or deleted resources, mismatched pinned dependency plans, and inconsistent schemas within the batch or against completed receipts in the same Iceberg table. Any failure rolls back the entire batch. An identical retry succeeds without changing state; a conflicting receipt returns `409`. Locking the resource definition during validation serializes concurrent schema checks for that table.
 
 ## Kueue admission and partition eligibility
 
@@ -106,6 +106,8 @@ Workers complete update requests only after an Iceberg commit. When every target
 The local deployment installs Kueue's SparkApplication integration, which is currently an upstream alpha feature. `deploy/kubernetes/kueue-values.yaml` enables its feature gate and framework registration; `deploy/kubernetes/kueue.yaml` defines the `materialization` LocalQueue and its resource quota.
 
 ## Iceberg consistency
+
+Every dataset, feature, and label table records the same resource definition in Iceberg table properties: `resource.type`, `resource.name`, `resource.version`, `resource.frequency`, `resource.description`, `resource.dependencies`, and `resource.validations`. Frequency is the table's logical partition cadence (`daily` or `hourly`); dependencies and validations are JSON strings. The shared materializer writes these properties when creating a table and backfills existing tables on their next materialization. Features and labels use canonical layouts inferred from their resource metadata: `timestamp`, ordered `feature_keys`, and respectively `feature_value` or `label_value`. Their frequency determines the Iceberg partition transform. Dataset transforms retain ownership of arbitrary schemas and partition specs.
 
 An Iceberg snapshot belongs to an Iceberg table, not a single partition. The resource identity held by the update request identifies that table, while `snapshot_id` identifies the table state that committed the result.
 
@@ -209,7 +211,7 @@ class TrailingVolatilityTransform(FeatureTransform):
 
 The materialization harness verifies that declared dependency names exactly match dataset constructor arguments, validates parameter names and types, and invokes the transform. The transform can perform arbitrary Spark operations, but it does not choose input partitions, write output storage, or create lineage records.
 
-The transform returns a Spark `DataFrame` with exactly these logical columns, where the middle column is the registered `feature_key` (currently `symbol`):
+The transform returns a Spark `DataFrame` with exactly these logical columns, where the middle columns are the registered ordered `feature_keys` (currently `[symbol]`):
 
 ```text
 timestamp, symbol, feature_value
@@ -217,9 +219,9 @@ timestamp, symbol, feature_value
 
 The harness always enforces the following invariants before any Iceberg write:
 
-- the returned column set is exactly `timestamp`, the configured feature key, and `feature_value`;
-- `timestamp`, the feature key, and `feature_value` are non-null, and `feature_value` is castable to the registered `dtype`;
-- each `(timestamp, feature_key)` pair is unique; and
+- the returned column set is exactly `timestamp`, the configured feature keys, and `feature_value`;
+- `timestamp`, every feature key, and `feature_value` are non-null, and `feature_value` is castable to the registered `dtype`;
+- each `(timestamp, feature_keys)` tuple is unique; and
 - the emitted output-partition set is exactly the requested output-partition set. Missing and extra partitions both fail the job.
 
 The feature YAML or API `validations` object configures the remaining checks:
@@ -238,11 +240,11 @@ validations:
 For each successful worker write:
 
 1. Spark writes only the requested feature partitions to the versioned feature Iceberg table in one Iceberg transaction.
-2. The worker computes the output content hash and obtains the committed Iceberg `snapshot_id`.
-3. The worker calls the API completion endpoint with the feature partition request ID, hash, snapshot ID, and exact completed dataset partition IDs used as inputs.
-4. In one PostgreSQL transaction, the API creates the `feature_partitions` receipt, inserts `feature_partition_dataset_dependencies` lineage rows, and changes the request status from `pending` to `created`.
+2. The worker computes committed per-partition content hashes and row counts, reads the table schema and Iceberg `snapshot_id`, then sends all receipts in one `POST /partitions/complete` batch.
+3. The API validates every receipt and its exact completed dataset partition IDs against the immutable input plan before writing any database rows.
+4. In one PostgreSQL transaction, the API creates all `feature_partitions` receipts, inserts `feature_partition_dataset_dependencies` lineage rows, and changes their request statuses from `pending` to `created`.
 
-If a worker fails before this completion transaction, its unfinished requests become `failed`. If its job is cancelled before completion, unfinished requests become `cancelled`. A completion callback is idempotent only when its existing receipt has the same content hash, snapshot ID, and lineage; a differing callback is a conflict.
+If a worker fails before this completion transaction, its unfinished requests become `failed`. If its job is cancelled before completion, unfinished requests become `cancelled`. A completion callback is idempotent only when its existing receipt has the same content hash, snapshot ID, row count, schema, and lineage; a differing callback is a conflict.
 
 ### Responsibilities
 
