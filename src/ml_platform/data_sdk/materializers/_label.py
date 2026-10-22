@@ -15,7 +15,9 @@ class LabelMaterializationConfig(TransformMaterializationConfig):
 
 
 @dataclass(frozen=True)
-class LabelMaterializer(TransformMaterializer[LabelMaterializationConfig, LabelTransform]):
+class LabelMaterializer(
+    TransformMaterializer[LabelMaterializationConfig, LabelTransform]
+):
     """Materialize API-pinned label partitions with immutable input revisions."""
 
     @property

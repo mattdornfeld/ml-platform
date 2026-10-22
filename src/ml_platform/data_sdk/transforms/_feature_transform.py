@@ -1,4 +1,5 @@
 """Base interface and parameter validation for Spark feature transforms."""
+
 from abc import ABC
 
 from ml_platform.data_sdk.transforms._base import DataTransform
@@ -9,6 +10,7 @@ from ml_platform.data_sdk.utils import record
 @record
 class FeatureTransform(DataTransform, ABC):
     """A configured transformation from injected datasets to a feature DataFrame."""
+
     data_type: DataType
 
     @property

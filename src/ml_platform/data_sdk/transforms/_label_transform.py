@@ -1,4 +1,5 @@
 """Base interface for Spark label transformations."""
+
 from abc import ABC
 
 from ml_platform.data_sdk.transforms._base import DataTransform
@@ -9,6 +10,7 @@ from ml_platform.data_sdk.utils import record
 @record
 class LabelTransform(DataTransform, ABC):
     """A configured transformation from one injected dataset to label rows."""
+
     data_type: DataType
 
     @property

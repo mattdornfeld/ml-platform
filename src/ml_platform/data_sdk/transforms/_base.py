@@ -1,8 +1,7 @@
 """Shared output table contract for dataset, feature, and label transforms."""
 
 from abc import ABC, abstractmethod
-from datetime import datetime
-from typing import Literal, Sequence
+from typing import Sequence
 
 from pyspark.sql import DataFrame
 
@@ -18,15 +17,13 @@ class DataTransformSchemaError(DataSdkError):
 @record
 class DataTransform(ABC):
     """Shared base for user-defined dataset, feature, and label calculations."""
+
     keys: Sequence[FeatureKey]
     partition_type: PartitionType
 
     @property
     def key_schema(self) -> dict[str, str]:
-        return {
-            "timestamp": "timestamp",
-            **{key.value: "string" for key in self.keys}
-        }
+        return {"timestamp": "timestamp", **{key.value: "string" for key in self.keys}}
 
     @property
     @abstractmethod
@@ -44,7 +41,9 @@ class DataTransform(ABC):
                 f"{', '.join(sorted(overlapping_columns))}."
             )
         columns = key_schema | value_schema
-        return ", ".join(f"{name} {data_type.upper()}" for name, data_type in columns.items())
+        return ", ".join(
+            f"{name} {data_type.upper()}" for name, data_type in columns.items()
+        )
 
     @property
     def iceberg_partition_spec(self) -> str:

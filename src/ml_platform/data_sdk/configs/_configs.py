@@ -7,15 +7,20 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from ml_platform.common.types import BaseConfig
-from ml_platform.data_sdk._exceptions import DataSdkError, MarketSymbolConfigurationError
-from ml_platform.data_sdk.materializers._materialization_validator import DiscriminatedValidationConfig
+from ml_platform.data_sdk._exceptions import (
+    DataSdkError,
+    MarketSymbolConfigurationError,
+)
+from ml_platform.data_sdk.materializers._materialization_validator import (
+    DiscriminatedValidationConfig,
+)
 from ml_platform.data_sdk.transforms._types import (
-    DataType,
     DatasetType,
     FeatureDatasetDependency,
     FeatureKey,
     PartitionType,
 )
+from ml_platform.data_sdk.transforms._types import DataType as DataType
 
 
 class RunFrequency(StrEnum):
@@ -57,8 +62,12 @@ class TimeRange(BaseConfig):
 class DataConfig(BaseConfig):
     """Common immutable metadata for every versioned resource definition."""
 
-    name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase resource name.")
-    version: int = Field(ge=1, description="Positive immutable resource-definition version.")
+    name: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase resource name."
+    )
+    version: int = Field(
+        ge=1, description="Positive immutable resource-definition version."
+    )
     description: str = Field(
         default="No description provided.",
         min_length=1,
@@ -146,7 +155,9 @@ class TransformConfig(DataConfig):
 
     @field_validator("feature_keys", mode="before")
     @classmethod
-    def parse_feature_keys(cls, feature_keys: list[FeatureKey | str]) -> list[FeatureKey]:
+    def parse_feature_keys(
+        cls, feature_keys: list[FeatureKey | str]
+    ) -> list[FeatureKey]:
         """Parse YAML key literals into the closed FeatureKey enum."""
         return [FeatureKey(feature_key) for feature_key in feature_keys]
 
@@ -163,7 +174,9 @@ class TransformConfig(DataConfig):
                 "Transform datasets must have unique name/version identities; "
                 f"received: {', '.join(dataset.id for dataset in self.datasets)}."
             )
-        if len({dataset.argument_name for dataset in self.datasets}) != len(self.datasets):
+        if len({dataset.argument_name for dataset in self.datasets}) != len(
+            self.datasets
+        ):
             raise TransformDependencyConfigurationError(
                 "Transform datasets must have unique constructor arguments; "
                 f"received: {', '.join(dataset.argument_name for dataset in self.datasets)}."
@@ -197,15 +210,22 @@ class MarketDataConfig(DatasetConfig):
     """Yahoo Finance hourly OHLCV dataset definition."""
 
     dataset_type: Literal[DatasetType.MARKET_DATA] = Field(
-        description="Dataset implementation selected by this definition.")
-    symbols: list[str] = Field(min_length=1, description="Yahoo Finance ticker symbols to download.")
-    time_range: TimeRange = Field(description="Inclusive and exclusive calendar bounds for source data retrieval.")
+        description="Dataset implementation selected by this definition."
+    )
+    symbols: list[str] = Field(
+        min_length=1, description="Yahoo Finance ticker symbols to download."
+    )
+    time_range: TimeRange = Field(
+        description="Inclusive and exclusive calendar bounds for source data retrieval."
+    )
 
     @field_validator("symbols")
     @classmethod
     def normalize_symbols(cls, symbols: list[str]) -> list[str]:
         """Normalize and validate the configured Yahoo Finance symbols."""
-        normalized_symbols = [symbol.strip().upper() for symbol in symbols if symbol.strip()]
+        normalized_symbols = [
+            symbol.strip().upper() for symbol in symbols if symbol.strip()
+        ]
         if not normalized_symbols:
             raise MarketSymbolConfigurationError(
                 "Market-data configuration requires at least one non-empty ticker symbol."
@@ -216,8 +236,16 @@ class MarketDataConfig(DatasetConfig):
 class TripleBarrierConfig(LabelConfig):
     """Triple-barrier label strategy and its volatility-scaled parameters."""
 
-    horizon_bars: int = Field(ge=1, description="Maximum number of bars before the vertical barrier expires.")
-    volatility_lookback_bars: int = Field(ge=2, description="Trailing bars used to estimate volatility.")
-    profit_taking_multiplier: float = Field(gt=0.0,
-                                            description="Volatility multiple that defines the profit-taking barrier.")
-    stop_loss_multiplier: float = Field(gt=0.0, description="Volatility multiple that defines the stop-loss barrier.")
+    horizon_bars: int = Field(
+        ge=1, description="Maximum number of bars before the vertical barrier expires."
+    )
+    volatility_lookback_bars: int = Field(
+        ge=2, description="Trailing bars used to estimate volatility."
+    )
+    profit_taking_multiplier: float = Field(
+        gt=0.0,
+        description="Volatility multiple that defines the profit-taking barrier.",
+    )
+    stop_loss_multiplier: float = Field(
+        gt=0.0, description="Volatility multiple that defines the stop-loss barrier."
+    )

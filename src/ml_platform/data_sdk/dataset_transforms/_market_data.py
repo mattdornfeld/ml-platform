@@ -1,14 +1,22 @@
 """Yahoo Finance market-data dataset transform."""
 
-from datetime import date, datetime, time, timedelta, timezone
 import json
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from pyspark.sql import DataFrame, SparkSession, functions as F
-from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType, TimestampType
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.types import (
+    DoubleType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 
 from ml_platform.data_sdk._exceptions import DataSdkError
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
@@ -16,7 +24,17 @@ from ml_platform.data_sdk.utils import record
 
 OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
-OHLCV_SCHEMA = StructType([StructField("timestamp", TimestampType(), False), StructField("symbol", StringType(), False), StructField("Open", DoubleType(), False), StructField("High", DoubleType(), False), StructField("Low", DoubleType(), False), StructField("Close", DoubleType(), False), StructField("Volume", LongType(), False)])
+OHLCV_SCHEMA = StructType(
+    [
+        StructField("timestamp", TimestampType(), False),
+        StructField("symbol", StringType(), False),
+        StructField("Open", DoubleType(), False),
+        StructField("High", DoubleType(), False),
+        StructField("Low", DoubleType(), False),
+        StructField("Close", DoubleType(), False),
+        StructField("Volume", LongType(), False),
+    ]
+)
 
 
 class MarketDataPartitionError(DataSdkError):
@@ -38,6 +56,7 @@ class MarketDataTransform(DatasetTransform):
     spark: SparkSession
     symbols: list[str]
     partitions: list[datetime]
+
     @property
     def value_schema(self) -> dict[str, str]:
         """Declare the OHLCV columns persisted beside the shared transform keys."""
@@ -61,11 +80,17 @@ class MarketDataTransform(DatasetTransform):
         for symbol in self.symbols:
             for start_date, end_date in _contiguous_date_ranges(requested_days):
                 try:
-                    frames.append(fetch_hourly_ohlcv(self.spark, symbol, start_date=start_date, end_date=end_date))
+                    frames.append(
+                        fetch_hourly_ohlcv(
+                            self.spark, symbol, start_date=start_date, end_date=end_date
+                        )
+                    )
                 except (HTTPError, ValueError) as error:
                     if isinstance(error, HTTPError) and error.code not in {404, 422}:
                         raise
-                    print(f"Skipping unavailable Yahoo Finance range for {symbol}: {error}")
+                    print(
+                        f"Skipping unavailable Yahoo Finance range for {symbol}: {error}"
+                    )
         if not frames:
             raise YahooFinanceDataUnavailableError(
                 "Yahoo Finance returned no hourly data for any configured symbol "
@@ -92,10 +117,14 @@ def _contiguous_date_ranges(partitions: list[date]) -> list[tuple[date, date]]:
     return ranges
 
 
-def fetch_hourly_ohlcv(spark: SparkSession, symbol: str, *, start_date: date, end_date: date) -> DataFrame:
+def fetch_hourly_ohlcv(
+    spark: SparkSession, symbol: str, *, start_date: date, end_date: date
+) -> DataFrame:
     """Fetch one symbol's extended-hours bars into a typed Spark DataFrame."""
     normalized = symbol.upper()
-    rows = _yahoo_chart_rows(_request_yahoo_chart(normalized, start_date, end_date), normalized)
+    rows = _yahoo_chart_rows(
+        _request_yahoo_chart(normalized, start_date, end_date), normalized
+    )
     if not rows:
         raise YahooFinanceDataUnavailableError(
             f"Yahoo Finance returned no hourly data for symbol {normalized!r} "
@@ -104,12 +133,16 @@ def fetch_hourly_ohlcv(spark: SparkSession, symbol: str, *, start_date: date, en
     return _with_market_session(spark.createDataFrame(rows, schema=OHLCV_SCHEMA))
 
 
-def _request_yahoo_chart(symbol: str, start_date: date, end_date: date) -> dict[str, Any]:
+def _request_yahoo_chart(
+    symbol: str, start_date: date, end_date: date
+) -> dict[str, Any]:
     """Request one Yahoo chart response and return decoded JSON."""
     start = int(datetime.combine(start_date, time.min, timezone.utc).timestamp())
     end = int(datetime.combine(end_date, time.min, timezone.utc).timestamp())
     url = f"{YAHOO_CHART_URL}/{quote(symbol, safe='')}?period1={start}&period2={end}&interval=1h&includePrePost=true&events=history"
-    with urlopen(Request(url, headers={"User-Agent": "ml-platform/0.1"}), timeout=30) as response:
+    with urlopen(
+        Request(url, headers={"User-Agent": "ml-platform/0.1"}), timeout=30
+    ) as response:
         return json.load(response)
 
 
@@ -125,7 +158,8 @@ def _yahoo_chart_rows(payload: dict[str, Any], symbol: str) -> list[tuple[object
             f"Yahoo Finance returned an error for {symbol!r}: {chart['error']}."
         )
     results = chart.get("result")
-    if not isinstance(results, list) or not results: return []
+    if not isinstance(results, list) or not results:
+        return []
     result = results[0]
     if not isinstance(result, dict):
         raise YahooFinancePayloadError(
@@ -154,13 +188,16 @@ def _yahoo_chart_rows(payload: dict[str, Any], symbol: str) -> list[tuple[object
         raise YahooFinancePayloadError(
             f"Yahoo Finance response for {symbol!r} is missing one or more OHLCV columns."
         )
-    if any(len(column_values) != len(timestamps) for column_values in (
-        open_values,
-        high_values,
-        low_values,
-        close_values,
-        volume_values,
-    )):
+    if any(
+        len(column_values) != len(timestamps)
+        for column_values in (
+            open_values,
+            high_values,
+            low_values,
+            close_values,
+            volume_values,
+        )
+    ):
         raise YahooFinancePayloadError(
             f"Yahoo Finance response for {symbol!r} has OHLCV arrays inconsistent with timestamp count "
             f"{len(timestamps)}."
@@ -190,5 +227,12 @@ def _yahoo_chart_rows(payload: dict[str, Any], symbol: str) -> list[tuple[object
 
 def _with_market_session(frame: DataFrame) -> DataFrame:
     """Add a pre-market, regular, or after-hours session label."""
-    eastern = F.date_format(F.from_utc_timestamp("timestamp", "America/New_York"), "HH:mm:ss")
-    return frame.withColumn("market_session", F.when((eastern >= "04:00:00") & (eastern < "09:30:00"), "pre_market").when((eastern >= "09:30:00") & (eastern < "16:00:00"), "regular").otherwise("after_hours")).select("timestamp", "symbol", "market_session", *OHLCV_COLUMNS)
+    eastern = F.date_format(
+        F.from_utc_timestamp("timestamp", "America/New_York"), "HH:mm:ss"
+    )
+    return frame.withColumn(
+        "market_session",
+        F.when((eastern >= "04:00:00") & (eastern < "09:30:00"), "pre_market")
+        .when((eastern >= "09:30:00") & (eastern < "16:00:00"), "regular")
+        .otherwise("after_hours"),
+    ).select("timestamp", "symbol", "market_session", *OHLCV_COLUMNS)

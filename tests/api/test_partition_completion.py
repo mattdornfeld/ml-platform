@@ -13,7 +13,10 @@ from ml_platform.api.main import complete_partitions
 from ml_platform.api.migrations import migrate_database
 
 
-@unittest.skipUnless(os.environ.get("ML_PLATFORM_TEST_DATABASE_URL"), "Requires a disposable PostgreSQL test database.")
+@unittest.skipUnless(
+    os.environ.get("ML_PLATFORM_TEST_DATABASE_URL"),
+    "Requires a disposable PostgreSQL test database.",
+)
 class PartitionCompletionDatabaseTest(unittest.TestCase):
     """Verify all-or-nothing writes against real PostgreSQL constraints."""
 
@@ -37,28 +40,44 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
                 "INSERT INTO datasets (name, version, dataset_type, config) VALUES ('prices', 1, 'market_data', '{}'::jsonb)"
             )
             job_id = uuid4()
-            connection.execute("INSERT INTO jobs (id, type) VALUES (%s, 'dataset_materialization')", (job_id,))
+            connection.execute(
+                "INSERT INTO jobs (id, type) VALUES (%s, 'dataset_materialization')",
+                (job_id,),
+            )
             self.partition_ids = [uuid4(), uuid4()]
             for index, partition_id in enumerate(self.partition_ids):
                 connection.execute(
                     """INSERT INTO partition_update_requests
                     (partition_id, job_id, dataset_name, dataset_version, timestamp, callback_token)
                     VALUES (%s, %s, 'prices', 1, %s, %s)""",
-                    (partition_id, job_id, f"2026-01-0{index + 1}T00:00:00Z", f"token-{index}"),
+                    (
+                        partition_id,
+                        job_id,
+                        f"2026-01-0{index + 1}T00:00:00Z",
+                        f"token-{index}",
+                    ),
                 )
         self.job_id = job_id
 
-    def _receipt(self, index: int, *, schema: dict[str, str] | None = None, token: str | None = None,
-                 content_hash: str | None = None) -> PartitionCompletionRequest:
-        return PartitionCompletionRequest.model_validate({
-            "partition_id": self.partition_ids[index],
-            "resource_type": "dataset",
-            "row_count": index + 1,
-            "schema": schema or {"timestamp": "timestamp", "symbol": "string"},
-            "content_hash": content_hash or f"hash-{index}",
-            "snapshot_id": 42,
-            "callback_token": token or f"token-{index}",
-        })
+    def _receipt(
+        self,
+        index: int,
+        *,
+        schema: dict[str, str] | None = None,
+        token: str | None = None,
+        content_hash: str | None = None,
+    ) -> PartitionCompletionRequest:
+        return PartitionCompletionRequest.model_validate(
+            {
+                "partition_id": self.partition_ids[index],
+                "resource_type": "dataset",
+                "row_count": index + 1,
+                "schema": schema or {"timestamp": "timestamp", "symbol": "string"},
+                "content_hash": content_hash or f"hash-{index}",
+                "snapshot_id": 42,
+                "callback_token": token or f"token-{index}",
+            }
+        )
 
     def _complete(self, receipts: list[PartitionCompletionRequest]):
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
@@ -66,11 +85,18 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
 
     def _state(self) -> tuple[int, list[str], str]:
         with psycopg.connect(self.database_url) as connection:
-            count = connection.execute("SELECT COUNT(*) FROM dataset_partitions").fetchone()[0]
-            statuses = [row[0] for row in connection.execute(
-                "SELECT status::text FROM partition_update_requests ORDER BY timestamp"
-            ).fetchall()]
-            job_status = connection.execute("SELECT status::text FROM jobs WHERE id = %s", (self.job_id,)).fetchone()[0]
+            count = connection.execute(
+                "SELECT COUNT(*) FROM dataset_partitions"
+            ).fetchone()[0]
+            statuses = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT status::text FROM partition_update_requests ORDER BY timestamp"
+                ).fetchall()
+            ]
+            job_status = connection.execute(
+                "SELECT status::text FROM jobs WHERE id = %s", (self.job_id,)
+            ).fetchone()[0]
         return count, statuses, job_status
 
     def test_batch_commits_all_receipts_and_identical_retry_succeeds(self) -> None:
@@ -90,7 +116,9 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
 
     def test_mixed_schema_batch_rolls_back_every_item(self) -> None:
         with self.assertRaises(HTTPException) as raised:
-            self._complete([self._receipt(0), self._receipt(1, schema={"timestamp": "string"})])
+            self._complete(
+                [self._receipt(0), self._receipt(1, schema={"timestamp": "string"})]
+            )
         self.assertEqual(raised.exception.status_code, 409)
         self.assertEqual(self._state(), (0, ["pending", "pending"], "submitted"))
 
@@ -104,7 +132,9 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
     def test_conflicting_retry_is_rejected(self) -> None:
         self._complete([self._receipt(0)])
         with self.assertRaises(HTTPException) as raised:
-            self._complete([self._receipt(0, content_hash="different"), self._receipt(1)])
+            self._complete(
+                [self._receipt(0, content_hash="different"), self._receipt(1)]
+            )
         self.assertEqual(raised.exception.status_code, 409)
         self.assertEqual(self._state(), (1, ["created", "pending"], "submitted"))
 
@@ -151,13 +181,25 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
             )
         return partition_id, job_id
 
-    def _derived_receipt(self, resource_type: str, partition_id: UUID, parent_id: UUID) -> PartitionCompletionRequest:
-        return PartitionCompletionRequest.model_validate({
-            "partition_id": partition_id, "resource_type": resource_type,
-            "row_count": 3, "schema": {"timestamp": "timestamp", "symbol": "string", "feature_value": "double"},
-            "content_hash": "derived-hash", "snapshot_id": 51, "callback_token": "derived-token",
-            "dataset_partition_ids": [parent_id],
-        })
+    def _derived_receipt(
+        self, resource_type: str, partition_id: UUID, parent_id: UUID
+    ) -> PartitionCompletionRequest:
+        return PartitionCompletionRequest.model_validate(
+            {
+                "partition_id": partition_id,
+                "resource_type": resource_type,
+                "row_count": 3,
+                "schema": {
+                    "timestamp": "timestamp",
+                    "symbol": "string",
+                    "feature_value": "double",
+                },
+                "content_hash": "derived-hash",
+                "snapshot_id": 51,
+                "callback_token": "derived-token",
+                "dataset_partition_ids": [parent_id],
+            }
+        )
 
     def test_feature_receipt_preserves_pinned_dependency(self) -> None:
         partition_id, job_id = self._derived_request("feature")
@@ -165,9 +207,14 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
         self._complete([receipt])
         self._complete([receipt])
         with psycopg.connect(self.database_url) as connection:
-            parent_id = connection.execute("""SELECT dataset_partition_id
-                FROM feature_partition_dataset_dependencies WHERE feature_partition_id = %s""", (partition_id,)).fetchone()[0]
-            status = connection.execute("SELECT status::text FROM jobs WHERE id = %s", (job_id,)).fetchone()[0]
+            parent_id = connection.execute(
+                """SELECT dataset_partition_id
+                FROM feature_partition_dataset_dependencies WHERE feature_partition_id = %s""",
+                (partition_id,),
+            ).fetchone()[0]
+            status = connection.execute(
+                "SELECT status::text FROM jobs WHERE id = %s", (job_id,)
+            ).fetchone()[0]
         self.assertEqual(parent_id, self.partition_ids[0])
         self.assertEqual(status, "succeeded")
 
@@ -180,9 +227,14 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
         correct = self._derived_receipt("label", partition_id, self.partition_ids[0])
         self._complete([correct])
         with psycopg.connect(self.database_url) as connection:
-            parent_id = connection.execute("""SELECT dataset_partition_id
-                FROM label_partition_dataset_dependencies WHERE label_partition_id = %s""", (partition_id,)).fetchone()[0]
-            status = connection.execute("SELECT status::text FROM jobs WHERE id = %s", (job_id,)).fetchone()[0]
+            parent_id = connection.execute(
+                """SELECT dataset_partition_id
+                FROM label_partition_dataset_dependencies WHERE label_partition_id = %s""",
+                (partition_id,),
+            ).fetchone()[0]
+            status = connection.execute(
+                "SELECT status::text FROM jobs WHERE id = %s", (job_id,)
+            ).fetchone()[0]
         self.assertEqual(parent_id, self.partition_ids[0])
         self.assertEqual(status, "succeeded")
 

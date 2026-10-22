@@ -7,7 +7,6 @@ from typing import Callable, TypeVar, dataclass_transform
 
 from ml_platform.data_sdk._exceptions import DataSdkError
 
-
 Record = TypeVar("Record")
 
 
@@ -37,14 +36,19 @@ def record(record_type: type[Record]) -> type[Record]:
         for name in vars(base)
         if isinstance(getattr(base, name, None), property)
     }
-    declared_properties = tuple(name for name in annotations if name in inherited_properties)
+    declared_properties = tuple(
+        name for name in annotations if name in inherited_properties
+    )
     inherited_record_properties = {
         field_name.removeprefix("_")
         for base in record_type.__mro__[1:]
         for field_name in getattr(base, "__dataclass_fields__", {})
-        if field_name.startswith("_") and isinstance(getattr(base, field_name.removeprefix("_"), None), property)
+        if field_name.startswith("_")
+        and isinstance(getattr(base, field_name.removeprefix("_"), None), property)
     }
-    property_fields = tuple(dict.fromkeys((*declared_properties, *inherited_record_properties)))
+    property_fields = tuple(
+        dict.fromkeys((*declared_properties, *inherited_record_properties))
+    )
     for name in declared_properties:
         annotations[f"_{name}"] = annotations.pop(name)
     record_type.__annotations__ = annotations
@@ -84,7 +88,9 @@ def record(record_type: type[Record]) -> type[Record]:
     setattr(
         public_init,
         "__signature__",
-        Signature(public_parameters, return_annotation=generated_signature.return_annotation),
+        Signature(
+            public_parameters, return_annotation=generated_signature.return_annotation
+        ),
     )
     setattr(public_init, "__annotations__", public_annotations)
     setattr(frozen_record, "__init__", public_init)

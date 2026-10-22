@@ -1,27 +1,22 @@
 """Shared materialization base for resources backed by a configured data transform."""
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import json
 from importlib import import_module
 from inspect import Parameter, signature
 from typing import Callable, TypeGuard, get_type_hints
 
-from pydantic import Field
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from ml_platform.data_sdk.configs import TransformConfig
-from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition
-from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
-from ml_platform.data_sdk.materializers.exceptions import (
-    DatasetPartitionPlanError,
-    DuplicateDatasetArgumentError,
-    TransformDatasetInjectionError,
-    TransformImportError,
-    TransformParameterError,
-    TransformTypeError,
+from ml_platform.data_sdk.materializers._base import (
+    Materializer,
+    MaterializerConfig,
+    MaterializerPartition,
 )
+from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
 from ml_platform.data_sdk.materializers._materialization_validator import (
     AllPartitionsTemporalFilterConfig,
     ExactColumnsValidationConfig,
@@ -31,11 +26,19 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
     UniqueKeyValidationConfig,
     ValidationConfig,
 )
+from ml_platform.data_sdk.materializers.exceptions import (
+    DatasetPartitionPlanError,
+    DuplicateDatasetArgumentError,
+    TransformDatasetInjectionError,
+    TransformImportError,
+    TransformParameterError,
+    TransformTypeError,
+)
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._types import (
-    DataType,
     Dataset,
     DatasetReference,
+    DataType,
     FeatureDatasetDependency,
     FeatureKey,
 )
@@ -43,7 +46,6 @@ from ml_platform.data_sdk.transforms._types import (
 
 class TransformMaterializationConfig(MaterializerConfig, TransformConfig):
     """Runtime transformation definition enriched with materialization-specific inputs."""
-
 
 
 @dataclass(frozen=True)
@@ -92,8 +94,13 @@ class TransformMaterializer[
             },
             partition_type=self.config.partition_type,
             description=self.config.description,
-            dependencies=tuple(dataset.model_dump(mode="json") for dataset in self.config.datasets),
-            validations=tuple(validation.model_dump(mode="json") for validation in self.config.validations),
+            dependencies=tuple(
+                dataset.model_dump(mode="json") for dataset in self.config.datasets
+            ),
+            validations=tuple(
+                validation.model_dump(mode="json")
+                for validation in self.config.validations
+            ),
             additional_properties=(
                 ("transform.dtype", self.config.dtype),
                 ("transform.feature_keys", json.dumps(self.config.feature_keys)),
@@ -103,7 +110,11 @@ class TransformMaterializer[
 
     def _row_digest(self) -> F.Column:
         """Hash the canonical persisted columns for partition completion receipts."""
-        columns = ("timestamp", *self._feature_key_columns, self._table_definition.value_column)
+        columns = (
+            "timestamp",
+            *self._feature_key_columns,
+            self._table_definition.value_column,
+        )
         return F.sha2(F.to_json(F.struct(*(F.col(column) for column in columns))), 256)
 
     @property
@@ -157,7 +168,8 @@ class TransformMaterializer[
             (dependency.partition_id, dependency.timestamp, dependency.snapshot_id)
             for output_partition in output_partitions
             for dependency in output_partition.partition_dependencies
-            if (dependency.dataset_name, dependency.dataset_version) == (dataset.name, dataset.version)
+            if (dependency.dataset_name, dependency.dataset_version)
+            == (dataset.name, dataset.version)
         }
         if not planned_partitions:
             raise DatasetPartitionPlanError(
@@ -165,9 +177,9 @@ class TransformMaterializer[
             )
         table_identifier = TransformMaterializer._dataset_table_identifier(dataset)
         partition_data_frames = [
-            spark.read.option("versionAsOf", snapshot_id).table(table_identifier).where(
-                F.to_date("timestamp") == F.to_date(F.lit(partition_timestamp))
-            )
+            spark.read.option("versionAsOf", snapshot_id)
+            .table(table_identifier)
+            .where(F.to_date("timestamp") == F.to_date(F.lit(partition_timestamp)))
             for _, partition_timestamp, snapshot_id in sorted(
                 planned_partitions,
                 key=lambda partition: (partition[1], partition[0]),
@@ -236,7 +248,8 @@ class TransformMaterializer[
         constructor_parameters = {
             name: parameter
             for name, parameter in signature(transform_class).parameters.items()
-            if parameter.kind in {Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY}
+            if parameter.kind
+            in {Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY}
         }
         annotations = get_type_hints(transform_class.__init__)
         injected_parameters = {
@@ -268,9 +281,13 @@ class TransformMaterializer[
         if missing_parameters or unexpected_parameters:
             discrepancies = []
             if missing_parameters:
-                discrepancies.append(f"missing: {', '.join(sorted(missing_parameters))}")
+                discrepancies.append(
+                    f"missing: {', '.join(sorted(missing_parameters))}"
+                )
             if unexpected_parameters:
-                discrepancies.append(f"unexpected: {', '.join(sorted(unexpected_parameters))}")
+                discrepancies.append(
+                    f"unexpected: {', '.join(sorted(unexpected_parameters))}"
+                )
             raise TransformParameterError(
                 f"Transform parameter names differ from the constructor ({'; '.join(discrepancies)})."
             )
@@ -283,7 +300,9 @@ class TransformMaterializer[
                     f"got {type(value).__name__})."
                 )
         try:
-            return transform_class(**datasets, **injected_parameters, **config.parameters)
+            return transform_class(
+                **datasets, **injected_parameters, **config.parameters
+            )
         except TypeError as error:
             raise TransformParameterError(
                 f"Cannot construct transform {transform_class.__name__}: {error}"
@@ -292,5 +311,7 @@ class TransformMaterializer[
     def _transform(self, spark: SparkSession) -> Transform:
         """Load pinned datasets and instantiate this materializer's configured transform."""
         datasets = self._load_planned_datasets(spark)
-        transform_class = self._load_transform(self.config.transform, self._transform_type)
+        transform_class = self._load_transform(
+            self.config.transform, self._transform_type
+        )
         return self._inject_transform(transform_class, datasets)

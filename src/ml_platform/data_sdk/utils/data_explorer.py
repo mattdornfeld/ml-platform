@@ -19,7 +19,9 @@ class ParquetExplorerSourceError(DataSdkError):
 
 def _minio_filesystem() -> fs.S3FileSystem:
     """Build a PyArrow S3 filesystem for the configured MinIO endpoint."""
-    endpoint = os.environ.get("S3_ENDPOINT", os.environ.get("MINIO_ENDPOINT", "http://127.0.0.1:9000"))
+    endpoint = os.environ.get(
+        "S3_ENDPOINT", os.environ.get("MINIO_ENDPOINT", "http://127.0.0.1:9000")
+    )
     parsed = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")
     return fs.S3FileSystem(
         access_key=os.environ.get("MINIO_ROOT_USER", "minio"),
@@ -29,7 +31,9 @@ def _minio_filesystem() -> fs.S3FileSystem:
     )
 
 
-def _parquet_source(directory: str | Path) -> tuple[str | list[str], fs.FileSystem | None]:
+def _parquet_source(
+    directory: str | Path,
+) -> tuple[str | list[str], fs.FileSystem | None]:
     """Resolve a local directory or an s3/s3a URI into a PyArrow dataset source."""
     value = str(directory)
     parsed = urlparse(value)

@@ -4,9 +4,10 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-import ml_platform.data_sdk.dataset_transforms._market_data
-
-from ml_platform.data_sdk.materializers._dataset import DatasetMaterializationConfig, DatasetMaterializer
+from ml_platform.data_sdk.materializers._dataset import (
+    DatasetMaterializationConfig,
+    DatasetMaterializer,
+)
 from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
 
 
@@ -15,12 +16,28 @@ class DatasetWorkerTest(unittest.TestCase):
 
     def config(self, dataset_type: str = "market_data") -> DatasetMaterializationConfig:
         """Build one strict dataset job configuration."""
-        return DatasetMaterializationConfig.model_validate_json(json.dumps({
-            "name": "sp500", "version": 3, "description": "Test market data.",
-            "dataset_type": dataset_type, "keys": ["symbol"], "partition_type": "daily",
-            "symbols": ["AAPL"], "validations": [], "warehouse_dir": "temporary-warehouse",
-            "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
-        }))
+        return DatasetMaterializationConfig.model_validate_json(
+            json.dumps(
+                {
+                    "name": "sp500",
+                    "version": 3,
+                    "description": "Test market data.",
+                    "dataset_type": dataset_type,
+                    "keys": ["symbol"],
+                    "partition_type": "daily",
+                    "symbols": ["AAPL"],
+                    "validations": [],
+                    "warehouse_dir": "temporary-warehouse",
+                    "partitions": [
+                        {
+                            "partition_id": "partition-1",
+                            "timestamp": "2026-01-01T00:00:00Z",
+                            "callback_token": "token",
+                        }
+                    ],
+                }
+            )
+        )
 
     @patch("ml_platform.data_sdk.dataset_transforms._market_data.MarketDataTransform")
     def test_market_data_dispatches_to_transform(self, transform: MagicMock) -> None:
@@ -28,7 +45,9 @@ class DatasetWorkerTest(unittest.TestCase):
         worker = DatasetMaterializer(self.config())
         worker._transform(MagicMock())
         self.assertEqual(transform.call_args.kwargs["symbols"], ["AAPL"])
-        self.assertEqual(transform.call_args.kwargs["partitions"][0].date().isoformat(), "2026-01-01")
+        self.assertEqual(
+            transform.call_args.kwargs["partitions"][0].date().isoformat(), "2026-01-01"
+        )
 
     def test_unsupported_dataset_type_is_rejected_by_configuration(self) -> None:
         """Unknown dataset types cannot enter the materializer contract."""
@@ -40,7 +59,6 @@ class DatasetWorkerTest(unittest.TestCase):
         table = DatasetMaterializer(self.config()).iceberg_table
         self.assertIsInstance(table, IcebergTable)
         self.assertEqual(table.partition_type.value, "daily")
-
 
 
 if __name__ == "__main__":

@@ -1,17 +1,17 @@
 """Immutable Iceberg table definition and persistence operations."""
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
-import json
 from pathlib import Path
 from typing import assert_never
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-from ml_platform.data_sdk.transforms._types import PartitionType
 from ml_platform.data_sdk.materializers.exceptions import MissingIcebergSnapshotError
+from ml_platform.data_sdk.transforms._types import PartitionType
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,9 @@ class IcebergTable:
     @property
     def _schema_ddl(self) -> str:
         """Translate this table's typed schema into Spark SQL column declarations."""
-        return ", ".join(f"{name} {data_type.upper()}" for name, data_type in self.schema.items())
+        return ", ".join(
+            f"{name} {data_type.upper()}" for name, data_type in self.schema.items()
+        )
 
     @classmethod
     def id_for(cls, catalog: str, namespace: str, name: str, version: int) -> str:
@@ -71,7 +73,11 @@ class IcebergTable:
 
     def storage_path(self, warehouse_dir: str | Path) -> Path:
         """Return this table's immutable warehouse directory."""
-        return Path(warehouse_dir).resolve() / self.namespace / f"{self.name}-v{self.version}"
+        return (
+            Path(warehouse_dir).resolve()
+            / self.namespace
+            / f"{self.name}-v{self.version}"
+        )
 
     @staticmethod
     def _sql_literal(value: str) -> str:
@@ -91,20 +97,30 @@ class IcebergTable:
     def partition_keys(self, timestamps: tuple[datetime, ...]) -> tuple[str, ...]:
         """Normalize requested timestamps to stable persisted partition keys."""
         return tuple(
-            self.partition_type.normalize_timestamp(timestamp).strftime("%Y-%m-%dT%H:%M:%S")
+            self.partition_type.normalize_timestamp(timestamp).strftime(
+                "%Y-%m-%dT%H:%M:%S"
+            )
             for timestamp in timestamps
         )
 
     def _reconcile_properties(self, spark: SparkSession) -> None:
         """Set immutable definition metadata when an old table lacks it."""
         existing_properties = {
-            row.key: row.value for row in spark.sql(f"SHOW TBLPROPERTIES {self.id}").collect()
+            row.key: row.value
+            for row in spark.sql(f"SHOW TBLPROPERTIES {self.id}").collect()
         }
         if existing_properties.get("resource.type") == self.resource_type:
             return
         obsolete_keys = {
             f"{self.resource_type}.{field}"
-            for field in ("name", "version", "frequency", "description", "validations", "upstream_spec")
+            for field in (
+                "name",
+                "version",
+                "frequency",
+                "description",
+                "validations",
+                "upstream_spec",
+            )
         }.intersection(existing_properties)
         if obsolete_keys:
             keys = ", ".join(self._sql_literal(key) for key in sorted(obsolete_keys))
@@ -121,7 +137,11 @@ class IcebergTable:
             self._reconcile_properties(spark)
             return
         spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {self.catalog}.{self.namespace}")
-        writer = spark.createDataFrame([], self._schema_ddl).writeTo(self.id).using("iceberg")
+        writer = (
+            spark.createDataFrame([], self._schema_ddl)
+            .writeTo(self.id)
+            .using("iceberg")
+        )
         for key, value in self._properties:
             writer = writer.tableProperty(key, value)
         writer.partitionedBy(self._partition_transform()).create()
@@ -145,7 +165,10 @@ class IcebergTable:
         return int(snapshot["snapshot_id"])
 
     def partition_content_hashes(
-        self, spark: SparkSession, timestamps: tuple[datetime, ...], row_digest: F.Column
+        self,
+        spark: SparkSession,
+        timestamps: tuple[datetime, ...],
+        row_digest: F.Column,
     ) -> dict[str, str]:
         """Hash requested committed partitions using the materializer's row digest."""
         target_keys = self.partition_keys(timestamps)
@@ -158,12 +181,18 @@ class IcebergTable:
             .withColumn("partition_key", partition_key)
             .where(F.col("partition_key").isin(sorted(set(target_keys))))
             .groupBy("partition_key")
-            .agg(F.sha2(F.concat_ws("", F.sort_array(F.collect_list(row_digest))), 256).alias("content_hash"))
+            .agg(
+                F.sha2(
+                    F.concat_ws("", F.sort_array(F.collect_list(row_digest))), 256
+                ).alias("content_hash")
+            )
             .collect()
         )
         return {row["partition_key"]: row["content_hash"] for row in rows}
 
-    def partition_row_counts(self, spark: SparkSession, timestamps: tuple[datetime, ...]) -> dict[str, int]:
+    def partition_row_counts(
+        self, spark: SparkSession, timestamps: tuple[datetime, ...]
+    ) -> dict[str, int]:
         """Count rows in requested committed partitions."""
         target_keys = self.partition_keys(timestamps)
         partition_key = F.date_format(

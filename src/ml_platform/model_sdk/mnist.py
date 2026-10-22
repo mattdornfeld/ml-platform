@@ -49,7 +49,9 @@ class MNISTDataModule(pl.LightningDataModule):
     def train_dataloader(self) -> DataLoader:
         """Return shuffled batches from the MNIST training dataset."""
         if self.train_dataset is None:
-            raise RuntimeError("Call setup('fit') before requesting the training loader.")
+            raise RuntimeError(
+                "Call setup('fit') before requesting the training loader."
+            )
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -60,7 +62,9 @@ class MNISTDataModule(pl.LightningDataModule):
     def val_dataloader(self) -> DataLoader:
         """Return ordered batches from the MNIST test dataset for validation."""
         if self.test_dataset is None:
-            raise RuntimeError("Call setup('fit') before requesting the validation loader.")
+            raise RuntimeError(
+                "Call setup('fit') before requesting the validation loader."
+            )
         return DataLoader(
             self.test_dataset,
             batch_size=self.batch_size,
@@ -98,25 +102,35 @@ class MNISTClassifier(pl.LightningModule):
         """Convert a batch of images into unnormalized class scores."""
         return self.model(images)
 
-    def _shared_step(self, batch: tuple[torch.Tensor, torch.Tensor], stage: str) -> torch.Tensor:
+    def _shared_step(
+        self, batch: tuple[torch.Tensor, torch.Tensor], stage: str
+    ) -> torch.Tensor:
         """Calculate loss and accuracy for one batch and log stage-specific metrics."""
         images, labels = batch
         logits = self(images)
         loss = F.cross_entropy(logits, labels)
         accuracy = (logits.argmax(dim=1) == labels).float().mean()
         self.log(f"{stage}_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log(f"{stage}_accuracy", accuracy, on_step=False, on_epoch=True, prog_bar=True)
+        self.log(
+            f"{stage}_accuracy", accuracy, on_step=False, on_epoch=True, prog_bar=True
+        )
         return loss
 
-    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(
+        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
         """Run one optimization batch and return its cross-entropy loss."""
         return self._shared_step(batch, "train")
 
-    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def validation_step(
+        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> None:
         """Evaluate and log metrics for one validation batch."""
         self._shared_step(batch, "val")
 
-    def test_step(self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> None:
+    def test_step(
+        self, batch: tuple[torch.Tensor, torch.Tensor], batch_idx: int
+    ) -> None:
         """Evaluate and log metrics for one final test batch."""
         self._shared_step(batch, "test")
 

@@ -19,7 +19,9 @@ class FeatureMaterializationConfig(TransformMaterializationConfig):
 
 
 @dataclass(frozen=True)
-class FeatureMaterializer(TransformMaterializer[FeatureMaterializationConfig, FeatureTransform]):
+class FeatureMaterializer(
+    TransformMaterializer[FeatureMaterializationConfig, FeatureTransform]
+):
     """Materialize API-pinned feature partitions with immutable input revisions."""
 
     @property

@@ -7,7 +7,8 @@ from typing import Any
 from uuid import UUID
 
 import psycopg
-from kubernetes import client, config as kubernetes_config
+from kubernetes import client
+from kubernetes import config as kubernetes_config
 from kubernetes.client.exceptions import ApiException
 from psycopg.rows import dict_row
 
@@ -86,31 +87,74 @@ class JobScheduler:
             "metadata": {
                 "name": application_name,
                 "namespace": namespace,
-                "labels": {QUEUE_LABEL: QUEUE_NAME, "api.ml-control-plane.io/job-id": str(job_id)},
+                "labels": {
+                    QUEUE_LABEL: QUEUE_NAME,
+                    "api.ml-control-plane.io/job-id": str(job_id),
+                },
                 "annotations": {"kueue.x-k8s.io/admission-gated-by": ADMISSION_GATE},
             },
             "spec": {
-                "type": "Python", "mode": "cluster", "suspend": True,
+                "type": "Python",
+                "mode": "cluster",
+                "suspend": True,
                 "image": os.environ.get("MATERIALIZATION_IMAGE", "ml-platform:latest"),
                 "imagePullPolicy": "IfNotPresent",
                 "mainApplicationFile": "local:///app/src/ml_platform/data_sdk/materializers/_dataset.py",
-                "arguments": ["--config-json", json.dumps({**dataset["config"], "name": dataset["name"], "version": dataset["version"], "dataset_type": dataset["dataset_type"], "warehouse_dir": os.environ.get("DATA_WAREHOUSE_DIR", "s3a://warehouse"), "partitions": dataset["callbacks"]}, default=str)],
-                "sparkVersion": "4.1.3", "restartPolicy": {"type": "Never"},
+                "arguments": [
+                    "--config-json",
+                    json.dumps(
+                        {
+                            **dataset["config"],
+                            "name": dataset["name"],
+                            "version": dataset["version"],
+                            "dataset_type": dataset["dataset_type"],
+                            "warehouse_dir": os.environ.get(
+                                "DATA_WAREHOUSE_DIR", "s3a://warehouse"
+                            ),
+                            "partitions": dataset["callbacks"],
+                        },
+                        default=str,
+                    ),
+                ],
+                "sparkVersion": "4.1.3",
+                "restartPolicy": {"type": "Never"},
                 "sparkConf": {
                     "spark.sql.session.timeZone": "UTC",
-                    "spark.hadoop.fs.s3a.endpoint": os.environ.get("S3_ENDPOINT", "http://minio:9000"),
+                    "spark.hadoop.fs.s3a.endpoint": os.environ.get(
+                        "S3_ENDPOINT", "http://minio:9000"
+                    ),
                     "spark.hadoop.fs.s3a.path.style.access": "true",
                     "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
-                    "spark.hadoop.fs.s3a.access.key": os.environ.get("MINIO_ROOT_USER", "minio"),
-                    "spark.hadoop.fs.s3a.secret.key": os.environ.get("MINIO_ROOT_PASSWORD", "miniosecret"),
+                    "spark.hadoop.fs.s3a.access.key": os.environ.get(
+                        "MINIO_ROOT_USER", "minio"
+                    ),
+                    "spark.hadoop.fs.s3a.secret.key": os.environ.get(
+                        "MINIO_ROOT_PASSWORD", "miniosecret"
+                    ),
                 },
-                "driver": {"cores": 1, "memory": "2g", "serviceAccount": "ml-control-plane", "env": [{"name": "MATERIALIZATION_API_URL", "value": "http://ml-control-plane:8000"}]},
+                "driver": {
+                    "cores": 1,
+                    "memory": "2g",
+                    "serviceAccount": "ml-control-plane",
+                    "env": [
+                        {
+                            "name": "MATERIALIZATION_API_URL",
+                            "value": "http://ml-control-plane:8000",
+                        }
+                    ],
+                },
                 "executor": {"instances": 2, "cores": 1, "memory": "2g"},
             },
         }
         api = client.CustomObjectsApi()
         try:
-            api.create_namespaced_custom_object("sparkoperator.k8s.io", "v1beta2", namespace, "sparkapplications", application)
+            api.create_namespaced_custom_object(
+                "sparkoperator.k8s.io",
+                "v1beta2",
+                namespace,
+                "sparkapplications",
+                application,
+            )
         except ApiException as error:
             if error.status != 409:
                 raise
@@ -141,20 +185,75 @@ class JobScheduler:
         feature = self._feature_job(job_id)
         namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
         application = {
-            "apiVersion": "sparkoperator.k8s.io/v1beta2", "kind": "SparkApplication",
-            "metadata": {"name": application_name, "namespace": namespace,
-                "labels": {QUEUE_LABEL: QUEUE_NAME, "api.ml-control-plane.io/job-id": str(job_id)},
-                "annotations": {"kueue.x-k8s.io/admission-gated-by": ADMISSION_GATE}},
-            "spec": {"type": "Python", "mode": "cluster", "suspend": True,
-                "image": os.environ.get("MATERIALIZATION_IMAGE", "ml-platform:latest"), "imagePullPolicy": "IfNotPresent",
+            "apiVersion": "sparkoperator.k8s.io/v1beta2",
+            "kind": "SparkApplication",
+            "metadata": {
+                "name": application_name,
+                "namespace": namespace,
+                "labels": {
+                    QUEUE_LABEL: QUEUE_NAME,
+                    "api.ml-control-plane.io/job-id": str(job_id),
+                },
+                "annotations": {"kueue.x-k8s.io/admission-gated-by": ADMISSION_GATE},
+            },
+            "spec": {
+                "type": "Python",
+                "mode": "cluster",
+                "suspend": True,
+                "image": os.environ.get("MATERIALIZATION_IMAGE", "ml-platform:latest"),
+                "imagePullPolicy": "IfNotPresent",
                 "mainApplicationFile": "local:///app/src/ml_platform/data_sdk/materializers/_feature.py",
-                "arguments": ["--config-json", json.dumps({**feature["config"], "warehouse_dir": os.environ.get("DATA_WAREHOUSE_DIR", "s3a://warehouse"), "partitions": feature["callbacks"]}, default=str)],
-                "sparkVersion": "4.1.3", "restartPolicy": {"type": "Never"},
-                "sparkConf": {"spark.sql.session.timeZone": "UTC", "spark.hadoop.fs.s3a.endpoint": os.environ.get("S3_ENDPOINT", "http://minio:9000"), "spark.hadoop.fs.s3a.path.style.access": "true", "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem", "spark.hadoop.fs.s3a.access.key": os.environ.get("MINIO_ROOT_USER", "minio"), "spark.hadoop.fs.s3a.secret.key": os.environ.get("MINIO_ROOT_PASSWORD", "miniosecret")},
-                "driver": {"cores": 1, "memory": "2g", "serviceAccount": "ml-control-plane", "env": [{"name": "MATERIALIZATION_API_URL", "value": "http://ml-control-plane:8000"}]},
-                "executor": {"instances": 2, "cores": 1, "memory": "2g"}}}
+                "arguments": [
+                    "--config-json",
+                    json.dumps(
+                        {
+                            **feature["config"],
+                            "warehouse_dir": os.environ.get(
+                                "DATA_WAREHOUSE_DIR", "s3a://warehouse"
+                            ),
+                            "partitions": feature["callbacks"],
+                        },
+                        default=str,
+                    ),
+                ],
+                "sparkVersion": "4.1.3",
+                "restartPolicy": {"type": "Never"},
+                "sparkConf": {
+                    "spark.sql.session.timeZone": "UTC",
+                    "spark.hadoop.fs.s3a.endpoint": os.environ.get(
+                        "S3_ENDPOINT", "http://minio:9000"
+                    ),
+                    "spark.hadoop.fs.s3a.path.style.access": "true",
+                    "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
+                    "spark.hadoop.fs.s3a.access.key": os.environ.get(
+                        "MINIO_ROOT_USER", "minio"
+                    ),
+                    "spark.hadoop.fs.s3a.secret.key": os.environ.get(
+                        "MINIO_ROOT_PASSWORD", "miniosecret"
+                    ),
+                },
+                "driver": {
+                    "cores": 1,
+                    "memory": "2g",
+                    "serviceAccount": "ml-control-plane",
+                    "env": [
+                        {
+                            "name": "MATERIALIZATION_API_URL",
+                            "value": "http://ml-control-plane:8000",
+                        }
+                    ],
+                },
+                "executor": {"instances": 2, "cores": 1, "memory": "2g"},
+            },
+        }
         try:
-            client.CustomObjectsApi().create_namespaced_custom_object("sparkoperator.k8s.io", "v1beta2", namespace, "sparkapplications", application)
+            client.CustomObjectsApi().create_namespaced_custom_object(
+                "sparkoperator.k8s.io",
+                "v1beta2",
+                namespace,
+                "sparkapplications",
+                application,
+            )
         except ApiException as error:
             if error.status != 409:
                 raise
@@ -163,7 +262,8 @@ class JobScheduler:
         """Load immutable feature metadata, dependencies, and authenticated callbacks."""
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             with connection.cursor() as cursor:
-                cursor.execute("""SELECT features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters,
+                cursor.execute(
+                    """SELECT features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters,
                     json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'argument_name', dependencies.argument_name, 'num_lookback_partitions', dependencies.num_lookback_partitions)) AS datasets,
                     (SELECT json_agg(json_build_object(
                         'partition_id', request.partition_id,
@@ -187,20 +287,48 @@ class JobScheduler:
                     JOIN feature_dataset_dependencies dependencies ON dependencies.feature_name = features.name AND dependencies.feature_version = features.version
                     JOIN datasets AS input_datasets ON input_datasets.name = dependencies.dataset_name
                       AND input_datasets.version = dependencies.dataset_version
-                    WHERE target.job_id = %s GROUP BY features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters""", (job_id, job_id))
+                    WHERE target.job_id = %s GROUP BY features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters""",
+                    (job_id, job_id),
+                )
                 row = cursor.fetchone()
         if row is None:
             raise ValueError(f"No feature partitions are associated with job {job_id}.")
-        config = {key: row[key] for key in ("name", "version", "dtype", "frequency", "feature_keys", "validations", "transform", "description", "parameters", "datasets")}
+        config = {
+            key: row[key]
+            for key in (
+                "name",
+                "version",
+                "dtype",
+                "frequency",
+                "feature_keys",
+                "validations",
+                "transform",
+                "description",
+                "parameters",
+                "datasets",
+            )
+        }
         return {"config": config, "callbacks": row["callbacks"]}
 
     def _is_eligible(self, job_id: UUID, job_type: str) -> bool:
         """Allow only the oldest submitted job for every partition it targets."""
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             with connection.cursor() as cursor:
-                table = "partition_update_requests" if job_type == "dataset_materialization" else "feature_partition_update_requests"
-                name = "dataset_name" if job_type == "dataset_materialization" else "feature_name"
-                version = "dataset_version" if job_type == "dataset_materialization" else "feature_version"
+                table = (
+                    "partition_update_requests"
+                    if job_type == "dataset_materialization"
+                    else "feature_partition_update_requests"
+                )
+                name = (
+                    "dataset_name"
+                    if job_type == "dataset_materialization"
+                    else "feature_name"
+                )
+                version = (
+                    "dataset_version"
+                    if job_type == "dataset_materialization"
+                    else "feature_version"
+                )
                 cursor.execute(
                     f"SELECT {name}, {version}, timestamp FROM {table} WHERE job_id = %s ORDER BY {name}, {version}, timestamp",
                     (job_id,),
@@ -208,7 +336,9 @@ class JobScheduler:
                 targets = cursor.fetchall()
                 for target in targets:
                     key = f"{job_type}:{target[name]}:{target[version]}:{target['timestamp'].isoformat()}"
-                    cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+                    cursor.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,)
+                    )
                 cursor.execute(
                     f"""SELECT EXISTS (
                         SELECT 1 FROM {table} AS current_request
@@ -232,16 +362,26 @@ class JobScheduler:
         """Release an API-eligible SparkApplication into Kueue resource admission."""
         namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
         client.CustomObjectsApi().patch_namespaced_custom_object(
-            "sparkoperator.k8s.io", "v1beta2", namespace, "sparkapplications", application_name,
+            "sparkoperator.k8s.io",
+            "v1beta2",
+            namespace,
+            "sparkapplications",
+            application_name,
             {"metadata": {"annotations": {"kueue.x-k8s.io/admission-gated-by": None}}},
         )
 
-    def _observe_application(self, job_id: UUID, application_name: str, job_type: str) -> None:
+    def _observe_application(
+        self, job_id: UUID, application_name: str, job_type: str
+    ) -> None:
         """Map terminal Spark states to the API's durable terminal status."""
         namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
         try:
             application = client.CustomObjectsApi().get_namespaced_custom_object(
-                "sparkoperator.k8s.io", "v1beta2", namespace, "sparkapplications", application_name
+                "sparkoperator.k8s.io",
+                "v1beta2",
+                namespace,
+                "sparkapplications",
+                application_name,
             )
         except ApiException as error:
             if error.status == 404:
@@ -250,8 +390,14 @@ class JobScheduler:
         if not isinstance(application, dict):
             return
         status = application.get("status")
-        application_state = status.get("applicationState") if isinstance(status, dict) else None
-        state = application_state.get("state") if isinstance(application_state, dict) else None
+        application_state = (
+            status.get("applicationState") if isinstance(status, dict) else None
+        )
+        state = (
+            application_state.get("state")
+            if isinstance(application_state, dict)
+            else None
+        )
         if state in {"FAILED", "SUBMISSION_FAILED", "UNKNOWN"}:
             self._finish(job_id, "failed", job_type)
         elif state == "COMPLETED":
@@ -261,7 +407,11 @@ class JobScheduler:
         """Persist a terminal outcome after confirming all successful receipts exist."""
         with psycopg.connect(self.database_url) as connection:
             with connection.cursor() as cursor:
-                table = "partition_update_requests" if job_type == "dataset_materialization" else "feature_partition_update_requests"
+                table = (
+                    "partition_update_requests"
+                    if job_type == "dataset_materialization"
+                    else "feature_partition_update_requests"
+                )
                 if outcome == "succeeded":
                     cursor.execute(
                         f"SELECT EXISTS (SELECT 1 FROM {table} WHERE job_id = %s AND status <> 'created')",
@@ -271,6 +421,12 @@ class JobScheduler:
                     if result is not None and result[0]:
                         outcome = "failed"
                 if outcome == "failed":
-                    cursor.execute(f"UPDATE {table} SET status = 'failed', updated_at = now() WHERE job_id = %s AND status = 'pending'", (job_id,))
-                cursor.execute("UPDATE jobs SET status = %s, updated_at = now() WHERE id = %s AND status = 'submitted'", (outcome, job_id))
+                    cursor.execute(
+                        f"UPDATE {table} SET status = 'failed', updated_at = now() WHERE job_id = %s AND status = 'pending'",
+                        (job_id,),
+                    )
+                cursor.execute(
+                    "UPDATE jobs SET status = %s, updated_at = now() WHERE id = %s AND status = 'submitted'",
+                    (outcome, job_id),
+                )
             connection.commit()
