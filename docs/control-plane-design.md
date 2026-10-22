@@ -222,18 +222,19 @@ The harness always enforces the following invariants before any Iceberg write:
 - the returned column set is exactly `timestamp`, the configured feature keys, and `feature_value`;
 - `timestamp`, every feature key, and `feature_value` are non-null, and `feature_value` is castable to the registered `dtype`;
 - each `(timestamp, feature_keys)` tuple is unique; and
-- the emitted output-partition set is exactly the requested output-partition set. Missing and extra partitions both fail the job.
+- the emitted output-partition set contains no partition outside the requested output-partition set. Missing requested partitions fail unless the resource validation policy explicitly permits empty partitions.
 
 The feature YAML or API `validations` object configures the remaining checks:
 
 ```yaml
 validations:
   min_rows_per_partition: 1
+  allow_empty_partitions: false
   require_finite_feature_value: true
   require_feature_keys_from_input: true
 ```
 
-`min_rows_per_partition` defaults to `1`. When enabled (the default), `require_finite_feature_value` rejects `NaN`, positive infinity, and negative infinity after the dtype cast. When enabled (the default), `require_feature_keys_from_input` rejects feature-key values that do not occur in the injected input datasets. The partition-set check is deliberately not configurable: a worker must never silently omit or add a requested partition.
+`MaterializationValidator` is the shared pre-write contract for every materializer. It validates required or exact columns, non-null persisted values, unique logical keys, requested partition coverage, minimum row counts, and static transform layout declarations. `min_rows_per_partition` defaults to `1` and applies to each non-empty requested partition. `allow_empty_partitions` defaults to `false`; when `true`, a requested partition may have no rows and receives an empty receipt with row count zero and the empty content hash. Output from an unrequested partition always fails. Feature materializers additionally apply finite-value and input-key-membership policies. When enabled (the default), `require_finite_feature_value` rejects `NaN`, positive infinity, and negative infinity after the dtype cast. When enabled (the default), `require_feature_keys_from_input` rejects feature-key values that do not occur in the injected input datasets.
 
 ### Commit and completion
 

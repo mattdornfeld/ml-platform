@@ -48,7 +48,16 @@ class FeatureKey(StrEnum):
     SYMBOL = "symbol"
 
 
-class FeatureValidations(_ApiModel):
+class DataValidations(_ApiModel):
+    """Validation policy shared by every materialized resource."""
+
+    allow_empty_partitions: bool = Field(
+        default=False,
+        description="Whether requested partitions may complete without emitted rows.",
+    )
+
+
+class FeatureValidations(DataValidations):
     """Configurable validation requirements for returned feature DataFrames."""
 
     min_rows_per_partition: int = Field(default=1, ge=1)
@@ -73,7 +82,7 @@ class MarketDataDatasetConfig(_ApiModel):
     """Definition fields for a market-data dataset, excluding its derived ID."""
 
     description: str = Field(default="Market data.", min_length=1)
-    validations: dict[str, Any] = Field(default_factory=dict)
+    validations: DataValidations = Field(default_factory=DataValidations)
     keys: list[FeatureKey] = Field(min_length=1)
     partition_type: Literal["hourly", "daily"]
     symbols: list[str] = Field(min_length=1)

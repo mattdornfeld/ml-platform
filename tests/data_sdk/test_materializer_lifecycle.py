@@ -27,6 +27,7 @@ def dataset_worker() -> DatasetMaterializer:
         "description": "Hourly market bars.",
         "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily",
         "symbols": ["AAPL"],
+        "validations": {"allow_empty_partitions": True},
         "warehouse_dir": "temporary-warehouse",
         "partitions": [{
             "partition_id": "dataset-partition",

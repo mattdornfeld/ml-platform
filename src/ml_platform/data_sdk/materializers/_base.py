@@ -16,6 +16,7 @@ from simple_classproperty import ClasspropertyMeta, classproperty
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import materialization_api_url, spark_master
+from ml_platform.data_sdk.materializers._validation import MaterializationValidator, MaterializerValidations
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._types import DatasetDependency
 from pyspark.sql import DataFrame, SparkSession
@@ -41,20 +42,6 @@ class MaterializerPartition(BaseConfig):
     partition_dependencies: list[PartionDependency] = Field(
         default_factory=list,
         description="Pinned parent dataset partition revisions required to produce this output partition.",
-    )
-
-
-class MaterializerValidations(BaseConfig):
-    """Validation policy shared by materializer runtime contracts."""
-
-    min_rows_per_partition: int = Field(
-        default=1, ge=1, description="Minimum number of output rows required in each requested partition."
-    )
-    require_finite_feature_value: bool = Field(
-        default=True, description="Whether feature values must be finite rather than NaN or infinite."
-    )
-    require_feature_keys_from_input: bool = Field(
-        default=True, description="Whether output feature keys must be present in the declared input datasets."
     )
 
 
@@ -105,7 +92,6 @@ _REQUIRED_MATERIALIZER_CLASS_PROPERTIES = frozenset({
     "spark_application_name",
     "iceberg_namespace",
     "callback_resource",
-    "allow_empty_partitions",
     "write_mode",
 })
 
@@ -151,11 +137,6 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
     @abstractmethod
     def callback_resource(cls) -> str:
         """Return the control-plane resource type completed by this worker."""
-
-    @classproperty
-    @abstractmethod
-    def allow_empty_partitions(cls) -> bool:
-        """Return whether requested partitions may receive an empty receipt."""
 
     @classproperty
     @abstractmethod
@@ -310,9 +291,14 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         """Cast or normalize a transform result before validation and persistence."""
         return frame
 
+    @property
+    def _validator(self) -> MaterializationValidator:
+        """Return the validation contract bound to this materialization job."""
+        return MaterializationValidator(self.config.validations, f"{type(self).__name__} transform")
+
     def _validate_frame(self, frame: DataFrame, spark: SparkSession, partition_spec: str) -> None:
-        """Apply resource-specific validation before any Iceberg write."""
-        self._validate_non_empty(frame, context=f"{type(self).__name__} transform")
+        """Apply the shared validation policy before any Iceberg write."""
+        self._validator.non_empty(frame)
 
     def _write_frame(self, frame: DataFrame) -> None:
         """Merge keyed rows or replace touched Iceberg partitions atomically."""
@@ -406,7 +392,7 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         target_partition_keys = self._target_partition_keys(partition_spec)
         content_hashes = self._partition_content_hashes(spark, partition_spec)
         missing = set(target_partition_keys) - content_hashes.keys()
-        if missing and not self.allow_empty_partitions:
+        if missing and not self.config.validations.allow_empty_partitions:
             raise ValueError(f"Transform produced no rows for requested partitions: {sorted(missing)}.")
         row_counts = self._partition_row_counts(spark, partition_spec)
         table_schema = {
@@ -445,69 +431,7 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         except KeyError as error:
             raise ValueError(f"Unsupported Iceberg partition transform: {partition_spec}.") from error
 
-    @staticmethod
-    def _validate_required_columns(frame: DataFrame, required: set[str], *, context: str) -> None:
-        """Reject transform output that omits required columns."""
-        missing = required.difference(frame.columns)
-        if missing:
-            raise ValueError(f"{context} omitted required columns: {', '.join(sorted(missing))}.")
 
-    @staticmethod
-    def _validate_exact_columns(frame: DataFrame, expected: set[str], *, context: str) -> None:
-        """Reject missing or unexpected columns in a transform result."""
-        actual = set(frame.columns)
-        if actual == expected:
-            return
-        details = []
-        if missing := expected - actual:
-            details.append(f"missing: {', '.join(sorted(missing))}")
-        if unexpected := actual - expected:
-            details.append(f"unexpected: {', '.join(sorted(unexpected))}")
-        raise ValueError(f"{context} must return exactly {sorted(expected)} ({'; '.join(details)}).")
-
-    @staticmethod
-    def _validate_non_null_columns(frame: DataFrame, columns: tuple[str, ...], *, context: str) -> None:
-        """Reject nulls after transform values have been cast to their storage types."""
-        null_predicate = F.col(columns[0]).isNull()
-        for column in columns[1:]:
-            null_predicate = null_predicate | F.col(column).isNull()
-        if frame.where(null_predicate).limit(1).count():
-            raise ValueError(f"{context} must emit non-null, castable {', '.join(columns)} values.")
-
-    @staticmethod
-    def _validate_unique_key(frame: DataFrame, columns: tuple[str, ...], *, context: str) -> None:
-        """Require one row per logical key."""
-        duplicates = frame.groupBy(*columns).count().where(F.col("count") > 1)
-        if duplicates.limit(1).count():
-            raise ValueError(f"{context} emitted duplicate ({', '.join(columns)}) rows.")
-
-    @staticmethod
-    def _validate_partition_coverage(
-        frame: DataFrame,
-        requested: DataFrame,
-        *,
-        partition_column: str,
-        min_rows: int,
-        context: str,
-    ) -> None:
-        """Require precisely the requested partitions and enough rows in each one."""
-        requested_keys = requested.select(partition_column).distinct()
-        emitted_keys = frame.select(partition_column).distinct()
-        missing = requested_keys.join(emitted_keys, partition_column, "left_anti")
-        unexpected = emitted_keys.join(requested_keys, partition_column, "left_anti")
-        if missing.limit(1).count() or unexpected.limit(1).count():
-            raise ValueError(f"{context} output partitions do not exactly match requested partitions.")
-
-        counts = frame.groupBy(partition_column).count()
-        too_small = counts.where(F.col("count") < min_rows)
-        if too_small.limit(1).count():
-            raise ValueError(f"{context} emitted fewer than {min_rows} rows for a requested partition.")
-
-    @staticmethod
-    def _validate_non_empty(frame: DataFrame, *, context: str) -> None:
-        """Reject an empty transform result before it can create a receipt."""
-        if not frame.limit(1).count():
-            raise ValueError(f"{context} returned no rows.")
 
     @staticmethod
     def _latest_snapshot_id(spark: SparkSession, identifier: str) -> int:

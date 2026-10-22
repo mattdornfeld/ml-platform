@@ -6,6 +6,7 @@ from simple_classproperty import classproperty
 from pyspark.sql import DataFrame, SparkSession, functions as F
 
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, WriteMode
+from ml_platform.data_sdk.materializers._validation import MaterializationValidator
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
 
@@ -61,11 +62,6 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
         return "dataset"
 
     @classproperty
-    def allow_empty_partitions(cls) -> bool:
-        """Allow a requested market day with no returned Yahoo Finance rows."""
-        return True
-
-    @classproperty
     def write_mode(cls) -> WriteMode:
         """Merge market rows by their stable timestamp and symbol identity."""
         return WriteMode.MERGE
@@ -76,17 +72,16 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
     ) -> int:
         """Validate and merge one transform's OHLCV frame into its versioned table."""
         materializer = cls(config)
-        cls._validate_required_columns(
-            frame, {"timestamp", "symbol", "market_session", *_OHLCV_COLUMNS}, context="Dataset transform"
-        )
+        validator = MaterializationValidator(config.validations, "Dataset transform")
+        validator.required_columns(frame, {"timestamp", "symbol", "market_session", *_OHLCV_COLUMNS})
         incoming = frame.select(
             F.col("timestamp").cast("timestamp").alias("timestamp"),
             F.col("symbol").cast("string").alias("symbol"),
             F.col("market_session").cast("string").alias("market_session"),
             *[F.col(column).cast("long" if column == "Volume" else "double").alias(column) for column in _OHLCV_COLUMNS],
         )
-        cls._validate_non_null_columns(incoming, ("timestamp", "symbol"), context="Dataset transform")
-        cls._validate_non_empty(incoming, context="Dataset transform")
+        validator.non_null_columns(incoming, ("timestamp", "symbol"))
+        validator.non_empty(incoming)
         transform = materializer._create_transform(spark)
         materializer._ensure_table(
             spark,
@@ -112,9 +107,7 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
 
     def _prepare_frame(self, frame: DataFrame) -> DataFrame:
         """Cast OHLCV values to the dataset's persisted types."""
-        self._validate_required_columns(
-            frame, set(_CONTENT_HASH_COLUMNS), context="Dataset transform"
-        )
+        self._validator.required_columns(frame, set(_CONTENT_HASH_COLUMNS))
         return frame.select(
             F.col("timestamp").try_cast("timestamp").alias("timestamp"),
             F.col("symbol").cast("string").alias("symbol"),
@@ -127,12 +120,16 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
 
     def _validate_frame(self, frame: DataFrame, spark: SparkSession, partition_spec: str) -> None:
         """Require complete, unique market rows in only the requested days."""
-        self._validate_non_null_columns(frame, _CONTENT_HASH_COLUMNS, context="Dataset transform")
-        self._validate_unique_key(frame, ("timestamp", "symbol"), context="Dataset transform")
-        requested_days = sorted({partition.timestamp.date() for partition in self.config.partitions})
-        unexpected_rows = frame.where(~F.to_date("timestamp").isin(requested_days))
-        if unexpected_rows.limit(1).count():
-            raise ValueError("Dataset transform emitted rows outside the requested partitions.")
+        self._validator.non_null_columns(frame, _CONTENT_HASH_COLUMNS)
+        self._validator.unique_key(frame, ("timestamp", "symbol"))
+        requested_partitions = spark.createDataFrame(
+            [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
+            "output_partition timestamp",
+        ).distinct()
+        partitioned = frame.withColumn(
+            "output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp"))
+        )
+        self._validator.partition_coverage(partitioned, requested_partitions, partition_column="output_partition")
 
     def _write_frame(self, frame: DataFrame) -> None:
         """Cluster source rows by day before the base class merges them."""

@@ -51,6 +51,27 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         connection.commit.assert_called_once()
         self.assertTrue(any("submitted" in str(call) for call in cursor.execute.call_args_list))
 
+    def test_dataset_validation_policy_includes_empty_partition_setting(self) -> None:
+        """Dataset registration exposes empty-partition handling as a typed validation policy."""
+        request = DatasetCreateRequest.model_validate({
+            "name": "sp500",
+            "version": 1,
+            "dataset_type": "market_data",
+            "config": {
+                "keys": ["symbol"],
+                "partition_type": "daily",
+                "symbols": ["AAPL"],
+                "time_range": {"start_date": "2026-01-01", "end_date": "2026-01-02"},
+                "validations": {"allow_empty_partitions": True},
+            },
+        })
+
+        self.assertTrue(request.config.validations.allow_empty_partitions)
+        self.assertEqual(
+            request.config.model_dump(mode="json")["validations"],
+            {"allow_empty_partitions": True},
+        )
+
     def test_dataset_partition_request_rejects_non_hour_timestamp(self) -> None:
         """Partition endpoints reject timestamps that are not aligned to the hour."""
         response = self.client.post(

@@ -114,7 +114,6 @@ class MaterializerContractTest(unittest.TestCase):
             "spark_application_name",
             "iceberg_namespace",
             "callback_resource",
-            "allow_empty_partitions",
             "write_mode",
         }
         self.assertTrue(required_properties.issubset(Materializer.__abstractmethods__))

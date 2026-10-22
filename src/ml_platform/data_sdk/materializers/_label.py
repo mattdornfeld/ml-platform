@@ -13,6 +13,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition, WriteMode
+from ml_platform.data_sdk.materializers._validation import MaterializationValidator
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.transforms._types import DataType, Dataset, DatasetDependency, FeatureKey, PartitionType
 
@@ -81,11 +82,6 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
         return "label"
 
     @classproperty
-    def allow_empty_partitions(cls) -> bool:
-        """Require at least one label row for every requested partition."""
-        return False
-
-    @classproperty
     def write_mode(cls) -> WriteMode:
         """Merge labels by their timestamp and configured feature-key identity."""
         return WriteMode.MERGE
@@ -108,7 +104,7 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
     def _prepare_frame(self, frame: DataFrame) -> DataFrame:
         """Cast a strategy result to the canonical label table schema."""
         expected_columns = {"timestamp", *self._feature_key_columns, "label_value"}
-        self._validate_exact_columns(frame, expected_columns, context="Label transform")
+        self._validator.exact_columns(frame, expected_columns)
         return frame.select(
             F.col("timestamp").try_cast("timestamp").alias("timestamp"),
             *(F.col(key).cast("string").alias(key) for key in self._feature_key_columns),
@@ -123,30 +119,24 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
             f"label_value {self.config.dtype.upper()}"
         )
         expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[self.config.frequency]
-        if transform.iceberg_schema != expected_schema:
-            raise ValueError(
-                "Label transform iceberg_schema does not match the explicitly configured "
-                "feature keys and dtype."
-            )
-        if transform.iceberg_partition_spec != expected_partition_spec:
-            raise ValueError(
-                "Label transform iceberg_partition_spec does not match the explicitly configured frequency."
-            )
+        self._validator.declared_layout(
+            actual_schema=transform.iceberg_schema,
+            expected_schema=expected_schema,
+            actual_partition_spec=transform.iceberg_partition_spec,
+            expected_partition_spec=expected_partition_spec,
+        )
 
     def _validate_frame(self, frame: DataFrame, spark: SparkSession, partition_spec: str) -> None:
         """Validate the canonical label contract before its Iceberg write."""
         required_columns = ("timestamp", *self._feature_key_columns, "label_value")
-        self._validate_non_null_columns(frame, required_columns, context="Label transform")
-        self._validate_unique_key(frame, ("timestamp", *self._feature_key_columns), context="Label transform")
+        self._validator.non_null_columns(frame, required_columns)
+        self._validator.unique_key(frame, ("timestamp", *self._feature_key_columns))
         partitioned = frame.withColumn("output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp")))
         requested = spark.createDataFrame(
             [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
             "output_partition timestamp",
         ).distinct()
-        self._validate_partition_coverage(
-            partitioned, requested, partition_column="output_partition",
-            min_rows=self.config.validations.min_rows_per_partition, context="Label transform",
-        )
+        self._validator.partition_coverage(partitioned, requested, partition_column="output_partition")
 
     def _row_digest(self) -> F.Column:
         """Hash the canonical persisted fields for one label row."""

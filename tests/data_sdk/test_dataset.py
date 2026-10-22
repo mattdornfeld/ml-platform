@@ -80,16 +80,12 @@ class DatasetWorkerTest(unittest.TestCase):
         write.assert_not_called()
 
     @patch("ml_platform.data_sdk.materializers._dataset.F")
-    @patch.object(DatasetMaterializer, "_validate_non_empty")
-    @patch.object(DatasetMaterializer, "_validate_non_null_columns")
     @patch.object(DatasetMaterializer, "_ensure_table")
-    @patch.object(DatasetMaterializer, "_validate_required_columns")
+    @patch("ml_platform.data_sdk.materializers._dataset.MaterializationValidator")
     def test_dataset_frame_uses_dataframe_merge_api(
         self,
-        _validate_required_columns: MagicMock,
+        validator_class: MagicMock,
         _ensure_table: MagicMock,
-        _validate_non_null_columns: MagicMock,
-        _validate_non_empty: MagicMock,
         _functions: MagicMock,
     ) -> None:
         """Dataset persistence uses the DataFrame merge chain rather than SQL text."""
@@ -119,9 +115,7 @@ class DatasetWorkerTest(unittest.TestCase):
             )
 
         self.assertEqual(count, 3)
-        _validate_non_null_columns.assert_called_once_with(
-            incoming, ("timestamp", "symbol"), context="Dataset transform"
-        )
+        validator_class.return_value.non_null_columns.assert_called_once_with(incoming, ("timestamp", "symbol"))
         aliased_source.mergeInto.assert_called_once_with(
             "ml_platform.market_data.`sp500-v3`",
             unittest.mock.ANY,

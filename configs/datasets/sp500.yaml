@@ -5,6 +5,8 @@ dataset_type: market_data
 keys: [symbol]
 partition_type: daily
 description: Hourly OHLCV market data for the current S&P 500 constituents, including available pre-market and after-hours trading.
+validations:
+  allow_empty_partitions: true
 symbols:
   - "MMM"
   - "AOS"

@@ -13,6 +13,11 @@ from ml_platform.data_sdk.transforms._types import DataType, FeatureKey, Partiti
 class DataValidations(BaseConfig):
     """Shared validation policy marker for versioned data resources."""
 
+    allow_empty_partitions: bool = Field(
+        default=False,
+        description="Whether a requested partition may be materialized without emitted rows.",
+    )
+
 
 class RunFrequency(StrEnum):
     HOURLY = "hourly"

@@ -14,6 +14,7 @@ from pyspark.sql import functions as F
 
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition, WriteMode
+from ml_platform.data_sdk.materializers._validation import MaterializationValidator
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._types import (
     DataType,
@@ -97,11 +98,6 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     def callback_resource(cls) -> str:
         """Report feature partition receipts as feature resources."""
         return "feature"
-
-    @classproperty
-    def allow_empty_partitions(cls) -> bool:
-        """Require at least one feature row for every requested partition."""
-        return False
 
     @classproperty
     def write_mode(cls) -> WriteMode:
@@ -470,32 +466,6 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
 
 
     @staticmethod
-    def _validate_finite_values(frame: DataFrame, config: FeatureMaterializationConfig) -> None:
-        """Apply the configured finite-value policy to feature output."""
-        if not config.validations.require_finite_feature_value:
-            return
-        value = F.col(_FEATURE_VALUE_COLUMN).cast("double")
-        invalid = frame.where(F.isnan(value) | (value == float("inf")) | (value == float("-inf")))
-        if invalid.limit(1).count():
-            raise ValueError("Feature transform emitted a non-finite feature_value.")
-
-    @staticmethod
-    def _validate_feature_keys(frame: DataFrame, feature_keys: tuple[str, ...], datasets: dict[str, Dataset]) -> None:
-        """Require every output entity to occur in a declared input dataset."""
-        input_keys: DataFrame | None = None
-        for dataset in datasets.values():
-            missing_keys = set(feature_keys).difference(dataset.frame.columns)
-            if missing_keys:
-                raise ValueError(f"Input dataset does not contain feature key columns: {', '.join(sorted(missing_keys))}.")
-            keys = dataset.frame.select(*(F.col(key).cast("string").alias(key) for key in feature_keys)).distinct()
-            input_keys = keys if input_keys is None else input_keys.unionByName(keys)
-        assert input_keys is not None
-        unknown = frame.select(*feature_keys).distinct().join(input_keys.distinct(), list(feature_keys), "left_anti")
-        if unknown.limit(1).count():
-            raise ValueError("Feature transform emitted feature-key values absent from input datasets.")
-
-
-    @staticmethod
     def _validate_feature_frame(
         frame: DataFrame,
         config: FeatureMaterializationConfig,
@@ -504,25 +474,16 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     ) -> None:
         """Validate one prepared feature DataFrame before replacing its partitions."""
         feature_keys = tuple(config.feature_keys)
+        validator = MaterializationValidator(config.validations, "Feature transform")
         expected_columns = {"timestamp", *feature_keys, _FEATURE_VALUE_COLUMN}
-        FeatureMaterializer._validate_exact_columns(frame, expected_columns, context="Feature transform")
-        FeatureMaterializer._validate_non_null_columns(
-            frame, ("timestamp", *feature_keys, _FEATURE_VALUE_COLUMN), context="Feature transform"
-        )
-        FeatureMaterializer._validate_finite_values(frame, config)
-        FeatureMaterializer._validate_unique_key(frame, ("timestamp", *feature_keys), context="Feature transform")
+        validator.exact_columns(frame, expected_columns)
+        validator.non_null_columns(frame, ("timestamp", *feature_keys, _FEATURE_VALUE_COLUMN))
+        validator.finite_column(frame, _FEATURE_VALUE_COLUMN)
+        validator.unique_key(frame, ("timestamp", *feature_keys))
 
         partitioned = frame.withColumn("output_partition", FeatureMaterializer._partition_key(config))
-        FeatureMaterializer._validate_partition_coverage(
-            partitioned,
-            requested_partitions,
-            partition_column="output_partition",
-            min_rows=config.validations.min_rows_per_partition,
-            context="Feature transform",
-        )
-
-        if config.validations.require_feature_keys_from_input:
-            FeatureMaterializer._validate_feature_keys(partitioned, feature_keys, datasets)
+        validator.partition_coverage(partitioned, requested_partitions, partition_column="output_partition")
+        validator.feature_keys_from_inputs(partitioned, feature_keys=feature_keys, datasets=datasets)
 
 
     @staticmethod
@@ -593,11 +554,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
 
     def _prepare_frame(self, frame: DataFrame) -> DataFrame:
         """Cast transform values to the feature's persisted schema."""
-        self._validate_exact_columns(
-            frame,
-            {"timestamp", *self._feature_key_columns, _FEATURE_VALUE_COLUMN},
-            context="Feature transform",
-        )
+        self._validator.exact_columns(frame, {"timestamp", *self._feature_key_columns, _FEATURE_VALUE_COLUMN})
         return frame.select(
             F.col("timestamp").try_cast("timestamp").alias("timestamp"),
             *(F.col(key).cast("string").alias(key) for key in self._feature_key_columns),
@@ -612,15 +569,12 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
             f"{_FEATURE_VALUE_COLUMN} {self.config.dtype.upper()}"
         )
         expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[self.config.frequency]
-        if transform.iceberg_schema != expected_schema:
-            raise ValueError(
-                "Feature transform iceberg_schema does not match the explicitly configured "
-                "feature keys and dtype."
-            )
-        if transform.iceberg_partition_spec != expected_partition_spec:
-            raise ValueError(
-                "Feature transform iceberg_partition_spec does not match the explicitly configured frequency."
-            )
+        self._validator.declared_layout(
+            actual_schema=transform.iceberg_schema,
+            expected_schema=expected_schema,
+            actual_partition_spec=transform.iceberg_partition_spec,
+            expected_partition_spec=expected_partition_spec,
+        )
 
     def _validate_frame(self, frame: DataFrame, spark: SparkSession, partition_spec: str) -> None:
         """Check typed values, requested partition coverage, and input keys."""
