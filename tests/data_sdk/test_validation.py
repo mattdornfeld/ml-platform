@@ -213,8 +213,7 @@ class MaterializerValidationTest(unittest.TestCase):
                         "version": 3,
                         "dataset_type": DatasetType.MARKET_DATA,
                         "argument_name": "market_data",
-                        "num_lookback_partitions": 1,
-                        "num_lookahead_partitions": 0,
+                        "input_window": {"lookback_partitions": 1},
                     }
                 ],
                 "transform": "ml_platform.data_sdk.LogReturnTransform",

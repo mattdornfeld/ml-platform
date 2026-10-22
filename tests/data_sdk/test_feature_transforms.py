@@ -63,12 +63,7 @@ class BuiltInTransformTest(unittest.TestCase):
             for index in range(6)
         ]
         return Dataset(
-            metadata=DatasetReference(
-                name="market_data",
-                version=1,
-                num_lookback_partitions=5,
-                num_lookahead_partitions=0,
-            ),
+            metadata=DatasetReference(name="market_data", version=1),
             frame=self.spark.createDataFrame(
                 rows,
                 "timestamp timestamp, symbol string, Open double, High double, "

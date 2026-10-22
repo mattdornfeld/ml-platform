@@ -10,8 +10,9 @@ datasets:
     version: 3
     dataset_type: market_data
     argument_name: market_data
-    num_lookback_partitions: 1
-    num_lookahead_partitions: 1
+    input_window:
+      lookback_partitions: 1
+      lookahead_partitions: 1
 transform: ml_platform.data_sdk.TripleBarrierLabelTransform
 parameters:
   horizon_bars: 24

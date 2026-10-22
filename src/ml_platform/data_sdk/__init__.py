@@ -19,6 +19,9 @@ from ml_platform.data_sdk.transforms._types import (
     Dataset,
     DatasetDependency,
     FeatureDatasetDependency,
+    FeatureInputWindow,
+    LabelDatasetDependency,
+    LabelInputWindow,
 )
 from ml_platform.data_sdk.dataset_transforms._market_data import (
     MarketDataTransform,
@@ -46,6 +49,9 @@ __all__ = [
     "DatasetMaterializer",
     "DatasetTransform",
     "FeatureDatasetDependency",
+    "FeatureInputWindow",
+    "LabelDatasetDependency",
+    "LabelInputWindow",
     "FeatureMaterializationConfig",
     "FeatureMaterializer",
     "FeatureTransform",

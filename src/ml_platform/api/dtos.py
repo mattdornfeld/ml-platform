@@ -115,15 +115,32 @@ class DatasetDescriptionUpdate(_ApiModel):
     description: str = Field(min_length=1)
 
 
+class FeatureInputWindow(_ApiModel):
+    """Historical source partitions available to one point-in-time feature."""
+
+    lookback_partitions: int = Field(ge=0)
+
+
+class LabelInputWindow(FeatureInputWindow):
+    """Historical and realized-outcome source partitions required by a label."""
+
+    lookahead_partitions: int = Field(ge=0)
+
+
 class FeatureDatasetDependency(_ApiModel):
-    """A registered dataset version consumed by a feature."""
+    """A point-in-time dataset version consumed by a feature."""
 
     name: str = Field(min_length=1)
     version: int = Field(gt=0)
     dataset_type: DatasetType
     argument_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
-    num_lookback_partitions: int = Field(ge=0)
-    num_lookahead_partitions: int = Field(ge=0)
+    input_window: FeatureInputWindow
+
+
+class LabelDatasetDependency(FeatureDatasetDependency):
+    """A realized-outcome dataset version consumed by a label."""
+
+    input_window: LabelInputWindow
 
 
 class FeatureCreateRequest(_ApiModel):
@@ -170,8 +187,42 @@ class FeatureResponse(FeatureCreateRequest):
     created_at: datetime
 
 
-class LabelCreateRequest(FeatureCreateRequest):
+class LabelCreateRequest(_ApiModel):
     """Payload for registering an immutable, normalized label definition."""
+
+    name: str = Field(min_length=1)
+    version: int = Field(gt=0)
+    dtype: Literal["double", "float", "int", "bigint"]
+    frequency: Literal["hourly", "daily"]
+    feature_keys: list[FeatureKey] = Field(
+        default_factory=lambda: [FeatureKey.SYMBOL], min_length=1
+    )
+    datasets: list[LabelDatasetDependency] = Field(min_length=1)
+    transform: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    validations: list[DiscriminatedValidationConfig] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def validate_dataset_arguments(self) -> "LabelCreateRequest":
+        """Keep every label input identity and transform argument unambiguous."""
+        identities = {
+            (dataset.name, dataset.version) for dataset in self.datasets
+        }
+        arguments = {dataset.argument_name for dataset in self.datasets}
+        if len(identities) != len(self.datasets):
+            raise ValueError(
+                "Label datasets must have unique name and version identities."
+            )
+        if len(arguments) != len(self.datasets):
+            raise ValueError(
+                "Label datasets must have unique transform argument names."
+            )
+        if len(set(self.feature_keys)) != len(self.feature_keys):
+            raise ValueError("Feature keys must be unique.")
+        return self
 
 
 class LabelResponse(LabelCreateRequest):
