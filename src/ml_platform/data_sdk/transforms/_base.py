@@ -6,8 +6,13 @@ from typing import Literal, Sequence
 
 from pyspark.sql import DataFrame
 
+from ml_platform.data_sdk._exceptions import DataSdkError
 from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
 from ml_platform.data_sdk.utils import record
+
+
+class DataTransformSchemaError(DataSdkError):
+    """Raised when a transform's key and value schemas overlap."""
 
 
 @record
@@ -34,7 +39,7 @@ class DataTransform(ABC):
         value_schema = self.value_schema
         overlapping_columns = key_schema.keys() & value_schema.keys()
         if overlapping_columns:
-            raise ValueError(
+            raise DataTransformSchemaError(
                 "Key and value schemas must not share columns: "
                 f"{', '.join(sorted(overlapping_columns))}."
             )

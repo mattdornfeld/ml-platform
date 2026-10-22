@@ -106,6 +106,7 @@ class FeatureDatasetDependency(_ApiModel):
 
     name: str = Field(min_length=1)
     version: int = Field(gt=0)
+    dataset_type: DatasetType
     argument_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     num_lookback_partitions: int = Field(ge=0)
 

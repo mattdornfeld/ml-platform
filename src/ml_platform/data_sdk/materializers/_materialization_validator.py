@@ -14,6 +14,18 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
 from ml_platform.common.types import BaseConfig
+from ml_platform.data_sdk.materializers.exceptions import (
+    DataFrameValidationError,
+    ExactColumnsValidationError,
+    FiniteValuesValidationError,
+    InputFeatureKeysValidationError,
+    MinimumRowsValidationError,
+    NonNullValuesValidationError,
+    RequestedPartitionsValidationError,
+    TransformLayoutValidationError,
+    UniqueKeyValidationError,
+    UnsupportedValidationOverrideError,
+)
 from ml_platform.data_sdk.transforms._types import PartitionType
 
 
@@ -164,7 +176,10 @@ class ExactColumnsValidation(DataFrameValidation):
             details.append(f"missing: {', '.join(sorted(missing_columns))}")
         if unexpected_columns := actual_columns - self.expected_columns:
             details.append(f"unexpected: {', '.join(sorted(unexpected_columns))}")
-        raise ValueError(f"Output must return exactly {sorted(self.expected_columns)} ({'; '.join(details)}).")
+        raise ExactColumnsValidationError(
+            "Output columns differ from the declared schema "
+            f"(expected: {', '.join(sorted(self.expected_columns))}; {'; '.join(details)})."
+        )
 
 
 @dataclass(frozen=True)
@@ -179,7 +194,9 @@ class NonNullColumnsValidation(DataFrameValidation):
         for column in self.columns[1:]:
             null_predicate = null_predicate | F.col(column).isNull()
         if data_frame.where(null_predicate).limit(1).count():
-            raise ValueError(f"Output must emit non-null, castable {', '.join(self.columns)} values.")
+            raise NonNullValuesValidationError(
+                f"Output contains null or uncastable values in required columns: {', '.join(self.columns)}."
+            )
 
 
 @dataclass(frozen=True)
@@ -192,7 +209,9 @@ class UniqueKeyValidation(DataFrameValidation):
         """Reject duplicate logical output rows."""
         duplicates = data_frame.groupBy(*self.columns).count().where(F.col("count") > 1)
         if duplicates.limit(1).count():
-            raise ValueError(f"Output emitted duplicate ({', '.join(self.columns)}) rows.")
+            raise UniqueKeyValidationError(
+                f"Output contains duplicate rows for logical key: {', '.join(self.columns)}."
+            )
 
 
 @dataclass(frozen=True)
@@ -216,7 +235,10 @@ class RequestedPartitionsValidation(DataFrameValidation):
             "left_anti",
         )
         if unexpected_partitions.limit(1).count():
-            raise ValueError("Output emitted rows outside requested partitions.")
+            raise RequestedPartitionsValidationError(
+                f"Output contains rows outside requested {self.partition_type.value} partitions "
+                f"using timestamp column {self.timestamp_column!r}."
+            )
 
 
 @dataclass(frozen=True)
@@ -241,7 +263,10 @@ class MinimumRowsValidation(DataFrameValidation):
         selected_partitions = self._selected_partitions(requested_partitions)
         selected_counts = selected_partitions.join(counts, self.partition_column, "left").fillna({"count": 0})
         if selected_counts.where(F.col("count") < self.minimum_rows).limit(1).count():
-            raise ValueError(f"Output emitted fewer than {self.minimum_rows} rows for a selected partition.")
+            raise MinimumRowsValidationError(
+                f"Output has fewer than {self.minimum_rows} rows in at least one selected "
+                f"{self.partition_type.value} partition."
+            )
 
     def _selected_partitions(self, requested_partitions: DataFrame) -> DataFrame:
         """Apply this validation's temporal filter to requested partition timestamps."""
@@ -295,14 +320,26 @@ class FiniteValuesValidation(DataFrameValidation):
 
     def validate(self, data_frame: DataFrame) -> None:
         """Reject NaN and positive or negative infinity numeric values."""
-        invalid_predicate = F.isnan(F.col(self.columns[0]).cast("double"))
-        invalid_predicate = invalid_predicate | (F.col(self.columns[0]).cast("double") == float("inf"))
-        invalid_predicate = invalid_predicate | (F.col(self.columns[0]).cast("double") == float("-inf"))
+        first_value = F.col(self.columns[0]).try_cast("double")
+        invalid_predicate = (
+            first_value.isNull()
+            | F.isnan(first_value)
+            | (first_value == float("inf"))
+            | (first_value == float("-inf"))
+        )
         for column in self.columns[1:]:
-            value = F.col(column).cast("double")
-            invalid_predicate = invalid_predicate | F.isnan(value) | (value == float("inf")) | (value == float("-inf"))
+            value = F.col(column).try_cast("double")
+            invalid_predicate = (
+                invalid_predicate
+                | value.isNull()
+                | F.isnan(value)
+                | (value == float("inf"))
+                | (value == float("-inf"))
+            )
         if data_frame.where(invalid_predicate).limit(1).count():
-            raise ValueError(f"Output emitted non-finite values in: {', '.join(self.columns)}.")
+            raise FiniteValuesValidationError(
+                f"Output contains NaN, infinity, or uncastable numeric values in: {', '.join(self.columns)}."
+            )
 
 
 @dataclass(frozen=True)
@@ -318,14 +355,17 @@ class InputFeatureKeysValidation(DataFrameValidation):
         for input_frame in self.input_frames:
             missing_keys = set(self.feature_keys).difference(input_frame.columns)
             if missing_keys:
-                raise ValueError(
-                    f"Input dataset does not contain feature key columns: {', '.join(sorted(missing_keys))}."
+                raise InputFeatureKeysValidationError(
+                    "Input dataset is missing required feature-key columns: "
+                    f"{', '.join(sorted(missing_keys))}."
                 )
             input_key_frames.append(
                 input_frame.select(*(F.col(key).cast("string").alias(key) for key in self.feature_keys)).distinct()
             )
         if not input_key_frames:
-            raise ValueError("Output requires at least one input dataset for feature-key validation.")
+            raise InputFeatureKeysValidationError(
+                "Feature-key validation requires at least one injected input dataset."
+            )
         input_keys = input_key_frames[0]
         for input_key_frame in input_key_frames[1:]:
             input_keys = input_keys.unionByName(input_key_frame)
@@ -335,7 +375,9 @@ class InputFeatureKeysValidation(DataFrameValidation):
             "left_anti",
         )
         if unknown_keys.limit(1).count():
-            raise ValueError("Output emitted feature-key values absent from input datasets.")
+            raise InputFeatureKeysValidationError(
+                f"Output contains feature-key values absent from input datasets for keys: {', '.join(self.feature_keys)}."
+            )
 
 
 @dataclass(frozen=True)
@@ -351,9 +393,15 @@ class TransformLayoutValidation(DataFrameValidation):
         """Reject an output transform whose declared storage layout differs from configuration."""
         del data_frame
         if self.actual_schema != self.expected_schema:
-            raise ValueError("Transform iceberg_schema does not match its configured output definition.")
+            raise TransformLayoutValidationError(
+                "Transform Iceberg schema differs from the configured output definition "
+                f"(expected: {self.expected_schema}; actual: {self.actual_schema})."
+            )
         if self.actual_partition_spec != self.expected_partition_spec:
-            raise ValueError("Transform iceberg_partition_spec does not match its configured frequency.")
+            raise TransformLayoutValidationError(
+                "Transform Iceberg partition specification differs from the configured frequency "
+                f"(expected: {self.expected_partition_spec}; actual: {self.actual_partition_spec})."
+            )
 
 
 @dataclass(frozen=True)
@@ -373,7 +421,10 @@ class ValidationConfigs:
         overrides_by_type = self._to_dict(self.override_validation_configs)
         unsupported_types = set(overrides_by_type).difference(default_configs_by_type)
         if unsupported_types:
-            raise ValueError(f"Unsupported validation overrides: {', '.join(sorted(unsupported_types))}.")
+            raise UnsupportedValidationOverrideError(
+                "Validation overrides are not part of the materializer default policy: "
+                f"{', '.join(sorted(unsupported_types))}."
+            )
         return tuple(
             default_config.model_copy(
                 update=overrides_by_type[default_config.type].model_dump(exclude_unset=True)
@@ -441,5 +492,5 @@ class MaterializationValidator:
                         InputFeatureKeysValidation(config.feature_keys, input_frames).validate(data_frame)
                     case _ as unsupported_config:
                         assert_never(unsupported_config)
-            except ValueError as error:
-                raise ValueError(f"{config.reason}: {error}") from error
+            except DataFrameValidationError as error:
+                raise type(error)(f"{config.reason}: {error}") from error

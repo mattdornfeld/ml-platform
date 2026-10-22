@@ -15,6 +15,7 @@ from ml_platform.data_sdk.configs._configs import (
     RunFrequency,
     TripleBarrierConfig,
     TimeRange,
+    TransformConfig,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "RunFrequency",
     "TripleBarrierConfig",
     "TimeRange",
+    "TransformConfig",
 ]

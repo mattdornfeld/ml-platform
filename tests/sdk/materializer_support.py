@@ -3,7 +3,12 @@
 from pathlib import Path
 import json
 
-from ml_platform.data_sdk.materializers import DatasetMaterializationConfig
+from pyspark.sql import DataFrame, SparkSession
+
+from ml_platform.data_sdk.materializers import DatasetMaterializationConfig, DatasetMaterializer
+from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
+from ml_platform.data_sdk.transforms._types import FeatureKey
+from ml_platform.data_sdk.utils import record
 
 
 def market_config(warehouse: Path, *, name: str = "sp500", version: int = 3) -> DatasetMaterializationConfig:
@@ -21,3 +26,46 @@ def market_config(warehouse: Path, *, name: str = "sp500", version: int = 3) -> 
             "callback_token": "synthetic-market-token",
         }],
     }))
+
+
+@record
+class StaticMarketDataTransform(DatasetTransform):
+    """Return synthetic typed market data through the DatasetTransform contract."""
+
+    data_frame: DataFrame
+
+    @property
+    def value_schema(self) -> dict[str, str]:
+        """Declare the fixed market-data value columns."""
+        return {
+            "market_session": "string",
+            "Open": "double",
+            "High": "double",
+            "Low": "double",
+            "Close": "double",
+            "Volume": "bigint",
+        }
+
+    def __call__(self) -> DataFrame:
+        """Return the synthetic transform output unchanged."""
+        return self.data_frame
+
+
+def materialize_market_data(
+    spark: SparkSession,
+    data_frame: DataFrame,
+    config: DatasetMaterializationConfig,
+) -> int:
+    """Persist synthetic market output through the production dataset lifecycle."""
+    materializer = DatasetMaterializer(config)
+    transform = StaticMarketDataTransform(
+        keys=[FeatureKey.SYMBOL],
+        partition_type=config.partition_type,
+        data_frame=data_frame,
+    )
+    requested_partitions = materializer._requested_partitions(spark)
+    materialized_data_frame = materializer._filter_partitions(transform(), requested_partitions)
+    materializer.validate(materialized_data_frame)
+    materializer.iceberg_table.create(spark)
+    materializer.iceberg_table.write(materialized_data_frame)
+    return materialized_data_frame.count()

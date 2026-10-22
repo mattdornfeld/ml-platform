@@ -85,7 +85,7 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
         with (
             patch.object(type(worker), "_create_spark_session", return_value=self.spark),
             patch.object(type(worker), "_stop_spark_session"),
-            patch.object(type(worker), "_create_transform", return_value=transform),
+            patch.object(type(worker), "_transform", return_value=transform),
             patch("ml_platform.data_sdk.materializers._base.materialization_api_url", return_value="http://api"),
             patch("ml_platform.data_sdk.materializers._base.urlopen") as open_url,
         ):
@@ -112,7 +112,7 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
             "name": "lifecycle_feature", "version": 1,
             "description": "Synthetic hourly feature.", "dtype": "double",
             "frequency": "hourly", "feature_keys": ["symbol"],
-            "datasets": [{"name": "lifecycle_market", "version": 1,
+            "datasets": [{"name": "lifecycle_market", "version": 1, "dataset_type": "market_data",
                           "argument_name": "market_data", "num_lookback_partitions": 0}],
             "transform": "ml_platform.data_sdk.feature_transforms._relative_volume.RelativeVolumeTransform",
             "parameters": {"lookback_bars": 2},
@@ -142,7 +142,7 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
         with (
             patch.object(type(worker), "_create_spark_session", return_value=self.spark),
             patch.object(type(worker), "_stop_spark_session"),
-            patch.object(type(worker), "_create_transform", return_value=transform),
+            patch.object(type(worker), "_transform", return_value=transform),
             patch.object(type(worker), "_load_planned_datasets", return_value=datasets),
             patch("ml_platform.data_sdk.materializers._base.materialization_api_url", return_value="http://api"),
             patch("ml_platform.data_sdk.materializers._base.urlopen") as open_url,
@@ -165,7 +165,7 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
         config = LabelMaterializationConfig.model_validate_json(json.dumps({
             "name": "lifecycle_label", "version": 1,
             "description": "Synthetic label.", "warehouse_dir": str(self.warehouse),
-            "datasets": [{"name": "lifecycle_market", "version": 1, "num_lookback_partitions": 0}],
+            "datasets": [{"name": "lifecycle_market", "version": 1, "dataset_type": "market_data", "argument_name": "market_data", "num_lookback_partitions": 0}],
             "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
             "partitions": [{
                 "partition_id": "label-day", "timestamp": "2026-01-01T00:00:00Z",
@@ -177,13 +177,13 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
             [("2026-01-01 10:30:00", "AAA", 1)],
             "timestamp string, symbol string, label_value int",
         ).selectExpr("cast(timestamp as timestamp) as timestamp", "symbol", "label_value")
-        worker = LabelMaterializer(config, datasets=())
+        worker = LabelMaterializer(config)
         transform = MagicMock()
         transform.return_value = source
         with (
             patch.object(type(worker), "_create_spark_session", return_value=self.spark),
             patch.object(type(worker), "_stop_spark_session"),
-            patch.object(type(worker), "_create_transform", return_value=transform),
+            patch.object(type(worker), "_transform", return_value=transform),
             patch("ml_platform.data_sdk.materializers._base.materialization_api_url", return_value="http://api"),
             patch("ml_platform.data_sdk.materializers._base.urlopen") as open_url,
         ):

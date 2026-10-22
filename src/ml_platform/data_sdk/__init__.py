@@ -13,7 +13,6 @@ from ml_platform.data_sdk.materializers import (
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
-from ml_platform.data_sdk.materializers._label import LabelResource
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.transforms._types import Dataset, DatasetDependency, FeatureDatasetDependency
 from ml_platform.data_sdk.dataset_transforms._market_data import MarketDataTransform
@@ -21,6 +20,8 @@ from ml_platform.data_sdk.feature_transforms._log_return import LogReturnTransfo
 from ml_platform.data_sdk.feature_transforms._relative_volume import RelativeVolumeTransform
 from ml_platform.data_sdk.feature_transforms._trailing_volatility import TrailingVolatilityTransform
 from ml_platform.data_sdk.label_transforms._triple_barrier import TripleBarrierLabelTransform
+from ml_platform.data_sdk.exceptions import *
+from ml_platform.data_sdk.exceptions import __all__ as _exception_exports
 
 __all__ = [
     "Dataset",
@@ -30,7 +31,6 @@ __all__ = [
     "DataTransform",
     "FeatureTransform",
     "LabelTransform",
-    "LabelResource",
     "LogReturnTransform",
     "MarketDataTransform",
     "Materializer",
@@ -71,3 +71,5 @@ __all__ += [
     "TripleBarrierConfig",
     "TimeRange",
 ]
+
+__all__ += _exception_exports

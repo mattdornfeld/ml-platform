@@ -19,3 +19,9 @@
 - Keep `validation_configs` declarative: it must return only that materializer's simple declared configuration list. Apply YAML validation overrides once in the base materializer to preserve DRY configuration resolution.
 - Prefer enums over string literals for domain concepts in configuration and validation models; pass the enum itself through contracts rather than a derived string value.
 - Use descriptive variable names. Prefer `data_frame: DataFrame` over generic `frame: DataFrame`.
+- In dataclass-style classes, declare instance properties at the top of the class body. Put methods that define static or class-level values below those properties.
+- Prefer Pydantic `model_validator(mode="after")` for validation of complete data models; use field validators only when validation is inherently local to one field.
+- Do not create methods that only return their input or otherwise perform no work. Remove them and call the meaningful operation directly.
+- Do not create a property for data used only once, or when inlining is equally clear; inline it at the call site.
+- Encapsulate construction of an object's derived representation inside that object. Pass typed source values to its constructor rather than assembling internal SQL, properties, or similar representations at call sites.
+- Do not use `typing.cast` without explicit user approval. Prefer generics, protocols, type guards, or stronger interfaces that preserve the concrete type.

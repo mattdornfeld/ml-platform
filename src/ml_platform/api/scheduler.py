@@ -164,7 +164,7 @@ class JobScheduler:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""SELECT features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters,
-                    json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'argument_name', dependencies.argument_name, 'num_lookback_partitions', dependencies.num_lookback_partitions)) AS datasets,
+                    json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'argument_name', dependencies.argument_name, 'num_lookback_partitions', dependencies.num_lookback_partitions)) AS datasets,
                     (SELECT json_agg(json_build_object(
                         'partition_id', request.partition_id,
                         'timestamp', request.timestamp,
@@ -185,6 +185,8 @@ class JobScheduler:
                     ) ORDER BY request.timestamp) FROM feature_partition_update_requests request WHERE request.job_id = %s) AS callbacks
                     FROM feature_partition_update_requests target JOIN features ON features.name = target.feature_name AND features.version = target.feature_version
                     JOIN feature_dataset_dependencies dependencies ON dependencies.feature_name = features.name AND dependencies.feature_version = features.version
+                    JOIN datasets AS input_datasets ON input_datasets.name = dependencies.dataset_name
+                      AND input_datasets.version = dependencies.dataset_version
                     WHERE target.job_id = %s GROUP BY features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters""", (job_id, job_id))
                 row = cursor.fetchone()
         if row is None:

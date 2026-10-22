@@ -460,9 +460,12 @@ def get_feature(name: ResourceName, version: ResourceVersion, connection: Databa
         feature = cursor.fetchone()
         if feature is None:
             raise HTTPException(status_code=404, detail="Feature version does not exist.")
-        cursor.execute("""SELECT dataset_name AS name, dataset_version AS version, argument_name, num_lookback_partitions
-            FROM feature_dataset_dependencies WHERE feature_name = %s AND feature_version = %s
-            ORDER BY dataset_name, dataset_version""", (name, version))
+        cursor.execute("""SELECT dependencies.dataset_name AS name, dependencies.dataset_version AS version,
+            datasets.dataset_type, dependencies.argument_name, dependencies.num_lookback_partitions
+            FROM feature_dataset_dependencies AS dependencies
+            JOIN datasets ON datasets.name = dependencies.dataset_name AND datasets.version = dependencies.dataset_version
+            WHERE dependencies.feature_name = %s AND dependencies.feature_version = %s
+            ORDER BY dependencies.dataset_name, dependencies.dataset_version""", (name, version))
         feature["datasets"] = list(cursor.fetchall())
         cursor.execute("""SELECT DISTINCT ON (request.timestamp) request.partition_id, request.timestamp, request.status,
                 request.created_at, request.updated_at, receipt.content_hash, receipt.snapshot_id
@@ -499,11 +502,13 @@ def create_feature(payload: FeatureCreateRequest, connection: DatabaseConnection
     try:
         with connection.cursor(row_factory=dict_row) as cursor:
             for dependency in payload.datasets:
-                cursor.execute("""SELECT deleted_at FROM datasets WHERE name = %s AND version = %s""",
+                cursor.execute("""SELECT dataset_type, deleted_at FROM datasets WHERE name = %s AND version = %s""",
                     (dependency.name, dependency.version))
                 dataset = cursor.fetchone()
                 if dataset is None or dataset["deleted_at"] is not None:
                     raise HTTPException(status_code=422, detail="Feature datasets must reference active dataset versions.")
+                if dataset["dataset_type"] != dependency.dataset_type.value:
+                    raise HTTPException(status_code=422, detail="Feature dataset type must match the registered dataset version.")
             cursor.execute("""INSERT INTO features
                 (name, version, dtype, frequency, feature_keys, validations, transform, description, parameters)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)

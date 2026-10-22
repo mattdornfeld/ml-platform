@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import Field
 
 from ml_platform.common.types import BaseConfig
+from ml_platform.data_sdk._exceptions import DataSdkError
 from pyspark.sql import DataFrame
 
 
@@ -14,6 +15,25 @@ class FeatureKey(StrEnum):
     """Supported logical entity keys emitted by data transforms."""
 
     SYMBOL = "symbol"
+
+
+class PartitionTypeResolutionError(DataSdkError):
+    """Raised when an unknown partition unit or Iceberg transform is requested."""
+
+
+class DatasetType(StrEnum):
+    """Dataset transform kinds supported by the materialization system."""
+
+    MARKET_DATA = "market_data"
+
+    @property
+    def iceberg_namespace(self) -> str:
+        """Return the namespace assigned to this dataset kind's Iceberg tables."""
+        match self:
+            case DatasetType.MARKET_DATA:
+                return "market_data"
+            case _ as unsupported_dataset_type:
+                assert_never(unsupported_dataset_type)
 
 
 class DataType(StrEnum):
@@ -63,7 +83,9 @@ class PartitionType(StrEnum):
             case "day":
                 return cls.DAILY
             case _ as unsupported_partition_unit:
-                raise ValueError(f"Unsupported partition unit: {unsupported_partition_unit}.")
+                raise PartitionTypeResolutionError(
+                    f"Unsupported Spark partition unit {unsupported_partition_unit!r}; expected 'hour' or 'day'."
+                )
 
     @classmethod
     def from_iceberg_partition_spec(cls, partition_spec: str) -> "PartitionType":
@@ -74,7 +96,10 @@ class PartitionType(StrEnum):
             case "days(timestamp)":
                 return cls.DAILY
             case _ as unsupported_partition_spec:
-                raise ValueError(f"Unsupported Iceberg partition transform: {unsupported_partition_spec}.")
+                raise PartitionTypeResolutionError(
+                    "Unsupported Iceberg timestamp partition transform "
+                    f"{unsupported_partition_spec!r}; expected hours(timestamp) or days(timestamp)."
+                )
 
     def normalize_timestamp(self, timestamp: datetime) -> datetime:
         """Normalize one timestamp to this cadence's UTC partition boundary."""
@@ -89,6 +114,9 @@ class DatasetDependency(BaseConfig):
 
     name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase name of the upstream dataset.")
     version: int = Field(ge=1, description="Immutable version of the upstream dataset.")
+    dataset_type: DatasetType = Field(
+        description="Kind of upstream dataset used to resolve its Iceberg namespace."
+    )
     num_lookback_partitions: int = Field(
         ge=0, description="Number of preceding dataset partitions required for each output partition."
     )

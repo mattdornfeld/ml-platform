@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 from ml_platform.data_sdk.utils.data_explorer import _parquet_source, load_partitioned_parquet
+from ml_platform.data_sdk.exceptions import ParquetExplorerSourceError
 
 
 class ParquetExplorerTest(unittest.TestCase):
@@ -44,7 +45,7 @@ class ParquetExplorerTest(unittest.TestCase):
     def test_rejects_directory_without_parquet_files(self) -> None:
         """Report an actionable error rather than opening an empty shell."""
         with TemporaryDirectory() as temporary_directory:
-            with self.assertRaisesRegex(ValueError, "No Parquet files found"):
+            with self.assertRaisesRegex(ParquetExplorerSourceError, "No Parquet files were found"):
                 load_partitioned_parquet(temporary_directory)
 
 

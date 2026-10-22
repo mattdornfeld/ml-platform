@@ -21,8 +21,13 @@ from ml_platform.data_sdk.materializers import (
 )
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializationConfig, DatasetMaterializer
 from ml_platform.data_sdk.dataset_transforms._market_data import MarketDataTransform
-from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
+from ml_platform.data_sdk.transforms._types import DatasetType, FeatureKey, PartitionType
 from ml_platform.data_sdk.materializers._feature import FeatureMaterializationConfig, FeatureMaterializer
+from ml_platform.data_sdk.exceptions import (
+    FiniteValuesValidationError,
+    InputFeatureKeysValidationError,
+    RequestedPartitionsValidationError,
+)
 
 
 class MaterializerValidationTest(unittest.TestCase):
@@ -106,7 +111,7 @@ class MaterializerValidationTest(unittest.TestCase):
         )
         worker = DatasetMaterializer(DatasetMaterializationConfig(
             name="market", version=1, description="Test market data.", warehouse_dir="warehouse",
-            dataset_type="market_data", keys=[FeatureKey.SYMBOL], partition_type=PartitionType.DAILY, symbols=["AAA"],
+            dataset_type=DatasetType.MARKET_DATA, keys=[FeatureKey.SYMBOL], partition_type=PartitionType.DAILY, symbols=["AAA"],
             validations=[], partitions=[requested],
         ))
         source = self.spark.createDataFrame(
@@ -114,20 +119,20 @@ class MaterializerValidationTest(unittest.TestCase):
             "timestamp string, symbol string, market_session string, Open double, High double, "
             "Low double, Close double, Volume long",
         )
-        prepared = worker._prepare_frame(source)
+        prepared = source.selectExpr("cast(timestamp as timestamp) as timestamp", "symbol", "market_session", "Open", "High", "Low", "Close", "Volume")
         self.assertIsNone(worker.validate(prepared))
         with self.assertRaisesRegex(ValueError, "duplicate"):
             worker.validate(prepared.unionByName(prepared))
         next_day = source.withColumn("timestamp", F.lit("2026-01-04 15:30:00"))
-        with self.assertRaisesRegex(ValueError, "requested partitions"):
-            worker.validate(worker._prepare_frame(next_day))
+        with self.assertRaisesRegex(RequestedPartitionsValidationError, "outside requested"):
+            worker.validate(next_day.selectExpr("cast(timestamp as timestamp) as timestamp", "symbol", "market_session", "Open", "High", "Low", "Close", "Volume"))
 
     def test_feature_specific_value_and_input_key_policies(self) -> None:
         """Feature policy checks remain enforced after shared structural validation."""
         config = FeatureMaterializationConfig.model_validate({
             "name": "returns", "version": 1, "description": "Test feature.",
             "warehouse_dir": "temporary-warehouse", "dtype": "double", "frequency": "daily",
-            "datasets": [{"name": "sp500", "version": 3, "argument_name": "market_data", "num_lookback_partitions": 1}],
+            "datasets": [{"name": "sp500", "version": 3, "dataset_type": DatasetType.MARKET_DATA, "argument_name": "market_data", "num_lookback_partitions": 1}],
             "transform": "ml_platform.data_sdk.LogReturnTransform",
             "validations": [
                 {
@@ -161,18 +166,18 @@ class MaterializerValidationTest(unittest.TestCase):
             with patch.object(FeatureMaterializer, "_dataset_table_identifier", return_value="input_market_data"):
                 worker.validate(frame)
 
-        accepted = worker._prepare_frame(feature("AAA", 1.0))
+        accepted = feature("AAA", 1.0).selectExpr("cast(timestamp as timestamp) as timestamp", "symbol", "feature_value")
         self.assertIsNone(validate_feature(accepted))
-        with self.assertRaisesRegex(ValueError, "non-finite"):
-            validate_feature(worker._prepare_frame(feature("AAA", float("nan"))))
-        with self.assertRaisesRegex(ValueError, "absent from input"):
-            validate_feature(worker._prepare_frame(feature("BBB", 1.0)))
+        with self.assertRaisesRegex(FiniteValuesValidationError, "NaN, infinity"):
+            validate_feature(feature("AAA", float("nan")).selectExpr("cast(timestamp as timestamp) as timestamp", "symbol", "feature_value"))
+        with self.assertRaisesRegex(InputFeatureKeysValidationError, "absent from input"):
+            validate_feature(feature("BBB", 1.0).selectExpr("cast(timestamp as timestamp) as timestamp", "symbol", "feature_value"))
         uncastable = self.spark.createDataFrame(
             [("2026-01-01", "AAA", "invalid")],
             "timestamp string, symbol string, feature_value string",
         )
-        with self.assertRaisesRegex(ValueError, "non-null, castable"):
-            validate_feature(worker._prepare_frame(uncastable))
+        with self.assertRaisesRegex(FiniteValuesValidationError, "NaN, infinity"):
+            validate_feature(uncastable.selectExpr("cast(timestamp as timestamp) as timestamp", "symbol", "feature_value"))
 
     def test_feature_partition_filter_respects_hourly_frequency(self) -> None:
         """Two requested hours replace two hourly partitions, not their entire day."""
@@ -183,7 +188,7 @@ class MaterializerValidationTest(unittest.TestCase):
             )
             for hour in (10, 11)
         ]
-        worker = FeatureMaterializer(SimpleNamespace(frequency="hourly", partitions=callbacks, feature_keys=["symbol"]))
+        worker = FeatureMaterializer(SimpleNamespace(partition_type=PartitionType.HOURLY, partition_timestamps=tuple(callback.timestamp for callback in callbacks), partitions=callbacks, feature_keys=["symbol"]))
         source = self.spark.createDataFrame(
             [("2026-01-01 10:30:00", "AAA", 1.0),
              ("2026-01-01 11:30:00", "AAA", 2.0),
@@ -191,8 +196,7 @@ class MaterializerValidationTest(unittest.TestCase):
             "timestamp string, symbol string, feature_value double",
         ).selectExpr("cast(timestamp as timestamp) as timestamp", "symbol", "feature_value")
 
-        requested = worker._requested_partitions(self.spark, "hours(timestamp)")
-        selected = worker._filter_partitions(source, requested, "hours(timestamp)")
+        requested = worker._requested_partitions(self.spark)
+        selected = worker._filter_partitions(source, requested)
 
         self.assertEqual(selected.count(), 2)
-        self.assertEqual(worker._target_partition_keys("hours(timestamp)"), ("2026-01-01T10:00:00", "2026-01-01T11:00:00"))

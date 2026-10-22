@@ -11,15 +11,26 @@ from pyspark.sql import SparkSession
 from ml_platform.data_sdk.transforms._types import DataType, Dataset, DatasetReference, FeatureKey, PartitionType
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.label_transforms._triple_barrier import TripleBarrierLabelTransform
-from ml_platform.data_sdk.materializers._label import LabelMaterializationConfig, LabelMaterializer, LabelResource
+from ml_platform.data_sdk.materializers._label import LabelMaterializationConfig, LabelMaterializer
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
-from tests.sdk.materializer_support import market_config
+from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
+from tests.sdk.materializer_support import market_config, materialize_market_data
 
 
 
-def label_resource() -> LabelResource:
-    """Return the API-delivered identity corresponding to the test definition."""
-    return LabelResource(name="test_hourly_triple_barrier", version=1)
+
+LABEL_NAME = "test_hourly_triple_barrier"
+LABEL_VERSION = 1
+
+
+def label_table_id() -> str:
+    """Return the immutable label table identifier used by this integration test."""
+    return IcebergTable.id_for("ml_platform", "labels", LABEL_NAME, LABEL_VERSION)
+
+
+def market_table_id() -> str:
+    """Return the immutable market-data table identifier used by this integration test."""
+    return IcebergTable.id_for("ml_platform", "market_data", "sp500", 3)
 
 
 def triple_barrier_transform(market_data: Dataset) -> TripleBarrierLabelTransform:
@@ -112,7 +123,7 @@ class LabelsIntegrationTest(unittest.TestCase):
 
     def setUp(self) -> None:
         """Create a source market table with known next-bar outcomes."""
-        for identifier in (LabelMaterializer._table_identifier_for(label_resource()), DatasetMaterializer._iceberg_table_identifier('sp500', 3)):
+        for identifier in (label_table_id(), market_table_id()):
             if self.spark.catalog.tableExists(identifier):
                 self.spark.sql(f"DROP TABLE {identifier} PURGE")
         source = self.spark.createDataFrame(
@@ -131,18 +142,16 @@ class LabelsIntegrationTest(unittest.TestCase):
             "timestamp", "symbol", "market_session", "Close AS Open", "Close AS High",
             "Close AS Low", "Close", "CAST(1000 AS BIGINT) AS Volume",
         )
-        DatasetMaterializer._materialize_test_frame(
-            bars, config=market_config(self.warehouse), spark=self.spark
-        )
+        materialize_market_data(self.spark, bars, market_config(self.warehouse))
 
     def _label_worker(self) -> LabelMaterializer:
         """Construct the runtime label definition used by direct Spark writes."""
         config = LabelMaterializationConfig.model_validate_json(json.dumps({
-            "name": label_resource().name,
-            "version": label_resource().version,
+            "name": LABEL_NAME,
+            "version": LABEL_VERSION,
             "description": "Synthetic triple-barrier labels.",
             "warehouse_dir": str(self.warehouse),
-            "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 0}],
+            "datasets": [{"name": "sp500", "version": 3, "dataset_type": "market_data", "argument_name": "market_data", "num_lookback_partitions": 0}],
             "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
             "parameters": {"horizon_bars": 1, "volatility_lookback_bars": 2,
                            "profit_taking_multiplier": 0.5, "stop_loss_multiplier": 0.5},
@@ -154,44 +163,42 @@ class LabelsIntegrationTest(unittest.TestCase):
                                         "dataset_version": 3, "timestamp": "2026-01-02T00:00:00Z", "snapshot_id": 1}],
             }],
         }))
-        return LabelMaterializer(config, datasets=())
+        return LabelMaterializer(config)
+
+    def _write_labels(self) -> int:
+        """Materialize the test label output through the shared lifecycle."""
+        worker = self._label_worker()
+        transform = triple_barrier_transform(Dataset(
+            DatasetReference(name="sp500", version=3, num_lookback_partitions=0),
+            self.spark.table(market_table_id()),
+        ))
+        requested_partitions = worker._requested_partitions(self.spark)
+        labels = worker._filter_partitions(transform(), requested_partitions)
+        worker.validate(labels)
+        worker.iceberg_table.create(self.spark)
+        worker.iceberg_table.write(labels)
+        return labels.count()
 
     def test_writes_expected_outcomes_and_is_idempotent(self) -> None:
         """Materialize profit, stop, and timeout labels without future leakage."""
-        first_count = self._label_worker()._materialize_transform(
-            triple_barrier_transform(
-                Dataset(
-                    DatasetReference(name="sp500", version=3, num_lookback_partitions=0),
-                    self.spark.table(DatasetMaterializer._iceberg_table_identifier('sp500', 3)),
-                )
-            ),
-            spark=self.spark,
-        )
-        rows = self.spark.table(LabelMaterializer._table_identifier_for(label_resource())).orderBy("timestamp").collect()
+        first_count = self._write_labels()
+        rows = self.spark.table(label_table_id()).orderBy("timestamp").collect()
         outcomes = {row.label_value for row in rows}
 
         self.assertGreaterEqual(first_count, 3)
         self.assertTrue({-1, 0, 1} <= outcomes)
-        self.assertNotIn("timestamp_day", self.spark.table(LabelMaterializer._table_identifier_for(label_resource())).columns)
+        self.assertNotIn("timestamp_day", self.spark.table(label_table_id()).columns)
         self.assertEqual(
-            self._label_worker()._materialize_transform(
-            triple_barrier_transform(
-                Dataset(
-                    DatasetReference(name="sp500", version=3, num_lookback_partitions=0),
-                    self.spark.table(DatasetMaterializer._iceberg_table_identifier('sp500', 3)),
-                )
-            ),
-            spark=self.spark,
-        ),
+            self._write_labels(),
             first_count,
         )
-        self.assertEqual(self.spark.table(LabelMaterializer._table_identifier_for(label_resource())).count(), len(rows))
+        self.assertEqual(self.spark.table(label_table_id()).count(), len(rows))
         self.assertEqual(
-            LabelMaterializer._storage_path(self.warehouse, label_resource()),
+            self._label_worker().iceberg_table.storage_path(self.warehouse),
             self.warehouse.resolve() / "labels" / "test_hourly_triple_barrier-v1",
         )
         self.assertEqual(
-            sorted(path.name for path in (LabelMaterializer._storage_path(self.warehouse, label_resource()) / "data").glob("timestamp_day=*")),
+            sorted(path.name for path in (self._label_worker().iceberg_table.storage_path(self.warehouse) / "data").glob("timestamp_day=*")),
             ["timestamp_day=2026-01-02"],
         )
 

@@ -56,4 +56,4 @@ validations:
         result = sync_resources("http://api", "feature", self.root)
         self.assertEqual(result, {"created": ["returns v1"], "deleted": []})
         payload = request.call_args_list[1].args[3]
-        self.assertEqual(payload["datasets"], [{"name": "prices", "version": 2, "argument_name": "market_data", "num_lookback_partitions": 1}])
+        self.assertEqual(payload["datasets"], [{"name": "prices", "version": 2, "dataset_type": "market_data", "argument_name": "market_data", "num_lookback_partitions": 1}])

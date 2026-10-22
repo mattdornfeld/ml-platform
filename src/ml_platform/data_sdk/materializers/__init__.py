@@ -3,10 +3,10 @@
 from ml_platform.data_sdk.materializers._base import (
     Materializer,
     MaterializerConfig,
-    PartionDependency,
+    PartitionDependency,
     MaterializerPartition,
-    WriteMode,
 )
+from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
 from ml_platform.data_sdk.materializers._materialization_validator import (
     AllPartitionsTemporalFilterConfig,
     DataFrameValidation,
@@ -32,6 +32,10 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
     ValidationConfigs,
     XnysRegularSessionTemporalFilterConfig,
 )
+from ml_platform.data_sdk.materializers._transform_materializer import (
+    TransformMaterializationConfig,
+    TransformMaterializer,
+)
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializationConfig, DatasetMaterializer
 from ml_platform.data_sdk.materializers._feature import (
     FeatureMaterializationConfig,
@@ -48,8 +52,9 @@ __all__ = [
     "FiniteNumericValuesValidationConfig", "FiniteValuesValidation", "InputFeatureKeysValidation", "LabelMaterializationConfig",
     "LabelMaterializer", "MaterializationValidator", "Materializer", "MaterializerConfig",
     "MaterializerPartition", "MinimumRowsValidation", "MinimumRowsValidationConfig",
-    "NonNullColumnsValidation", "NonNullValuesValidationConfig", "PartionDependency", "RequestedPartitionsValidation", "RequestedPartitionsValidationConfig",
+    "NonNullColumnsValidation", "NonNullValuesValidationConfig", "PartitionDependency", "RequestedPartitionsValidation", "RequestedPartitionsValidationConfig",
     "TemporalFilterConfig", "TransformLayoutValidation", "UniqueKeyValidation", "UniqueKeyValidationConfig",
-    "DiscriminatedValidationConfig", "ValidationConfig", "ValidationConfigs", "WriteMode",
-    "XnysRegularSessionTemporalFilterConfig",
+    "DiscriminatedValidationConfig", "IcebergTable", "ValidationConfig", "ValidationConfigs",
+    "XnysRegularSessionTemporalFilterConfig", "TransformMaterializationConfig",
+    "TransformMaterializer",
 ]

@@ -5,8 +5,18 @@ from dataclasses import dataclass
 from inspect import Signature, signature
 from typing import Callable, TypeVar, dataclass_transform
 
+from ml_platform.data_sdk._exceptions import DataSdkError
+
 
 Record = TypeVar("Record")
+
+
+class RecordIdentityError(DataSdkError):
+    """Raised when the record decorator cannot preserve decorated class identity."""
+
+
+class RecordInitializationError(DataSdkError):
+    """Raised when a record receives both public and private names for one field."""
 
 
 @dataclass_transform(frozen_default=True)
@@ -41,7 +51,9 @@ def record(record_type: type[Record]) -> type[Record]:
 
     frozen_record = dataclass(frozen=True)(record_type)
     if frozen_record is not record_type:
-        raise RuntimeError("record must preserve the decorated class identity.")
+        raise RecordIdentityError(
+            f"record must preserve the decorated class identity for {record_type.__name__}."
+        )
     generated_init = frozen_record.__init__
 
     def public_init(self: object, *args: object, **kwargs: object) -> None:
@@ -50,7 +62,9 @@ def record(record_type: type[Record]) -> type[Record]:
             private_name = f"_{name}"
             if name in kwargs:
                 if private_name in kwargs:
-                    raise TypeError(f"Specify only {name}, not both {name} and {private_name}.")
+                    raise RecordInitializationError(
+                        f"Record {record_type.__name__} received both {name!r} and {private_name!r}."
+                    )
                 kwargs[private_name] = kwargs.pop(name)
         generated_init(self, *args, **kwargs)
 

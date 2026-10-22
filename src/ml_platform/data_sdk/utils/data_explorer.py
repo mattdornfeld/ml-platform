@@ -10,6 +10,12 @@ import pyarrow.dataset as ds
 import pyarrow.fs as fs
 from IPython import embed
 
+from ml_platform.data_sdk._exceptions import DataSdkError
+
+
+class ParquetExplorerSourceError(DataSdkError):
+    """Raised when a requested Parquet explorer source cannot be resolved."""
+
 
 def _minio_filesystem() -> fs.S3FileSystem:
     """Build a PyArrow S3 filesystem for the configured MinIO endpoint."""
@@ -30,14 +36,16 @@ def _parquet_source(directory: str | Path) -> tuple[str | list[str], fs.FileSyst
     if parsed.scheme in {"s3", "s3a"}:
         path = f"{parsed.netloc}{parsed.path}".strip("/")
         if not path:
-            raise ValueError("An S3/MinIO URI must include a bucket and table path.")
+            raise ParquetExplorerSourceError(
+                f"S3 or MinIO URI {value!r} must include both a bucket and table path."
+            )
         return path, _minio_filesystem()
     root = Path(value).expanduser().resolve()
     if not root.is_dir():
-        raise ValueError(f"Parquet directory does not exist: {root}")
+        raise ParquetExplorerSourceError(f"Parquet directory does not exist: {root}.")
     files = sorted(root.rglob("*.parquet"))
     if not files:
-        raise ValueError(f"No Parquet files found below: {root}")
+        raise ParquetExplorerSourceError(f"No Parquet files were found below: {root}.")
     return [str(file) for file in files], None
 
 

@@ -11,7 +11,8 @@ from pydantic import ValidationError
 from ml_platform.data_sdk.configs import BaseConfig, DataConfig, DatasetConfig, LabelConfig, MarketDataConfig, TripleBarrierConfig
 from ml_platform.data_sdk.dataset_transforms._market_data import _contiguous_date_ranges, fetch_hourly_ohlcv
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
-from tests.sdk.materializer_support import market_config
+from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
+from tests.sdk.materializer_support import market_config, materialize_market_data
 
 TEST_START_DATE = date(2026, 1, 1)
 TEST_END_DATE = date(2026, 1, 10)
@@ -53,8 +54,8 @@ class MarketDataIntegrationTest(unittest.TestCase):
 
     def setUp(self) -> None:
         """Drop tables left by the preceding test."""
-        if self.spark.catalog.tableExists(DatasetMaterializer._iceberg_table_identifier('sp500', 3)):
-            self.spark.sql(f"DROP TABLE {DatasetMaterializer._iceberg_table_identifier('sp500', 3)} PURGE")
+        if self.spark.catalog.tableExists(IcebergTable.id_for("ml_platform", "market_data", "sp500", 3)):
+            self.spark.sql(f"DROP TABLE {IcebergTable.id_for("ml_platform", "market_data", "sp500", 3)} PURGE")
 
     @patch("ml_platform.data_sdk.dataset_transforms._market_data._request_yahoo_chart")
     def test_yahoo_json_writes_spark_dataframe_without_partition_column(self, request: object) -> None:
@@ -63,15 +64,13 @@ class MarketDataIntegrationTest(unittest.TestCase):
         frame = fetch_hourly_ohlcv(self.spark, "mock", start_date=TEST_START_DATE, end_date=TEST_END_DATE)
         self.assertNotIn("timestamp_day", frame.columns)
         self.assertEqual(
-            DatasetMaterializer._materialize_test_frame(
-                frame, config=market_config(self.warehouse), spark=self.spark
-            ), 3
+            materialize_market_data(self.spark, frame, market_config(self.warehouse)), 3
         )
 
-        rows = self.spark.table(DatasetMaterializer._iceberg_table_identifier('sp500', 3)).orderBy("timestamp").collect()
+        rows = self.spark.table(IcebergTable.id_for("ml_platform", "market_data", "sp500", 3)).orderBy("timestamp").collect()
         self.assertEqual([row.symbol for row in rows], ["MOCK"] * 3)
         self.assertEqual([row.Close for row in rows], [100.5, 101.5, 102.5])
-        self.assertNotIn("timestamp_day", self.spark.table(DatasetMaterializer._iceberg_table_identifier('sp500', 3)).columns)
+        self.assertNotIn("timestamp_day", self.spark.table(IcebergTable.id_for("ml_platform", "market_data", "sp500", 3)).columns)
         request.assert_called_once_with("MOCK", TEST_START_DATE, TEST_END_DATE)
 
 

@@ -1,130 +1,46 @@
-"""Unit tests for API-dispatched dataset worker dispatch."""
+"""Unit tests for API-dispatched dataset materialization."""
 
 import json
-import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
 import ml_platform.data_sdk.dataset_transforms._market_data
 
-from ml_platform.data_sdk.materializers._dataset import (
-    DatasetMaterializationConfig,
-    DatasetMaterializer,
-)
+from ml_platform.data_sdk.materializers._dataset import DatasetMaterializationConfig, DatasetMaterializer
+from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
 
 
 class DatasetWorkerTest(unittest.TestCase):
-    """Verify API-delivered dataset definitions use the matching transform."""
+    """Verify the dataset worker dispatches a transform and declares its table."""
 
-    @patch("ml_platform.data_sdk.dataset_transforms._market_data.MarketDataTransform")
-    @patch.object(DatasetMaterializer, "_create_spark_session")
-    def test_market_data_dispatches_to_transform(
-        self,
-        session: MagicMock,
-        transform: MagicMock,
-    ) -> None:
-        """Deserialize the API JSON contract and pass it to the transform constructor."""
-        spark = session.return_value
-        transform.return_value.return_value = MagicMock()
-        transform.return_value.iceberg_schema = "timestamp TIMESTAMP"
-        transform.return_value.iceberg_partition_spec = "days(timestamp)"
-        config = DatasetMaterializer._config_from_json(json.dumps({
-            "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily",
-            "description": "Test market data.", "validations": [], "symbols": ["AAPL"],
-            "warehouse_dir": "temporary-warehouse",
+    def config(self, dataset_type: str = "market_data") -> DatasetMaterializationConfig:
+        """Build one strict dataset job configuration."""
+        return DatasetMaterializationConfig.model_validate_json(json.dumps({
+            "name": "sp500", "version": 3, "description": "Test market data.",
+            "dataset_type": dataset_type, "keys": ["symbol"], "partition_type": "daily",
+            "symbols": ["AAPL"], "validations": [], "warehouse_dir": "temporary-warehouse",
             "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
         }))
-        self.assertIsInstance(config, DatasetMaterializationConfig)
-        worker = DatasetMaterializer(config)
-        with (
-            patch.object(type(worker), "_prepare_frame", return_value=MagicMock()) as prepare,
-            patch.object(type(worker), "validate") as validate,
-            patch.object(type(worker), "_create_table") as ensure,
-            patch.object(type(worker), "_write_to_table") as write,
-            patch.object(type(worker), "_latest_snapshot_id", return_value=7),
-            patch.object(type(worker), "_complete_partitions") as complete,
-        ):
-            with patch.object(sys, "argv", ["dataset-materializer", "--config-json", config.model_dump_json()]):
-                result = type(worker).main()
-        self.assertIsNone(result)
+
+    @patch("ml_platform.data_sdk.dataset_transforms._market_data.MarketDataTransform")
+    def test_market_data_dispatches_to_transform(self, transform: MagicMock) -> None:
+        """The declared dataset type constructs MarketDataTransform with job partitions."""
+        worker = DatasetMaterializer(self.config())
+        worker._transform(MagicMock())
         self.assertEqual(transform.call_args.kwargs["symbols"], ["AAPL"])
         self.assertEqual(transform.call_args.kwargs["partitions"][0].date().isoformat(), "2026-01-01")
-        prepare.assert_called_once_with(transform.return_value.return_value)
-        validate.assert_called_once()
-        ensure.assert_called_once_with(
-            spark,
-            schema=transform.return_value.iceberg_schema,
-            partition_spec=transform.return_value.iceberg_partition_spec,
-        )
-        write.assert_called_once_with(prepare.return_value)
-        complete.assert_called_once_with(spark, 7, transform.return_value.iceberg_partition_spec)
-        spark.stop.assert_called_once()
 
-    def test_unsupported_dataset_type_raises_not_implemented(self) -> None:
-        """Unknown dataset types fail before any Spark write is attempted."""
-        config = DatasetMaterializationConfig.model_validate_json(json.dumps({
-            "name": "unsupported_dataset",
-            "version": 1,
-            "description": "Unsupported dataset transform test.",
-            "dataset_type": "unsupported", "keys": ["symbol"], "partition_type": "daily",
-            "symbols": ["AAPL"],
-            "warehouse_dir": "temporary-warehouse",
-            "partitions": [{
-                "partition_id": "partition-1",
-                "timestamp": "2026-01-01T00:00:00Z",
-                "callback_token": "token",
-            }],
-        }))
-        worker = DatasetMaterializer(config)
-        with patch.object(DatasetMaterializer, "_write_to_table") as write:
-            with self.assertRaisesRegex(NotImplementedError, "Unsupported dataset type: unsupported"):
-                worker._create_transform(MagicMock())
-        write.assert_not_called()
+    def test_unsupported_dataset_type_is_rejected_by_configuration(self) -> None:
+        """Unknown dataset types cannot enter the materializer contract."""
+        with self.assertRaises(ValueError):
+            self.config("unsupported")
 
-    @patch("ml_platform.data_sdk.materializers._dataset.F")
-    @patch.object(DatasetMaterializer, "_create_table")
-    @patch.object(DatasetMaterializer, "validate")
-    def test_dataset_frame_uses_dataframe_merge_api(
-        self,
-        validate: MagicMock,
-        _create_table: MagicMock,
-        _functions: MagicMock,
-    ) -> None:
-        """Dataset persistence uses the DataFrame merge chain rather than SQL text."""
-        frame = MagicMock()
-        incoming = frame.select.return_value
-        source = MagicMock()
-        (
-            incoming.withColumn.return_value.repartition.return_value.sortWithinPartitions.return_value.drop.return_value
-        ) = source
-        aliased_source = source.alias.return_value
-        writer = aliased_source.mergeInto.return_value
-        writer.whenMatched.return_value.updateAll.return_value.whenNotMatched.return_value.insertAll.return_value.merge.return_value = None
-        incoming.count.return_value = 3
+    def test_dataset_declares_iceberg_table(self) -> None:
+        """Dataset persistence owns an immutable Iceberg table definition."""
+        table = DatasetMaterializer(self.config()).iceberg_table
+        self.assertIsInstance(table, IcebergTable)
+        self.assertEqual(table.partition_type.value, "daily")
 
-        with patch("ml_platform.data_sdk.materializers._base.F"):
-            config = DatasetMaterializationConfig.model_validate_json(json.dumps({
-                "name": "sp500", "version": 3, "description": "Synthetic market bars.",
-                "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily", "symbols": ["AAA"],
-                "warehouse_dir": "temporary-warehouse",
-                "partitions": [{"partition_id": "synthetic-partition", "timestamp": "2026-01-01T00:00:00Z",
-                                "callback_token": "synthetic-token"}],
-            }))
-            count = DatasetMaterializer._materialize_frame(
-                frame,
-                spark=MagicMock(),
-                config=config,
-            )
-
-        self.assertEqual(count, 3)
-        validate.assert_called_once()
-        aliased_source.mergeInto.assert_called_once_with(
-            "ml_platform.market_data.`sp500-v3`",
-            unittest.mock.ANY,
-        )
-        writer.whenMatched.return_value.updateAll.assert_called_once()
-        writer.whenMatched.return_value.updateAll.return_value.whenNotMatched.return_value.insertAll.assert_called_once()
-        writer.whenMatched.return_value.updateAll.return_value.whenNotMatched.return_value.insertAll.return_value.merge.assert_called_once()
 
 
 if __name__ == "__main__":
