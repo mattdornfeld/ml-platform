@@ -106,9 +106,17 @@ class MaterializerContractTest(unittest.TestCase):
                 "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
             }))
 
-    def test_materializer_requires_a_class_namespace_implementation(self) -> None:
-        """ABC keeps the class-level Iceberg namespace as an explicit requirement."""
-        self.assertIn("iceberg_namespace", Materializer.__abstractmethods__)
+    def test_materializer_requires_declared_class_properties(self) -> None:
+        """Every concrete worker declares the complete abstract class-property contract."""
+        required_properties = {
+            "config_model",
+            "spark_application_name",
+            "iceberg_namespace",
+            "callback_resource",
+            "allow_empty_partitions",
+            "write_mode",
+        }
+        self.assertTrue(required_properties.issubset(Materializer.__abstractmethods__))
 
         class MissingNamespaceMaterializer(Materializer[MaterializerConfig]):
             config_model = MaterializerConfig
@@ -119,9 +127,11 @@ class MaterializerContractTest(unittest.TestCase):
             def materialize(self, spark: object, transform: object) -> object:
                 raise NotImplementedError
 
-        self.assertIn("iceberg_namespace", MissingNamespaceMaterializer.__abstractmethods__)
+        self.assertTrue(required_properties.issubset(MissingNamespaceMaterializer.__abstractmethods__))
         with self.assertRaises(TypeError):
             MissingNamespaceMaterializer.__new__(MissingNamespaceMaterializer)
+        for materializer in (DatasetMaterializer, FeatureMaterializer, LabelMaterializer):
+            self.assertFalse(materializer.__abstractmethods__)
 
     def test_dataset_and_feature_workers_share_the_base_cli_entrypoint(self) -> None:
         """The common entry point parses JSON and dispatches through each worker hook."""

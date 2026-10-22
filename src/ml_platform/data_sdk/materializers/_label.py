@@ -5,7 +5,7 @@ from importlib import import_module
 from inspect import Parameter, signature
 from pathlib import Path
 from types import MappingProxyType
-from typing import ClassVar, Mapping, cast, get_type_hints
+from typing import Literal, Mapping, cast, get_type_hints
 
 from pydantic import Field, field_validator
 from simple_classproperty import classproperty
@@ -60,15 +60,37 @@ class LabelResource:
 class LabelMaterializer(Materializer[LabelMaterializationConfig]):
     """Construct, validate, persist, and report one label materialization."""
 
-    config_model = LabelMaterializationConfig
-    spark_application_name: ClassVar[str] = "ml-platform-label-materializer"
-    callback_resource: ClassVar[str] = "label"
-    datasets: Mapping[str, Dataset]
+    @classproperty
+    def config_model(cls) -> type[LabelMaterializationConfig]:
+        """Return the strict runtime contract for label jobs."""
+        return LabelMaterializationConfig
 
-    @classmethod
+    @classproperty
+    def spark_application_name(cls) -> str:
+        """Return the stable Spark application name for label jobs."""
+        return "ml-platform-label-materializer"
+
+    @classproperty
     def iceberg_namespace(cls) -> str:
         """Store label resources in their dedicated Iceberg namespace."""
         return "labels"
+
+    @classproperty
+    def callback_resource(cls) -> str:
+        """Report label partition receipts as label resources."""
+        return "label"
+
+    @classproperty
+    def allow_empty_partitions(cls) -> bool:
+        """Require at least one label row for every requested partition."""
+        return False
+
+    @classproperty
+    def write_mode(cls) -> Literal["merge", "overwrite"]:
+        """Merge labels by their timestamp and configured feature-key identity."""
+        return "merge"
+
+    datasets: Mapping[str, Dataset]
 
     def __post_init__(self) -> None:
         """Freeze a snapshot of the datasets supplied at construction."""
@@ -148,7 +170,7 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
     @classmethod
     def _storage_path(cls, warehouse_dir: str | Path, resource: LabelResource) -> Path:
         """Return the resource's versioned warehouse directory."""
-        return Path(warehouse_dir).resolve() / cls.iceberg_namespace() / cls._label_id(resource)
+        return Path(warehouse_dir).resolve() / cls.iceberg_namespace / cls._label_id(resource)
 
     @staticmethod
     def _load_transform(import_path: str) -> type[LabelTransform]:

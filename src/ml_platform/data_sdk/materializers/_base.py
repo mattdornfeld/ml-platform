@@ -1,17 +1,17 @@
 """Private common contracts and Iceberg plumbing for API-dispatched materializers."""
 
-from abc import ABC, abstractmethod
+from abc import ABC, ABCMeta, abstractmethod
 import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from pathlib import Path
-from typing import ClassVar, Generic, Mapping, TypeVar
+from typing import Generic, Literal, Mapping, TypeVar
 from urllib.request import Request, urlopen
 
 from pydantic import Field
-from simple_classproperty import classproperty
+from simple_classproperty import ClasspropertyMeta, classproperty
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import materialization_api_url, spark_master
@@ -60,7 +60,10 @@ class MaterializerValidations(BaseConfig):
 class MaterializerConfig(BaseConfig):
     """Strict immutable API runtime contract shared by all materializers."""
 
-    iceberg_catalog: ClassVar[str] = "ml_platform"
+    @classproperty
+    def iceberg_catalog(cls) -> str:
+        """Return the shared Iceberg catalog used by all materializer jobs."""
+        return "ml_platform"
 
     name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase resource name.")
     version: int = Field(ge=1, description="Positive immutable version number for the resource definition.")
@@ -89,30 +92,80 @@ class MaterializerConfig(BaseConfig):
 
 Config = TypeVar("Config", bound=MaterializerConfig)
 
+_REQUIRED_MATERIALIZER_CLASS_PROPERTIES = frozenset({
+    "config_model",
+    "spark_application_name",
+    "iceberg_namespace",
+    "callback_resource",
+    "allow_empty_partitions",
+    "write_mode",
+})
+
+
+class AbstractClasspropertyMeta(ClasspropertyMeta, ABCMeta):
+    """Retain inherited abstract class-property contracts for materializers."""
+
+    def __new__(mcls, name: str, bases: tuple[type, ...], namespace: dict[str, object], **kwargs: object) -> type:
+        """Keep a materializer abstract until every required class property is declared."""
+        materializer_base = next((base for base in bases if isinstance(base, AbstractClasspropertyMeta)), None)
+        cls = super().__new__(mcls, name, bases, namespace, **kwargs)
+        if materializer_base is None:
+            return cls
+        missing = {
+            property_name
+            for property_name in _REQUIRED_MATERIALIZER_CLASS_PROPERTIES
+            if not isinstance(namespace.get(property_name), classproperty)
+        }
+        if missing:
+            cls.__abstractmethods__ = frozenset((*cls.__abstractmethods__, *missing))
+        return cls
+
 @dataclass(frozen=True)
-class Materializer(ABC, Generic[Config]):
+class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
     """Shared Spark and Iceberg lifecycle for one API-delivered materialization."""
 
-    config_model: ClassVar[type[Config]]
-    spark_application_name: ClassVar[str] = "ml-platform-materializer"
-    iceberg_merge_keys: ClassVar[tuple[str, ...] | None] = None
-    callback_resource: ClassVar[str | None] = None
-    allow_empty_partitions: ClassVar[bool] = False
-    content_hash_columns: ClassVar[tuple[str, ...]] = ()
-    iceberg_table_properties: ClassVar[dict[str, str]] = {
-        "format-version": "2",
-        "write.format.default": "parquet",
-        "write.parquet.compression-codec": "zstd",
-        "write.distribution-mode": "hash",
-        "write.spark.fanout.enabled": "false",
-    }
-    config: Config
+    @classproperty
+    @abstractmethod
+    def config_model(cls) -> type[Config]:
+        """Return the strict runtime configuration model for this worker."""
 
-    @classmethod
+    @classproperty
+    @abstractmethod
+    def spark_application_name(cls) -> str:
+        """Return the stable Spark application name for this worker type."""
+
+    @classproperty
     @abstractmethod
     def iceberg_namespace(cls) -> str:
         """Return the Iceberg namespace owned by this materializer type."""
-        return ""
+
+    @classproperty
+    @abstractmethod
+    def callback_resource(cls) -> str:
+        """Return the control-plane resource type completed by this worker."""
+
+    @classproperty
+    @abstractmethod
+    def allow_empty_partitions(cls) -> bool:
+        """Return whether requested partitions may receive an empty receipt."""
+
+    @classproperty
+    @abstractmethod
+    def write_mode(cls) -> Literal["merge", "overwrite"]:
+        """Return the declared Iceberg persistence strategy for this resource."""
+
+    @classproperty
+    def iceberg_table_properties(cls) -> Mapping[str, str]:
+        """Return shared immutable Iceberg storage settings."""
+        return {
+            "format-version": "2",
+            "write.format.default": "parquet",
+            "write.parquet.compression-codec": "zstd",
+            "write.distribution-mode": "hash",
+            "write.spark.fanout.enabled": "false",
+        }
+
+    config: Config
 
     @classmethod
     def _config_from_json(cls, document: str) -> Config:
@@ -141,7 +194,7 @@ class Materializer(ABC, Generic[Config]):
     @classmethod
     def _iceberg_table_identifier(cls, name: str, version: int) -> str:
         """Resolve an immutable resource version to its Iceberg identifier."""
-        namespace = cls.iceberg_namespace()
+        namespace = cls.iceberg_namespace
         table = cls.config_model._iceberg_table_name_for(name, version)
         return f"{cls.config_model.iceberg_catalog}.{namespace}.`{table}`"
 
@@ -183,7 +236,7 @@ class Materializer(ABC, Generic[Config]):
         cls, spark: SparkSession, *, name: str, version: int, schema: str, partition_spec: str, properties: Mapping[str, str]
     ) -> None:
         """Create the resource table or reconcile its declared table properties."""
-        namespace = cls.iceberg_namespace()
+        namespace = cls.iceberg_namespace
         catalog = cls.config_model.iceberg_catalog
         if not schema or not partition_spec:
             raise NotImplementedError(f"{cls.__name__} must declare an Iceberg schema and partition spec.")
@@ -221,8 +274,6 @@ class Materializer(ABC, Generic[Config]):
 
     def _table_properties(self, partition_spec: str) -> Mapping[str, str]:
         """Return storage settings and the shared resource definition metadata."""
-        if self.callback_resource is None:
-            raise NotImplementedError(f"{type(self).__name__} must declare a resource type.")
         frequency = {"day": "daily", "hour": "hourly"}[self._partition_unit(partition_spec)]
         return self.iceberg_table_properties | {
             "resource.type": self.callback_resource,
@@ -257,11 +308,10 @@ class Materializer(ABC, Generic[Config]):
 
     def _write_frame(self, frame: DataFrame) -> None:
         """Merge keyed rows or replace touched Iceberg partitions atomically."""
-        if self.iceberg_merge_keys is None:
+        if self.write_mode == "overwrite":
             frame.writeTo(self._table_identifier).overwritePartitions()
             return
-
-        self._merge_frame(frame, self._table_identifier, self.iceberg_merge_keys)
+        raise NotImplementedError(f"{type(self).__name__} must implement merge writes.")
 
     @staticmethod
     def _merge_frame(frame: DataFrame, identifier: str, keys: tuple[str, ...]) -> None:
@@ -305,10 +355,7 @@ class Materializer(ABC, Generic[Config]):
 
     def _row_digest(self) -> F.Column:
         """Hash the persisted columns that define one output row."""
-        columns = self.content_hash_columns
-        if not columns:
-            raise NotImplementedError(f"{type(self).__name__} must declare content_hash_columns.")
-        return F.sha2(F.to_json(F.struct(*(F.col(column) for column in columns))), 256)
+        raise NotImplementedError(f"{type(self).__name__} must implement row content hashing.")
 
     def _partition_content_hashes(self, spark: SparkSession, partition_spec: str) -> dict[str, str]:
         """Hash requested logical partitions from the committed Iceberg table."""
@@ -348,8 +395,6 @@ class Materializer(ABC, Generic[Config]):
 
     def _complete_partitions(self, spark: SparkSession, snapshot_id: int, partition_spec: str) -> None:
         """Report committed partition revisions through the control-plane API."""
-        if self.callback_resource is None:
-            return
         target_partition_keys = self._target_partition_keys(partition_spec)
         content_hashes = self._partition_content_hashes(spark, partition_spec)
         missing = set(target_partition_keys) - content_hashes.keys()
@@ -502,8 +547,7 @@ class Materializer(ABC, Generic[Config]):
             self._validate_frame(frame, spark, partition_spec)
             self._ensure_table(spark, schema=schema, partition_spec=partition_spec)
             self._write_frame(frame)
-            if self.callback_resource is not None:
-                snapshot_id = self._latest_snapshot_id(spark, self._table_identifier)
-                self._complete_partitions(spark, snapshot_id, partition_spec)
+            snapshot_id = self._latest_snapshot_id(spark, self._table_identifier)
+            self._complete_partitions(spark, snapshot_id, partition_spec)
         finally:
             self._stop_spark_session(spark)

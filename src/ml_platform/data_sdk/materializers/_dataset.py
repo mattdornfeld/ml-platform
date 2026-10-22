@@ -1,7 +1,6 @@
 """API-dispatched Spark materializer for market-data datasets."""
 from dataclasses import dataclass
-from pathlib import Path
-from typing import ClassVar
+from typing import Literal
 
 from pydantic import Field, field_validator
 from simple_classproperty import classproperty
@@ -10,6 +9,10 @@ from pyspark.sql import DataFrame, SparkSession, functions as F
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
+
+_OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
+_CONTENT_HASH_COLUMNS = ("timestamp", "symbol", "market_session", *_OHLCV_COLUMNS)
+_MERGE_KEYS = ("symbol", "timestamp")
 
 
 class DatasetMaterializationConfig(MaterializerConfig):
@@ -38,21 +41,35 @@ class DatasetMaterializationConfig(MaterializerConfig):
 class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
     """Construct, validate, persist, and report one market-data materialization job."""
 
-    config_model = DatasetMaterializationConfig
-    spark_application_name: ClassVar[str] = "ml-platform-dataset-materializer"
-    data_root: ClassVar[Path] = Path("data")
-    ohlcv_columns: ClassVar[tuple[str, ...]] = ("Open", "High", "Low", "Close", "Volume")
-    iceberg_merge_keys: ClassVar[tuple[str, ...]] = ("symbol", "timestamp")
-    callback_resource: ClassVar[str] = "dataset"
-    allow_empty_partitions: ClassVar[bool] = True
-    content_hash_columns: ClassVar[tuple[str, ...]] = (
-        "timestamp", "symbol", "market_session", "Open", "High", "Low", "Close", "Volume"
-    )
+    @classproperty
+    def config_model(cls) -> type[DatasetMaterializationConfig]:
+        """Return the strict runtime contract for market-data jobs."""
+        return DatasetMaterializationConfig
 
-    @classmethod
+    @classproperty
+    def spark_application_name(cls) -> str:
+        """Return the stable Spark application name for market-data jobs."""
+        return "ml-platform-dataset-materializer"
+
+    @classproperty
     def iceberg_namespace(cls) -> str:
         """Store market-data resources in their dedicated Iceberg namespace."""
         return "market_data"
+
+    @classproperty
+    def callback_resource(cls) -> str:
+        """Report market-data partition receipts as dataset resources."""
+        return "dataset"
+
+    @classproperty
+    def allow_empty_partitions(cls) -> bool:
+        """Allow a requested market day with no returned Yahoo Finance rows."""
+        return True
+
+    @classproperty
+    def write_mode(cls) -> Literal["merge", "overwrite"]:
+        """Merge market rows by their stable timestamp and symbol identity."""
+        return "merge"
 
     @classmethod
     def _materialize_frame(
@@ -61,13 +78,13 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
         """Validate and merge one transform's OHLCV frame into its versioned table."""
         materializer = cls(config)
         cls._validate_required_columns(
-            frame, {"timestamp", "symbol", "market_session", *cls.ohlcv_columns}, context="Dataset transform"
+            frame, {"timestamp", "symbol", "market_session", *_OHLCV_COLUMNS}, context="Dataset transform"
         )
         incoming = frame.select(
             F.col("timestamp").cast("timestamp").alias("timestamp"),
             F.col("symbol").cast("string").alias("symbol"),
             F.col("market_session").cast("string").alias("market_session"),
-            *[F.col(column).cast("long" if column == "Volume" else "double").alias(column) for column in cls.ohlcv_columns],
+            *[F.col(column).cast("long" if column == "Volume" else "double").alias(column) for column in _OHLCV_COLUMNS],
         )
         cls._validate_non_null_columns(incoming, ("timestamp", "symbol"), context="Dataset transform")
         cls._validate_non_empty(incoming, context="Dataset transform")
@@ -84,7 +101,7 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
             .sortWithinPartitions("_day", "timestamp", "symbol")
             .drop("_day")
         )
-        cls._merge_frame(source, identifier, cls.iceberg_merge_keys)
+        cls._merge_frame(source, identifier, _MERGE_KEYS)
         return incoming.count()
 
     @classmethod
@@ -97,7 +114,7 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
     def _prepare_frame(self, frame: DataFrame) -> DataFrame:
         """Cast OHLCV values to the dataset's persisted types."""
         self._validate_required_columns(
-            frame, set(self.content_hash_columns), context="Dataset transform"
+            frame, set(_CONTENT_HASH_COLUMNS), context="Dataset transform"
         )
         return frame.select(
             F.col("timestamp").try_cast("timestamp").alias("timestamp"),
@@ -105,13 +122,13 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
             F.col("market_session").cast("string").alias("market_session"),
             *[
                 F.col(column).try_cast("long" if column == "Volume" else "double").alias(column)
-                for column in self.ohlcv_columns
+                for column in _OHLCV_COLUMNS
             ],
         )
 
     def _validate_frame(self, frame: DataFrame, spark: SparkSession, partition_spec: str) -> None:
         """Require complete, unique market rows in only the requested days."""
-        self._validate_non_null_columns(frame, self.content_hash_columns, context="Dataset transform")
+        self._validate_non_null_columns(frame, _CONTENT_HASH_COLUMNS, context="Dataset transform")
         self._validate_unique_key(frame, ("timestamp", "symbol"), context="Dataset transform")
         requested_days = sorted({partition.timestamp.date() for partition in self.config.partitions})
         unexpected_rows = frame.where(~F.to_date("timestamp").isin(requested_days))
@@ -126,7 +143,11 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
             .sortWithinPartitions("_day", "timestamp", "symbol")
             .drop("_day")
         )
-        super()._write_frame(source)
+        self._merge_frame(source, self._table_identifier, _MERGE_KEYS)
+
+    def _row_digest(self) -> F.Column:
+        """Hash every persisted market-data value for partition completion receipts."""
+        return F.sha2(F.to_json(F.struct(*(F.col(column) for column in _CONTENT_HASH_COLUMNS))), 256)
 
     def _create_transform(self, spark: SparkSession) -> DatasetTransform:
         """Build the user-facing transform selected by the dataset definition."""

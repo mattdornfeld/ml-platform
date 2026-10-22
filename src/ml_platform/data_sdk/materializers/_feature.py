@@ -5,7 +5,7 @@ from inspect import Parameter, signature
 import json
 from pathlib import Path
 from threading import Lock
-from typing import Any, ClassVar, Literal, cast, get_type_hints
+from typing import Any, Literal, cast, get_type_hints
 
 from pydantic import Field, field_validator
 from simple_classproperty import classproperty
@@ -24,6 +24,9 @@ from ml_platform.data_sdk.transforms._types import (
     FeatureKey,
     PartitionType,
 )
+
+_FEATURE_VALUE_COLUMN = "feature_value"
+_DEPENDENCY_WRITE_LOCK = Lock()
 
 
 class FeatureMaterializationConfig(MaterializerConfig):
@@ -75,16 +78,35 @@ class FeatureMaterializationConfig(MaterializerConfig):
 class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     """Materialize API-pinned feature partitions with their immutable inputs."""
 
-    config_model = FeatureMaterializationConfig
-    spark_application_name: ClassVar[str] = "ml-platform-feature-materializer"
-    callback_resource: ClassVar[str] = "feature"
-    FEATURE_VALUE_COLUMN: ClassVar[str] = "feature_value"
-    _dependency_write_lock: ClassVar[Lock] = Lock()
+    @classproperty
+    def config_model(cls) -> type[FeatureMaterializationConfig]:
+        """Return the strict runtime contract for feature jobs."""
+        return FeatureMaterializationConfig
 
-    @classmethod
+    @classproperty
+    def spark_application_name(cls) -> str:
+        """Return the stable Spark application name for feature jobs."""
+        return "ml-platform-feature-materializer"
+
+    @classproperty
     def iceberg_namespace(cls) -> str:
         """Store feature resources in their dedicated Iceberg namespace."""
         return "features"
+
+    @classproperty
+    def callback_resource(cls) -> str:
+        """Report feature partition receipts as feature resources."""
+        return "feature"
+
+    @classproperty
+    def allow_empty_partitions(cls) -> bool:
+        """Require at least one feature row for every requested partition."""
+        return False
+
+    @classproperty
+    def write_mode(cls) -> Literal["merge", "overwrite"]:
+        """Replace only the feature partitions emitted by the transform."""
+        return "overwrite"
 
     def _partition_receipt_data(self, partition: MaterializerPartition) -> dict[str, object]:
         """Pin the exact dataset revisions consumed by this feature partition."""
@@ -98,7 +120,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     @classproperty
     def _dependency_manifest_table_identifier(cls) -> str:
         """Return the shared feature-to-dataset dependency manifest identifier."""
-        return f"{cls.config_model.iceberg_catalog}.{cls.iceberg_namespace()}.dependencies"
+        return f"{cls.config_model.iceberg_catalog}.{cls.iceberg_namespace}.dependencies"
 
     @staticmethod
     def _planned_dataset(spark: Any, callbacks: list[MaterializerPartition], dataset: DatasetDependency) -> DataFrame:
@@ -334,7 +356,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         spark: SparkSession, config: FeatureMaterializationConfig, dependencies: DataFrame, targets: DataFrame
     ) -> None:
         """Replace only the dependency records for output partitions just materialized."""
-        with FeatureMaterializer._dependency_write_lock:
+        with _DEPENDENCY_WRITE_LOCK:
             identifier = FeatureMaterializer._dependency_manifest_table_identifier
             replacement_targets = (
                 targets.select("output_partition")
@@ -452,7 +474,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         """Apply the configured finite-value policy to feature output."""
         if not config.validations.require_finite_feature_value:
             return
-        value = F.col(FeatureMaterializer.FEATURE_VALUE_COLUMN).cast("double")
+        value = F.col(_FEATURE_VALUE_COLUMN).cast("double")
         invalid = frame.where(F.isnan(value) | (value == float("inf")) | (value == float("-inf")))
         if invalid.limit(1).count():
             raise ValueError("Feature transform emitted a non-finite feature_value.")
@@ -482,10 +504,10 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     ) -> None:
         """Validate one prepared feature DataFrame before replacing its partitions."""
         feature_keys = tuple(config.feature_keys)
-        expected_columns = {"timestamp", *feature_keys, FeatureMaterializer.FEATURE_VALUE_COLUMN}
+        expected_columns = {"timestamp", *feature_keys, _FEATURE_VALUE_COLUMN}
         FeatureMaterializer._validate_exact_columns(frame, expected_columns, context="Feature transform")
         FeatureMaterializer._validate_non_null_columns(
-            frame, ("timestamp", *feature_keys, FeatureMaterializer.FEATURE_VALUE_COLUMN), context="Feature transform"
+            frame, ("timestamp", *feature_keys, _FEATURE_VALUE_COLUMN), context="Feature transform"
         )
         FeatureMaterializer._validate_finite_values(frame, config)
         FeatureMaterializer._validate_unique_key(frame, ("timestamp", *feature_keys), context="Feature transform")
@@ -513,7 +535,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     def _feature_storage_path(warehouse_dir: str | Path, config: FeatureMaterializationConfig) -> Path:
         """Return the versioned feature directory under the configured data root."""
         table_name = FeatureMaterializer.config_model._iceberg_table_name_for(config.name, config.version)
-        return Path(warehouse_dir).resolve() / FeatureMaterializer.iceberg_namespace() / table_name
+        return Path(warehouse_dir).resolve() / FeatureMaterializer.iceberg_namespace / table_name
 
 
     def _additional_table_properties(self) -> dict[str, str]:
@@ -565,7 +587,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
 
     def _row_digest(self) -> F.Column:
         """Preserve the feature content hash format used by existing revisions."""
-        value_columns = ("timestamp", *self._feature_key_columns, self.FEATURE_VALUE_COLUMN)
+        value_columns = ("timestamp", *self._feature_key_columns, _FEATURE_VALUE_COLUMN)
         serialized_values = [F.coalesce(F.col(column).cast("string"), F.lit("")) for column in value_columns]
         return F.sha2(F.concat_ws("\u0001", *serialized_values), 256)
 
@@ -573,13 +595,13 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         """Cast transform values to the feature's persisted schema."""
         self._validate_exact_columns(
             frame,
-            {"timestamp", *self._feature_key_columns, self.FEATURE_VALUE_COLUMN},
+            {"timestamp", *self._feature_key_columns, _FEATURE_VALUE_COLUMN},
             context="Feature transform",
         )
         return frame.select(
             F.col("timestamp").try_cast("timestamp").alias("timestamp"),
             *(F.col(key).cast("string").alias(key) for key in self._feature_key_columns),
-            F.col(self.FEATURE_VALUE_COLUMN).try_cast(self.config.dtype).alias(self.FEATURE_VALUE_COLUMN),
+            F.col(_FEATURE_VALUE_COLUMN).try_cast(self.config.dtype).alias(_FEATURE_VALUE_COLUMN),
         )
 
     def _validate_declared_layout(self, transform: FeatureTransform) -> None:
@@ -587,7 +609,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         expected_schema = (
             "timestamp TIMESTAMP, "
             f"{', '.join(f'{key} STRING' for key in self._feature_key_columns)}, "
-            f"{self.FEATURE_VALUE_COLUMN} {self.config.dtype.upper()}"
+            f"{_FEATURE_VALUE_COLUMN} {self.config.dtype.upper()}"
         )
         expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[self.config.frequency]
         if transform.iceberg_schema != expected_schema:
