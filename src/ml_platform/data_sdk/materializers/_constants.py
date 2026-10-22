@@ -2,7 +2,6 @@
 
 import os
 
-
 DEFAULT_MATERIALIZATION_API_URL = "http://ml-control-plane:8000"
 """Default in-cluster control-plane endpoint for partition callbacks."""
 

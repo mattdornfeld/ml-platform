@@ -1,8 +1,8 @@
 """Contracts for API-dispatched materializers and their Iceberg tables."""
 
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from ml_platform.data_sdk.configs import (
     DataConfig,
@@ -39,7 +39,12 @@ class MaterializerContractTest(unittest.TestCase):
 
     def test_data_transforms_define_static_output_layouts(self) -> None:
         """Every concrete transform family inherits the shared output contract."""
-        for transform in (DataTransform, DatasetTransform, FeatureTransform, LabelTransform):
+        for transform in (
+            DataTransform,
+            DatasetTransform,
+            FeatureTransform,
+            LabelTransform,
+        ):
             self.assertTrue(issubclass(transform, DataTransform))
         self.assertIn("value_schema", DataTransform.__abstractmethods__)
         self.assertNotIn("value_schema", FeatureTransform.__abstractmethods__)
@@ -52,12 +57,28 @@ class MaterializerContractTest(unittest.TestCase):
 
     def test_dataset_config_creates_market_data_table(self) -> None:
         """Dataset storage settings are injected into a dedicated table object."""
-        config = DatasetMaterializer._config_from_json(json.dumps({
-            "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"],
-            "partition_type": "daily", "description": "Hourly prices.", "validations": [],
-            "symbols": ["aapl"], "warehouse_dir": "s3a://warehouse",
-            "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
-        }))
+        config = DatasetMaterializer._config_from_json(
+            json.dumps(
+                {
+                    "name": "sp500",
+                    "version": 3,
+                    "dataset_type": "market_data",
+                    "keys": ["symbol"],
+                    "partition_type": "daily",
+                    "description": "Hourly prices.",
+                    "validations": [],
+                    "symbols": ["aapl"],
+                    "warehouse_dir": "s3a://warehouse",
+                    "partitions": [
+                        {
+                            "partition_id": "partition-1",
+                            "timestamp": "2026-01-01T00:00:00Z",
+                            "callback_token": "token",
+                        }
+                    ],
+                }
+            )
+        )
         table = DatasetMaterializer(config).iceberg_table
         self.assertEqual(config.symbols, ["AAPL"])
         self.assertEqual(table.id, "ml_platform.market_data.`sp500-v3`")
@@ -81,14 +102,31 @@ class MaterializerContractTest(unittest.TestCase):
     def test_data_sdk_model_fields_have_schema_descriptions(self) -> None:
         """Pydantic models exposed by the data SDK document every field."""
         models = (
-            TimeRange, DataConfig, DatasetConfig, LabelConfig, FeatureConfig, MarketDataConfig,
-            TripleBarrierConfig, DatasetDependency, PartitionDependency, MaterializerPartition,
-            MinimumRowsValidationConfig, MaterializerConfig, DatasetMaterializationConfig,
-            FeatureMaterializationConfig, LabelMaterializationConfig,
+            TimeRange,
+            DataConfig,
+            DatasetConfig,
+            LabelConfig,
+            FeatureConfig,
+            MarketDataConfig,
+            TripleBarrierConfig,
+            DatasetDependency,
+            PartitionDependency,
+            MaterializerPartition,
+            MinimumRowsValidationConfig,
+            MaterializerConfig,
+            DatasetMaterializationConfig,
+            FeatureMaterializationConfig,
+            LabelMaterializationConfig,
         )
         for model in models:
-            missing = [name for name, field in model.model_fields.items() if not field.description]
-            self.assertEqual(missing, [], f"{model.__name__} has undocumented fields: {missing}")
+            missing = [
+                name
+                for name, field in model.model_fields.items()
+                if not field.description
+            ]
+            self.assertEqual(
+                missing, [], f"{model.__name__} has undocumented fields: {missing}"
+            )
 
     def test_transforms_remain_decoupled_from_configs_and_tables(self) -> None:
         """User transforms never import configuration or persistence implementation modules."""
@@ -100,6 +138,7 @@ class MaterializerContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 class TransformMaterializerContractTest(unittest.TestCase):
     """Verify labels and features share their table lifecycle contract."""
@@ -114,26 +153,32 @@ class TransformMaterializerContractTest(unittest.TestCase):
             "dtype": "double",
             "frequency": "daily",
             "feature_keys": ["symbol"],
-            "datasets": [{
-                "name": "sp500",
-                "version": 3,
-                "dataset_type": "market_data",
-                "argument_name": "market_data",
-                "num_lookback_partitions": 1,
-            }],
+            "datasets": [
+                {
+                    "name": "sp500",
+                    "version": 3,
+                    "dataset_type": "market_data",
+                    "argument_name": "market_data",
+                    "num_lookback_partitions": 1,
+                }
+            ],
             "transform": "ml_platform.data_sdk.LogReturnTransform",
-            "partitions": [{
-                "partition_id": "partition-1",
-                "timestamp": "2026-01-01T00:00:00Z",
-                "callback_token": "token",
-                "partition_dependencies": [{
-                    "partition_id": "market-partition-1",
-                    "dataset_name": "sp500",
-                    "dataset_version": 3,
+            "partitions": [
+                {
+                    "partition_id": "partition-1",
                     "timestamp": "2026-01-01T00:00:00Z",
-                    "snapshot_id": 1,
-                }],
-            }],
+                    "callback_token": "token",
+                    "partition_dependencies": [
+                        {
+                            "partition_id": "market-partition-1",
+                            "dataset_name": "sp500",
+                            "dataset_version": 3,
+                            "timestamp": "2026-01-01T00:00:00Z",
+                            "snapshot_id": 1,
+                        }
+                    ],
+                }
+            ],
         }
         feature_table = FeatureMaterializer(
             FeatureMaterializationConfig.model_validate_json(json.dumps(common))
@@ -142,16 +187,22 @@ class TransformMaterializerContractTest(unittest.TestCase):
             LabelMaterializationConfig.model_validate_json(json.dumps(common))
         ).iceberg_table
 
-        self.assertEqual(feature_table.schema, {
-            "timestamp": "timestamp",
-            "symbol": "string",
-            "feature_value": "double",
-        })
-        self.assertEqual(label_table.schema, {
-            "timestamp": "timestamp",
-            "symbol": "string",
-            "label_value": "double",
-        })
+        self.assertEqual(
+            feature_table.schema,
+            {
+                "timestamp": "timestamp",
+                "symbol": "string",
+                "feature_value": "double",
+            },
+        )
+        self.assertEqual(
+            label_table.schema,
+            {
+                "timestamp": "timestamp",
+                "symbol": "string",
+                "label_value": "double",
+            },
+        )
         self.assertEqual(feature_table.partition_type, label_table.partition_type)
         self.assertEqual(feature_table.resource_type, "feature")
         self.assertEqual(label_table.resource_type, "label")

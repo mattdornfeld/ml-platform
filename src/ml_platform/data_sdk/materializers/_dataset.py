@@ -1,12 +1,14 @@
 """API-dispatched Spark materializer for market-data datasets."""
-from dataclasses import dataclass
-from pydantic import Field, field_validator
-from pyspark.sql import DataFrame, SparkSession, functions as F
 
+from dataclasses import dataclass
+
+from pydantic import Field, field_validator
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+
+from ml_platform.data_sdk._exceptions import MarketSymbolConfigurationError
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig
 from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
-from ml_platform.data_sdk._exceptions import MarketSymbolConfigurationError
-from ml_platform.data_sdk.materializers.exceptions import UnsupportedDatasetTypeError
 from ml_platform.data_sdk.materializers._materialization_validator import (
     ExactColumnsValidationConfig,
     FiniteNumericValuesValidationConfig,
@@ -16,8 +18,13 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
     ValidationConfig,
     XnysRegularSessionTemporalFilterConfig,
 )
+from ml_platform.data_sdk.materializers.exceptions import UnsupportedDatasetTypeError
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
-from ml_platform.data_sdk.transforms._types import DatasetType, FeatureKey, PartitionType
+from ml_platform.data_sdk.transforms._types import (
+    DatasetType,
+    FeatureKey,
+    PartitionType,
+)
 
 _OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 _CONTENT_HASH_COLUMNS = ("timestamp", "symbol", "market_session", *_OHLCV_COLUMNS)
@@ -26,7 +33,9 @@ _CONTENT_HASH_COLUMNS = ("timestamp", "symbol", "market_session", *_OHLCV_COLUMN
 class DatasetMaterializationConfig(MaterializerConfig):
     """Complete JSON contract consumed by a dataset Spark materializer."""
 
-    dataset_type: DatasetType = Field(description="Kind of dataset transform to execute.")
+    dataset_type: DatasetType = Field(
+        description="Kind of dataset transform to execute."
+    )
     keys: list[FeatureKey] = Field(
         min_length=1,
         description="Ordered logical entity keys emitted by the dataset transform.",
@@ -34,7 +43,10 @@ class DatasetMaterializationConfig(MaterializerConfig):
     partition_type: PartitionType = Field(
         description="Iceberg timestamp partition cadence used for this dataset.",
     )
-    symbols: list[str] = Field(min_length=1, description="Yahoo Finance ticker symbols to retrieve for each requested partition.")
+    symbols: list[str] = Field(
+        min_length=1,
+        description="Yahoo Finance ticker symbols to retrieve for each requested partition.",
+    )
 
     @field_validator("symbols")
     @classmethod
@@ -45,7 +57,6 @@ class DatasetMaterializationConfig(MaterializerConfig):
                 "Market-data materialization requires at least one non-empty ticker symbol."
             )
         return normalized
-
 
 
 @dataclass(frozen=True)
@@ -74,7 +85,10 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
             partition_type=self.config.partition_type,
             description=self.config.description,
             dependencies=(),
-            validations=tuple(validation.model_dump(mode="json") for validation in self.config.validations),
+            validations=tuple(
+                validation.model_dump(mode="json")
+                for validation in self.config.validations
+            ),
             additional_properties=(),
         )
 
@@ -90,19 +104,25 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
 
     def _row_digest(self) -> F.Column:
         """Hash every persisted market-data value for partition completion receipts."""
-        return F.sha2(F.to_json(F.struct(*(F.col(column) for column in _CONTENT_HASH_COLUMNS))), 256)
-
+        return F.sha2(
+            F.to_json(F.struct(*(F.col(column) for column in _CONTENT_HASH_COLUMNS))),
+            256,
+        )
 
     def _transform(self, spark: SparkSession) -> DatasetTransform:
         """Build the user-facing transform selected by the dataset definition."""
         match self.config.dataset_type:
             case DatasetType.MARKET_DATA:
-                from ml_platform.data_sdk.dataset_transforms._market_data import MarketDataTransform
+                from ml_platform.data_sdk.dataset_transforms._market_data import (
+                    MarketDataTransform,
+                )
 
                 return MarketDataTransform(
                     spark=spark,
                     symbols=self.config.symbols,
-                    partitions=[partition.timestamp for partition in self.config.partitions],
+                    partitions=[
+                        partition.timestamp for partition in self.config.partitions
+                    ],
                     keys=self.config.keys,
                     partition_type=self.config.partition_type,
                 )

@@ -1,11 +1,11 @@
 """FastAPI application for the dataset and feature materialization control plane."""
 
 import asyncio
-from contextlib import asynccontextmanager
-from pathlib import Path as FilePath
-from datetime import datetime, time, timedelta, timezone
 import os
 import secrets
+from contextlib import asynccontextmanager
+from datetime import datetime, time, timedelta, timezone
+from pathlib import Path as FilePath
 from typing import Annotated, Any
 from urllib.parse import quote
 from uuid import UUID
@@ -13,24 +13,22 @@ from uuid import UUID
 from fastapi import Body, Depends, FastAPI, HTTPException, Path, status
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from kubernetes import client as kubernetes_client
+from kubernetes.client.exceptions import ApiException
 from psycopg import Connection, errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Json, Jsonb
-from kubernetes import client as kubernetes_client
-from kubernetes.client.exceptions import ApiException
 
 from ml_platform.api.database import get_connection
-from ml_platform.api.scheduler import JobScheduler
-from ml_platform.api.migrations import migrate_database
 from ml_platform.api.dtos import (
     DatasetCreateRequest,
     DatasetDescriptionUpdate,
     DatasetResponse,
     ErrorResponse,
     FeatureCreateRequest,
-    FeatureResponse,
     FeatureMaterializationMode,
     FeaturePartitionMaterializationRequest,
+    FeatureResponse,
     JobResponse,
     MaterializationJobResponse,
     PartitionCompletionRequest,
@@ -38,6 +36,9 @@ from ml_platform.api.dtos import (
     PartitionResultResponse,
     ValidationErrorResponse,
 )
+from ml_platform.api.migrations import migrate_database
+from ml_platform.api.scheduler import JobScheduler
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -79,7 +80,9 @@ def dashboard_ui(dashboard_path: str = "") -> FileResponse:
 
 ResourceName = Annotated[str, Path(min_length=1)]
 ResourceVersion = Annotated[int, Path(gt=0)]
-_NOT_IMPLEMENTED_DETAIL = "Database-backed materialization services have not been implemented."
+_NOT_IMPLEMENTED_DETAIL = (
+    "Database-backed materialization services have not been implemented."
+)
 _NOT_IMPLEMENTED = HTTPException(status_code=501, detail=_NOT_IMPLEMENTED_DETAIL)
 DatabaseConnection = Annotated[Connection, Depends(get_connection)]
 
@@ -103,7 +106,9 @@ def validation_example(
     return {"detail": [detail]}
 
 
-def error_responses(examples: dict[str, dict[str, Any]]) -> dict[int | str, dict[str, Any]]:
+def error_responses(
+    examples: dict[str, dict[str, Any]],
+) -> dict[int | str, dict[str, Any]]:
     """Document every currently possible error response for one route."""
     return {
         422: {
@@ -132,22 +137,40 @@ DATASET_VALIDATION = {
     "empty_name": {
         "summary": "Dataset name must not be empty",
         "value": validation_example(
-            ["body", "name"], "String should have at least 1 character", "string_too_short", "", {"min_length": 1}
+            ["body", "name"],
+            "String should have at least 1 character",
+            "string_too_short",
+            "",
+            {"min_length": 1},
         ),
     },
     "non_positive_version": {
         "summary": "Dataset version must be greater than zero",
         "value": validation_example(
-            ["body", "version"], "Input should be greater than 0", "greater_than", 0, {"gt": 0}
+            ["body", "version"],
+            "Input should be greater than 0",
+            "greater_than",
+            0,
+            {"gt": 0},
         ),
     },
     "missing_config": {
         "summary": "Dataset configuration is required",
-        "value": validation_example(["body", "config"], "Field required", "missing", {"name": "market_data", "version": 1}),
+        "value": validation_example(
+            ["body", "config"],
+            "Field required",
+            "missing",
+            {"name": "market_data", "version": 1},
+        ),
     },
     "unexpected_property": {
         "summary": "Unknown properties are rejected",
-        "value": validation_example(["body", "unknown"], "Extra inputs are not permitted", "extra_forbidden", "value"),
+        "value": validation_example(
+            ["body", "unknown"],
+            "Extra inputs are not permitted",
+            "extra_forbidden",
+            "value",
+        ),
     },
 }
 
@@ -156,32 +179,49 @@ FEATURE_VALIDATION = {
     "invalid_dtype": {
         "summary": "Feature dtype must be double, float, int, or bigint",
         "value": validation_example(
-            ["body", "dtype"], "Input should be 'double', 'float', 'int' or 'bigint'", "literal_error", "decimal"
+            ["body", "dtype"],
+            "Input should be 'double', 'float', 'int' or 'bigint'",
+            "literal_error",
+            "decimal",
         ),
     },
     "invalid_frequency": {
         "summary": "Feature frequency must be hourly or daily",
         "value": validation_example(
-            ["body", "frequency"], "Input should be 'hourly' or 'daily'", "literal_error", "minute"
+            ["body", "frequency"],
+            "Input should be 'hourly' or 'daily'",
+            "literal_error",
+            "minute",
         ),
     },
     "empty_datasets": {
         "summary": "A feature requires at least one dataset dependency",
         "value": validation_example(
-            ["body", "datasets"], "List should have at least 1 item after validation, not 0", "too_short", [],
+            ["body", "datasets"],
+            "List should have at least 1 item after validation, not 0",
+            "too_short",
+            [],
             {"field_type": "List", "min_length": 1, "actual_length": 0},
         ),
     },
     "invalid_dependency": {
         "summary": "Dependency versions must be positive and lookbacks non-negative",
         "value": validation_example(
-            ["body", "datasets", 0, "num_lookback_partitions"], "Input should be greater than or equal to 0", "greater_than_equal", -1, {"ge": 0}
+            ["body", "datasets", 0, "num_lookback_partitions"],
+            "Input should be greater than or equal to 0",
+            "greater_than_equal",
+            -1,
+            {"ge": 0},
         ),
     },
     "empty_transform_or_description": {
         "summary": "Transform and description must not be empty",
         "value": validation_example(
-            ["body", "transform"], "String should have at least 1 character", "string_too_short", "", {"min_length": 1}
+            ["body", "transform"],
+            "String should have at least 1 character",
+            "string_too_short",
+            "",
+            {"min_length": 1},
         ),
     },
 }
@@ -189,31 +229,52 @@ FEATURE_VALIDATION = {
 PARTITION_VALIDATION = {
     "non_positive_resource_version": {
         "summary": "Resource version path parameter must be greater than zero",
-        "value": validation_example(["path", "version"], "Input should be greater than 0", "greater_than", "0", {"gt": 0}),
+        "value": validation_example(
+            ["path", "version"],
+            "Input should be greater than 0",
+            "greater_than",
+            "0",
+            {"gt": 0},
+        ),
     },
     "empty_timestamps": {
         "summary": "At least one timestamp is required",
         "value": validation_example(
-            ["body", "timestamps"], "List should have at least 1 item after validation, not 0", "too_short", [],
+            ["body", "timestamps"],
+            "List should have at least 1 item after validation, not 0",
+            "too_short",
+            [],
             {"field_type": "List", "min_length": 1, "actual_length": 0},
         ),
     },
     "missing_utc_offset": {
         "summary": "Timestamp must include a UTC offset",
         "value": validation_example(
-            ["body", "timestamps"], "Value error, Partition timestamps must include a UTC offset.", "value_error", ["2026-10-20T18:00:00"], {"error": {}}
+            ["body", "timestamps"],
+            "Value error, Partition timestamps must include a UTC offset.",
+            "value_error",
+            ["2026-10-20T18:00:00"],
+            {"error": {}},
         ),
     },
     "non_utc_offset": {
         "summary": "Timestamp must be UTC",
         "value": validation_example(
-            ["body", "timestamps"], "Value error, Partition timestamps must be in UTC.", "value_error", ["2026-10-20T18:00:00+01:00"], {"error": {}}
+            ["body", "timestamps"],
+            "Value error, Partition timestamps must be in UTC.",
+            "value_error",
+            ["2026-10-20T18:00:00+01:00"],
+            {"error": {}},
         ),
     },
     "not_hour_aligned": {
         "summary": "Timestamp must be aligned to the start of an hour",
         "value": validation_example(
-            ["body", "timestamps"], "Value error, Partition timestamps must be aligned to an exact hour.", "value_error", ["2026-10-20T18:15:47.828Z"], {"error": {}}
+            ["body", "timestamps"],
+            "Value error, Partition timestamps must be aligned to an exact hour.",
+            "value_error",
+            ["2026-10-20T18:15:47.828Z"],
+            {"error": {}},
         ),
     },
     "unexpected_property": DATASET_VALIDATION["unexpected_property"],
@@ -223,30 +284,52 @@ COMPLETION_VALIDATION = {
     "invalid_partition_id": {
         "summary": "Every partition request ID must be a UUID",
         "value": validation_example(
-            ["body", 0, "partition_id"], "Input should be a valid UUID, unable to parse string as a UUID", "uuid_parsing", "not-a-uuid"
+            ["body", 0, "partition_id"],
+            "Input should be a valid UUID, unable to parse string as a UUID",
+            "uuid_parsing",
+            "not-a-uuid",
         ),
     },
     "empty_batch": {
         "summary": "At least one receipt is required",
-        "value": validation_example(["body"], "List should have at least 1 item", "too_short", []),
+        "value": validation_example(
+            ["body"], "List should have at least 1 item", "too_short", []
+        ),
     },
     "invalid_row_count": {
         "summary": "Row count cannot be negative",
-        "value": validation_example(["body", 0, "row_count"], "Input should be greater than or equal to 0", "greater_than_equal", -1, {"ge": 0}),
+        "value": validation_example(
+            ["body", 0, "row_count"],
+            "Input should be greater than or equal to 0",
+            "greater_than_equal",
+            -1,
+            {"ge": 0},
+        ),
     },
     "missing_schema": {
         "summary": "Committed schema is required",
-        "value": validation_example(["body", 0, "schema"], "Field required", "missing", {}),
+        "value": validation_example(
+            ["body", 0, "schema"], "Field required", "missing", {}
+        ),
     },
     "empty_content_hash": {
         "summary": "Content hash must not be empty",
         "value": validation_example(
-            ["body", 0, "content_hash"], "String should have at least 1 character", "string_too_short", "", {"min_length": 1}
+            ["body", 0, "content_hash"],
+            "String should have at least 1 character",
+            "string_too_short",
+            "",
+            {"min_length": 1},
         ),
     },
     "unexpected_property": {
         "summary": "Unknown receipt properties are rejected",
-        "value": validation_example(["body", 0, "unknown"], "Extra inputs are not permitted", "extra_forbidden", "value"),
+        "value": validation_example(
+            ["body", 0, "unknown"],
+            "Extra inputs are not permitted",
+            "extra_forbidden",
+            "value",
+        ),
     },
 }
 
@@ -254,7 +337,10 @@ JOB_VALIDATION = {
     "invalid_job_id": {
         "summary": "Job ID must be a UUID",
         "value": validation_example(
-            ["path", "job_id"], "Input should be a valid UUID, unable to parse string as a UUID", "uuid_parsing", "not-a-uuid"
+            ["path", "job_id"],
+            "Input should be a valid UUID, unable to parse string as a UUID",
+            "uuid_parsing",
+            "not-a-uuid",
         ),
     }
 }
@@ -297,7 +383,9 @@ def _job_partitions(cursor: Any, job_id: UUID) -> list[dict[str, Any]]:
     return list(cursor.fetchall())
 
 
-def _resource_jobs(cursor: Any, resource_type: str, name: str, version: int) -> list[dict[str, Any]]:
+def _resource_jobs(
+    cursor: Any, resource_type: str, name: str, version: int
+) -> list[dict[str, Any]]:
     """Return jobs which targeted one immutable resource version."""
     if resource_type == "dataset":
         cursor.execute(
@@ -319,10 +407,13 @@ def _resource_jobs(cursor: Any, resource_type: str, name: str, version: int) -> 
 
 
 @app.get("/datasets", tags=["datasets"])
-def list_datasets(connection: DatabaseConnection, include_deleted: bool = False) -> list[dict[str, Any]]:
+def list_datasets(
+    connection: DatabaseConnection, include_deleted: bool = False
+) -> list[dict[str, Any]]:
     """List dataset definitions with logical partition status counts for the dashboard."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("""SELECT datasets.name, datasets.version, datasets.dataset_type, datasets.config, datasets.created_at, datasets.deleted_at, datasets.deprecated_at,
+        cursor.execute(
+            """SELECT datasets.name, datasets.version, datasets.dataset_type, datasets.config, datasets.created_at, datasets.deleted_at, datasets.deprecated_at,
             COUNT(request.partition_id) AS partition_count,
             COUNT(request.partition_id) FILTER (WHERE request.status = 'created') AS created_partition_count,
             COUNT(request.partition_id) FILTER (WHERE request.status = 'pending') AS pending_partition_count,
@@ -331,7 +422,9 @@ def list_datasets(connection: DatabaseConnection, include_deleted: bool = False)
               ON request.dataset_name = datasets.name AND request.dataset_version = datasets.version
             WHERE (%s OR datasets.deleted_at IS NULL)
             GROUP BY datasets.name, datasets.version, datasets.dataset_type, datasets.config, datasets.created_at, datasets.deleted_at, datasets.deprecated_at
-            ORDER BY datasets.name, datasets.version DESC""", (include_deleted,))
+            ORDER BY datasets.name, datasets.version DESC""",
+            (include_deleted,),
+        )
         datasets = list(cursor.fetchall())
     for dataset in datasets:
         dataset["id"] = f"{dataset['name']}_v{dataset['version']}"
@@ -339,18 +432,28 @@ def list_datasets(connection: DatabaseConnection, include_deleted: bool = False)
 
 
 @app.get("/datasets/{name}/versions/{version}", tags=["datasets"])
-def get_dataset(name: ResourceName, version: ResourceVersion, connection: DatabaseConnection) -> dict[str, Any]:
+def get_dataset(
+    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+) -> dict[str, Any]:
     """Return one dataset and the latest receipt for each logical partition."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("SELECT name, version, dataset_type, config, created_at, deleted_at, deprecated_at FROM datasets WHERE name = %s AND version = %s", (name, version))
+        cursor.execute(
+            "SELECT name, version, dataset_type, config, created_at, deleted_at, deprecated_at FROM datasets WHERE name = %s AND version = %s",
+            (name, version),
+        )
         dataset = cursor.fetchone()
         if dataset is None:
-            raise HTTPException(status_code=404, detail="Dataset version does not exist.")
-        cursor.execute("""SELECT DISTINCT ON (request.timestamp) request.partition_id, request.timestamp, request.status,
+            raise HTTPException(
+                status_code=404, detail="Dataset version does not exist."
+            )
+        cursor.execute(
+            """SELECT DISTINCT ON (request.timestamp) request.partition_id, request.timestamp, request.status,
                 request.created_at, request.updated_at, receipt.content_hash, receipt.snapshot_id
             FROM partition_update_requests request LEFT JOIN dataset_partitions receipt ON receipt.partition_id = request.partition_id
             WHERE request.dataset_name = %s AND request.dataset_version = %s
-            ORDER BY request.timestamp DESC, request.created_at DESC""", (name, version))
+            ORDER BY request.timestamp DESC, request.created_at DESC""",
+            (name, version),
+        )
         dataset["partitions"] = list(cursor.fetchall())
         dataset["jobs"] = _resource_jobs(cursor, "dataset", name, version)
     dataset["id"] = f"{dataset['name']}_v{dataset['version']}"
@@ -375,32 +478,59 @@ def update_dataset_description(
         )
         dataset = cursor.fetchone()
         if dataset is None:
-            raise HTTPException(status_code=404, detail="Dataset version does not exist.")
+            raise HTTPException(
+                status_code=404, detail="Dataset version does not exist."
+            )
     connection.commit()
     dataset["id"] = f"{dataset['name']}_v{dataset['version']}"
     return dataset
 
 
-@app.delete("/datasets/{name}/versions/{version}", status_code=status.HTTP_204_NO_CONTENT, tags=["datasets"])
-def delete_dataset(name: ResourceName, version: ResourceVersion, connection: DatabaseConnection) -> None:
+@app.delete(
+    "/datasets/{name}/versions/{version}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["datasets"],
+)
+def delete_dataset(
+    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+) -> None:
     """Soft-delete a dataset version and cancel its unstarted partition requests."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("""UPDATE datasets SET deleted_at = COALESCE(deleted_at, now())
-            WHERE name = %s AND version = %s RETURNING name""", (name, version))
+        cursor.execute(
+            """UPDATE datasets SET deleted_at = COALESCE(deleted_at, now())
+            WHERE name = %s AND version = %s RETURNING name""",
+            (name, version),
+        )
         if cursor.fetchone() is None:
-            raise HTTPException(status_code=404, detail="Dataset version does not exist.")
-        cursor.execute("""UPDATE partition_update_requests SET status = 'cancelled', updated_at = now()
-            WHERE dataset_name = %s AND dataset_version = %s AND status = 'pending'""", (name, version))
-        cursor.execute("""UPDATE jobs SET status = 'cancelled', updated_at = now()
+            raise HTTPException(
+                status_code=404, detail="Dataset version does not exist."
+            )
+        cursor.execute(
+            """UPDATE partition_update_requests SET status = 'cancelled', updated_at = now()
+            WHERE dataset_name = %s AND dataset_version = %s AND status = 'pending'""",
+            (name, version),
+        )
+        cursor.execute(
+            """UPDATE jobs SET status = 'cancelled', updated_at = now()
             WHERE status = 'submitted' AND id IN (
               SELECT DISTINCT job_id FROM partition_update_requests
               WHERE dataset_name = %s AND dataset_version = %s
-            )""", (name, version))
+            )""",
+            (name, version),
+        )
     connection.commit()
 
 
-@app.post("/datasets", response_model=DatasetResponse, status_code=201, responses=error_responses(DATASET_VALIDATION), tags=["datasets"])
-def create_dataset(payload: DatasetCreateRequest, connection: DatabaseConnection) -> DatasetResponse:
+@app.post(
+    "/datasets",
+    response_model=DatasetResponse,
+    status_code=201,
+    responses=error_responses(DATASET_VALIDATION),
+    tags=["datasets"],
+)
+def create_dataset(
+    payload: DatasetCreateRequest, connection: DatabaseConnection
+) -> DatasetResponse:
     """Register an immutable dataset definition."""
     try:
         with connection.cursor(row_factory=dict_row) as cursor:
@@ -408,36 +538,66 @@ def create_dataset(payload: DatasetCreateRequest, connection: DatabaseConnection
                 """INSERT INTO datasets (name, version, dataset_type, config)
                 VALUES (%s, %s, %s, %s)
                 RETURNING name, version, dataset_type, config, created_at""",
-                (payload.name, payload.version, payload.dataset_type.value, Json(payload.config.model_dump(mode="json"))),
+                (
+                    payload.name,
+                    payload.version,
+                    payload.dataset_type.value,
+                    Json(payload.config.model_dump(mode="json")),
+                ),
             )
             row = cursor.fetchone()
-            job_id = _enqueue_dataset_job(cursor, payload.name, payload.version, payload.config.model_dump(mode="json"))
+            job_id = _enqueue_dataset_job(
+                cursor,
+                payload.name,
+                payload.version,
+                payload.config.model_dump(mode="json"),
+            )
         connection.commit()
     except errors.UniqueViolation as error:
-        raise HTTPException(status_code=409, detail="Dataset name and version already exist.") from error
+        raise HTTPException(
+            status_code=409, detail="Dataset name and version already exist."
+        ) from error
     assert row is not None
     return DatasetResponse.model_validate({**row, "job_id": job_id})
 
 
-def _enqueue_dataset_job(cursor: Any, name: str, version: int, config: dict[str, Any]) -> UUID:
+def _enqueue_dataset_job(
+    cursor: Any, name: str, version: int, config: dict[str, Any]
+) -> UUID:
     """Create the authoritative queue record and daily partition requests."""
-    start = datetime.combine(datetime.fromisoformat(config["time_range"]["start_date"]).date(), time.min, timezone.utc)
-    end = datetime.combine(datetime.fromisoformat(config["time_range"]["end_date"]).date(), time.min, timezone.utc)
-    cursor.execute("INSERT INTO jobs (type, status) VALUES ('dataset_materialization', 'submitted') RETURNING id")
+    start = datetime.combine(
+        datetime.fromisoformat(config["time_range"]["start_date"]).date(),
+        time.min,
+        timezone.utc,
+    )
+    end = datetime.combine(
+        datetime.fromisoformat(config["time_range"]["end_date"]).date(),
+        time.min,
+        timezone.utc,
+    )
+    cursor.execute(
+        "INSERT INTO jobs (type, status) VALUES ('dataset_materialization', 'submitted') RETURNING id"
+    )
     job_id = cursor.fetchone()["id"]
     timestamp = start
     while timestamp < end:
-        cursor.execute("""INSERT INTO partition_update_requests (job_id, dataset_name, dataset_version, timestamp, status, callback_token)
-            VALUES (%s, %s, %s, %s, 'pending', %s)""", (job_id, name, version, timestamp, secrets.token_urlsafe(32)))
+        cursor.execute(
+            """INSERT INTO partition_update_requests (job_id, dataset_name, dataset_version, timestamp, status, callback_token)
+            VALUES (%s, %s, %s, %s, 'pending', %s)""",
+            (job_id, name, version, timestamp, secrets.token_urlsafe(32)),
+        )
         timestamp += timedelta(days=1)
     return job_id
 
 
 @app.get("/features", tags=["features"])
-def list_features(connection: DatabaseConnection, include_deleted: bool = False) -> list[dict[str, Any]]:
+def list_features(
+    connection: DatabaseConnection, include_deleted: bool = False
+) -> list[dict[str, Any]]:
     """List feature definitions with logical partition status counts for the dashboard."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("""SELECT features.name, features.version, features.dtype, features.frequency, features.feature_keys,
+        cursor.execute(
+            """SELECT features.name, features.version, features.dtype, features.frequency, features.feature_keys,
             features.description, features.created_at, features.deleted_at, features.deprecated_at, COUNT(request.partition_id) AS partition_count,
             COUNT(request.partition_id) FILTER (WHERE request.status = 'created') AS created_partition_count,
             COUNT(request.partition_id) FILTER (WHERE request.status = 'pending') AS pending_partition_count,
@@ -447,97 +607,189 @@ def list_features(connection: DatabaseConnection, include_deleted: bool = False)
             WHERE (%s OR features.deleted_at IS NULL)
             GROUP BY features.name, features.version, features.dtype, features.frequency, features.feature_keys,
                 features.description, features.created_at, features.deleted_at, features.deprecated_at
-            ORDER BY features.name, features.version DESC""", (include_deleted,))
+            ORDER BY features.name, features.version DESC""",
+            (include_deleted,),
+        )
         return list(cursor.fetchall())
 
 
 @app.get("/features/{name}/versions/{version}", tags=["features"])
-def get_feature(name: ResourceName, version: ResourceVersion, connection: DatabaseConnection) -> dict[str, Any]:
+def get_feature(
+    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+) -> dict[str, Any]:
     """Return one feature, its dependencies, and latest logical partition receipts."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("""SELECT name, version, dtype, frequency, feature_keys, validations, transform, description,
-            parameters, created_at, deleted_at, deprecated_at FROM features WHERE name = %s AND version = %s""", (name, version))
+        cursor.execute(
+            """SELECT name, version, dtype, frequency, feature_keys, validations, transform, description,
+            parameters, created_at, deleted_at, deprecated_at FROM features WHERE name = %s AND version = %s""",
+            (name, version),
+        )
         feature = cursor.fetchone()
         if feature is None:
-            raise HTTPException(status_code=404, detail="Feature version does not exist.")
-        cursor.execute("""SELECT dependencies.dataset_name AS name, dependencies.dataset_version AS version,
+            raise HTTPException(
+                status_code=404, detail="Feature version does not exist."
+            )
+        cursor.execute(
+            """SELECT dependencies.dataset_name AS name, dependencies.dataset_version AS version,
             datasets.dataset_type, dependencies.argument_name, dependencies.num_lookback_partitions
             FROM feature_dataset_dependencies AS dependencies
             JOIN datasets ON datasets.name = dependencies.dataset_name AND datasets.version = dependencies.dataset_version
             WHERE dependencies.feature_name = %s AND dependencies.feature_version = %s
-            ORDER BY dependencies.dataset_name, dependencies.dataset_version""", (name, version))
+            ORDER BY dependencies.dataset_name, dependencies.dataset_version""",
+            (name, version),
+        )
         feature["datasets"] = list(cursor.fetchall())
-        cursor.execute("""SELECT DISTINCT ON (request.timestamp) request.partition_id, request.timestamp, request.status,
+        cursor.execute(
+            """SELECT DISTINCT ON (request.timestamp) request.partition_id, request.timestamp, request.status,
                 request.created_at, request.updated_at, receipt.content_hash, receipt.snapshot_id
             FROM feature_partition_update_requests request LEFT JOIN feature_partitions receipt ON receipt.partition_id = request.partition_id
             WHERE request.feature_name = %s AND request.feature_version = %s
-            ORDER BY request.timestamp DESC, request.created_at DESC""", (name, version))
+            ORDER BY request.timestamp DESC, request.created_at DESC""",
+            (name, version),
+        )
         feature["partitions"] = list(cursor.fetchall())
         feature["jobs"] = _resource_jobs(cursor, "feature", name, version)
     _attach_minio_locations(feature, f"features/{name}-v{version}")
     return feature
 
 
-@app.delete("/features/{name}/versions/{version}", status_code=status.HTTP_204_NO_CONTENT, tags=["features"])
-def delete_feature(name: ResourceName, version: ResourceVersion, connection: DatabaseConnection) -> None:
+@app.delete(
+    "/features/{name}/versions/{version}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["features"],
+)
+def delete_feature(
+    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+) -> None:
     """Soft-delete a feature version and cancel its unstarted partition requests."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("""UPDATE features SET deleted_at = COALESCE(deleted_at, now())
-            WHERE name = %s AND version = %s RETURNING name""", (name, version))
+        cursor.execute(
+            """UPDATE features SET deleted_at = COALESCE(deleted_at, now())
+            WHERE name = %s AND version = %s RETURNING name""",
+            (name, version),
+        )
         if cursor.fetchone() is None:
-            raise HTTPException(status_code=404, detail="Feature version does not exist.")
-        cursor.execute("""UPDATE feature_partition_update_requests SET status = 'cancelled', updated_at = now()
-            WHERE feature_name = %s AND feature_version = %s AND status = 'pending'""", (name, version))
-        cursor.execute("""UPDATE jobs SET status = 'cancelled', updated_at = now()
+            raise HTTPException(
+                status_code=404, detail="Feature version does not exist."
+            )
+        cursor.execute(
+            """UPDATE feature_partition_update_requests SET status = 'cancelled', updated_at = now()
+            WHERE feature_name = %s AND feature_version = %s AND status = 'pending'""",
+            (name, version),
+        )
+        cursor.execute(
+            """UPDATE jobs SET status = 'cancelled', updated_at = now()
             WHERE status = 'submitted' AND id IN (
               SELECT DISTINCT job_id FROM feature_partition_update_requests
               WHERE feature_name = %s AND feature_version = %s
-            )""", (name, version))
+            )""",
+            (name, version),
+        )
     connection.commit()
 
 
-@app.post("/features", response_model=FeatureResponse, status_code=201, responses=error_responses(FEATURE_VALIDATION), tags=["features"])
-def create_feature(payload: FeatureCreateRequest, connection: DatabaseConnection) -> FeatureResponse:
+@app.post(
+    "/features",
+    response_model=FeatureResponse,
+    status_code=201,
+    responses=error_responses(FEATURE_VALIDATION),
+    tags=["features"],
+)
+def create_feature(
+    payload: FeatureCreateRequest, connection: DatabaseConnection
+) -> FeatureResponse:
     """Register an immutable feature definition."""
     try:
         with connection.cursor(row_factory=dict_row) as cursor:
             for dependency in payload.datasets:
-                cursor.execute("""SELECT dataset_type, deleted_at FROM datasets WHERE name = %s AND version = %s""",
-                    (dependency.name, dependency.version))
+                cursor.execute(
+                    """SELECT dataset_type, deleted_at FROM datasets WHERE name = %s AND version = %s""",
+                    (dependency.name, dependency.version),
+                )
                 dataset = cursor.fetchone()
                 if dataset is None or dataset["deleted_at"] is not None:
-                    raise HTTPException(status_code=422, detail="Feature datasets must reference active dataset versions.")
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Feature datasets must reference active dataset versions.",
+                    )
                 if dataset["dataset_type"] != dependency.dataset_type.value:
-                    raise HTTPException(status_code=422, detail="Feature dataset type must match the registered dataset version.")
-            cursor.execute("""INSERT INTO features
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Feature dataset type must match the registered dataset version.",
+                    )
+            cursor.execute(
+                """INSERT INTO features
                 (name, version, dtype, frequency, feature_keys, validations, transform, description, parameters)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING name, version, dtype, frequency, feature_keys, validations, transform, description, parameters, created_at""",
-                (payload.name, payload.version, payload.dtype, payload.frequency, Json([key.value for key in payload.feature_keys]),
-                 Json([validation.model_dump() for validation in payload.validations]), payload.transform, payload.description, Json(payload.parameters)))
+                (
+                    payload.name,
+                    payload.version,
+                    payload.dtype,
+                    payload.frequency,
+                    Json([key.value for key in payload.feature_keys]),
+                    Json(
+                        [validation.model_dump() for validation in payload.validations]
+                    ),
+                    payload.transform,
+                    payload.description,
+                    Json(payload.parameters),
+                ),
+            )
             row = cursor.fetchone()
             for dependency in payload.datasets:
-                cursor.execute("""INSERT INTO feature_dataset_dependencies
+                cursor.execute(
+                    """INSERT INTO feature_dataset_dependencies
                     (feature_name, feature_version, dataset_name, dataset_version, argument_name, num_lookback_partitions)
                     VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (payload.name, payload.version, dependency.name, dependency.version,
-                     dependency.argument_name, dependency.num_lookback_partitions))
+                    (
+                        payload.name,
+                        payload.version,
+                        dependency.name,
+                        dependency.version,
+                        dependency.argument_name,
+                        dependency.num_lookback_partitions,
+                    ),
+                )
         connection.commit()
     except errors.ForeignKeyViolation as error:
-        raise HTTPException(status_code=422, detail="Feature datasets must reference registered dataset versions.") from error
+        raise HTTPException(
+            status_code=422,
+            detail="Feature datasets must reference registered dataset versions.",
+        ) from error
     except errors.UniqueViolation as error:
-        raise HTTPException(status_code=409, detail="Feature name and version already exist.") from error
+        raise HTTPException(
+            status_code=409, detail="Feature name and version already exist."
+        ) from error
     assert row is not None
-    return FeatureResponse.model_validate({**row, "datasets": [item.model_dump() for item in payload.datasets]})
+    return FeatureResponse.model_validate(
+        {**row, "datasets": [item.model_dump() for item in payload.datasets]}
+    )
 
 
-@app.post("/datasets/{name}/versions/{version}/partitions", response_model=MaterializationJobResponse, status_code=202, responses=error_responses(PARTITION_VALIDATION), tags=["dataset materialization"])
-def materialize_dataset_partitions(name: ResourceName, version: ResourceVersion, payload: PartitionMaterializationRequest, connection: DatabaseConnection) -> MaterializationJobResponse:
+@app.post(
+    "/datasets/{name}/versions/{version}/partitions",
+    response_model=MaterializationJobResponse,
+    status_code=202,
+    responses=error_responses(PARTITION_VALIDATION),
+    tags=["dataset materialization"],
+)
+def materialize_dataset_partitions(
+    name: ResourceName,
+    version: ResourceVersion,
+    payload: PartitionMaterializationRequest,
+    connection: DatabaseConnection,
+) -> MaterializationJobResponse:
     """Create missing dataset partitions and join any completed or pending request."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("SELECT 1 FROM datasets WHERE name = %s AND version = %s AND deleted_at IS NULL", (name, version))
+        cursor.execute(
+            "SELECT 1 FROM datasets WHERE name = %s AND version = %s AND deleted_at IS NULL",
+            (name, version),
+        )
         if cursor.fetchone() is None:
-            raise HTTPException(status_code=404, detail="Dataset version does not exist.")
+            raise HTTPException(
+                status_code=404, detail="Dataset version does not exist."
+            )
         existing: list[dict[str, Any]] = []
         missing: list[datetime] = []
         for timestamp in sorted(payload.timestamps):
@@ -590,10 +842,14 @@ def materialize_dataset_partitions(name: ResourceName, version: ResourceVersion,
                 assert request is not None
                 created.append(request)
     connection.commit()
-    return MaterializationJobResponse.model_validate({"job": job, "partitions": [*existing, *created]})
+    return MaterializationJobResponse.model_validate(
+        {"job": job, "partitions": [*existing, *created]}
+    )
 
 
-def _plan_feature_inputs(cursor: Any, name: str, version: int, timestamp: datetime) -> list[UUID]:
+def _plan_feature_inputs(
+    cursor: Any, name: str, version: int, timestamp: datetime
+) -> list[UUID]:
     """Resolve the exact successful dataset revisions required by one output partition."""
     cursor.execute(
         """SELECT dataset_name, dataset_version, num_lookback_partitions
@@ -606,7 +862,10 @@ def _plan_feature_inputs(cursor: Any, name: str, version: int, timestamp: dateti
     planned: list[UUID] = []
     for dependency in dependencies:
         start = timestamp - timedelta(days=dependency["num_lookback_partitions"])
-        expected = {start + timedelta(days=offset) for offset in range(dependency["num_lookback_partitions"] + 1)}
+        expected = {
+            start + timedelta(days=offset)
+            for offset in range(dependency["num_lookback_partitions"] + 1)
+        }
         cursor.execute(
             """SELECT DISTINCT ON (request.timestamp)
                 request.timestamp, partition.partition_id
@@ -617,21 +876,30 @@ def _plan_feature_inputs(cursor: Any, name: str, version: int, timestamp: dateti
               AND request.status = 'created'
               AND request.timestamp >= %s AND request.timestamp <= %s
             ORDER BY request.timestamp, partition.created_at DESC, request.created_at DESC""",
-            (dependency["dataset_name"], dependency["dataset_version"], start, timestamp),
+            (
+                dependency["dataset_name"],
+                dependency["dataset_version"],
+                start,
+                timestamp,
+            ),
         )
         revisions = {row["timestamp"]: row["partition_id"] for row in cursor.fetchall()}
         missing = sorted(item.isoformat() for item in expected.difference(revisions))
         if missing:
             raise HTTPException(
                 status_code=409,
-                detail=("Feature partition cannot be materialized because its required "
-                        f"{dependency['dataset_name']}:{dependency['dataset_version']} input partitions are missing: {missing}"),
+                detail=(
+                    "Feature partition cannot be materialized because its required "
+                    f"{dependency['dataset_name']}:{dependency['dataset_version']} input partitions are missing: {missing}"
+                ),
             )
         planned.extend(revisions[item] for item in sorted(expected))
     return planned
 
 
-def _completed_feature_request(cursor: Any, name: str, version: int, timestamp: datetime) -> dict[str, Any] | None:
+def _completed_feature_request(
+    cursor: Any, name: str, version: int, timestamp: datetime
+) -> dict[str, Any] | None:
     """Fetch the most recent completed revision of one logical feature partition."""
     cursor.execute(
         """SELECT request.partition_id, request.job_id, request.timestamp, request.status,
@@ -649,24 +917,52 @@ def _completed_feature_request(cursor: Any, name: str, version: int, timestamp: 
 
 def _feature_plan_ids(cursor: Any, request_id: UUID, *, completed: bool) -> set[UUID]:
     """Read an immutable planned or recorded parent-revision set."""
-    table = "feature_partition_dataset_dependencies" if completed else "feature_partition_update_request_dataset_dependencies"
+    table = (
+        "feature_partition_dataset_dependencies"
+        if completed
+        else "feature_partition_update_request_dataset_dependencies"
+    )
     column = "feature_partition_id" if completed else "feature_partition_request_id"
-    cursor.execute(f"SELECT dataset_partition_id FROM {table} WHERE {column} = %s", (request_id,))
+    cursor.execute(
+        f"SELECT dataset_partition_id FROM {table} WHERE {column} = %s", (request_id,)
+    )
     return {row["dataset_partition_id"] for row in cursor.fetchall()}
 
 
-@app.post("/features/{name}/versions/{version}/partitions", response_model=MaterializationJobResponse, status_code=202, responses=error_responses(PARTITION_VALIDATION), tags=["feature materialization"])
-def materialize_feature_partitions(name: ResourceName, version: ResourceVersion, payload: FeaturePartitionMaterializationRequest, connection: DatabaseConnection) -> MaterializationJobResponse:
+@app.post(
+    "/features/{name}/versions/{version}/partitions",
+    response_model=MaterializationJobResponse,
+    status_code=202,
+    responses=error_responses(PARTITION_VALIDATION),
+    tags=["feature materialization"],
+)
+def materialize_feature_partitions(
+    name: ResourceName,
+    version: ResourceVersion,
+    payload: FeaturePartitionMaterializationRequest,
+    connection: DatabaseConnection,
+) -> MaterializationJobResponse:
     """Create only stale/missing feature partitions after pinning their input revisions."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("SELECT 1 FROM features WHERE name = %s AND version = %s AND deleted_at IS NULL", (name, version))
+        cursor.execute(
+            "SELECT 1 FROM features WHERE name = %s AND version = %s AND deleted_at IS NULL",
+            (name, version),
+        )
         if cursor.fetchone() is None:
-            raise HTTPException(status_code=404, detail="Feature version does not exist.")
-        cursor.execute("""SELECT 1 FROM feature_dataset_dependencies AS dependency
+            raise HTTPException(
+                status_code=404, detail="Feature version does not exist."
+            )
+        cursor.execute(
+            """SELECT 1 FROM feature_dataset_dependencies AS dependency
             JOIN datasets ON datasets.name = dependency.dataset_name AND datasets.version = dependency.dataset_version
-            WHERE dependency.feature_name = %s AND dependency.feature_version = %s AND datasets.deleted_at IS NOT NULL""", (name, version))
+            WHERE dependency.feature_name = %s AND dependency.feature_version = %s AND datasets.deleted_at IS NOT NULL""",
+            (name, version),
+        )
         if cursor.fetchone() is not None:
-            raise HTTPException(status_code=409, detail="Feature partition cannot be materialized because an input dataset version is deleted.")
+            raise HTTPException(
+                status_code=409,
+                detail="Feature partition cannot be materialized because an input dataset version is deleted.",
+            )
 
         existing: list[dict[str, Any]] = []
         planned_by_timestamp: dict[datetime, list[UUID]] = {}
@@ -679,10 +975,13 @@ def materialize_feature_partitions(name: ResourceName, version: ResourceVersion,
             plan = _plan_feature_inputs(cursor, name, version, timestamp)
             completed = _completed_feature_request(cursor, name, version, timestamp)
             if completed is not None:
-                recorded = _feature_plan_ids(cursor, completed["partition_id"], completed=True)
+                recorded = _feature_plan_ids(
+                    cursor, completed["partition_id"], completed=True
+                )
                 is_current = recorded == set(plan) and bool(recorded)
                 if payload.mode is FeatureMaterializationMode.CREATE_ONLY or (
-                    payload.mode is FeatureMaterializationMode.ENSURE_CURRENT and is_current
+                    payload.mode is FeatureMaterializationMode.ENSURE_CURRENT
+                    and is_current
                 ):
                     existing.append(completed)
                     continue
@@ -696,11 +995,16 @@ def materialize_feature_partitions(name: ResourceName, version: ResourceVersion,
             )
             active = cursor.fetchone()
             if active is not None:
-                active_plan = _feature_plan_ids(cursor, active["partition_id"], completed=False)
+                active_plan = _feature_plan_ids(
+                    cursor, active["partition_id"], completed=False
+                )
                 if active_plan == set(plan):
                     existing.append(active)
                     continue
-                raise HTTPException(status_code=409, detail="Feature partition is already being materialized against a different input revision plan.")
+                raise HTTPException(
+                    status_code=409,
+                    detail="Feature partition is already being materialized against a different input revision plan.",
+                )
             planned_by_timestamp[timestamp] = plan
 
         job: dict[str, Any] | None = None
@@ -711,34 +1015,54 @@ def materialize_feature_partitions(name: ResourceName, version: ResourceVersion,
             job = cursor.fetchone()
             assert job is not None
             for timestamp, plan in planned_by_timestamp.items():
-                cursor.execute("""INSERT INTO feature_partition_update_requests
+                cursor.execute(
+                    """INSERT INTO feature_partition_update_requests
                     (job_id, feature_name, feature_version, timestamp, status, callback_token)
                     VALUES (%s, %s, %s, %s, 'pending', %s)
                     RETURNING partition_id, job_id, timestamp, status, created_at, updated_at""",
-                    (job["id"], name, version, timestamp, secrets.token_urlsafe(32)))
+                    (job["id"], name, version, timestamp, secrets.token_urlsafe(32)),
+                )
                 request = cursor.fetchone()
                 assert request is not None
                 for dataset_partition_id in plan:
-                    cursor.execute("""INSERT INTO feature_partition_update_request_dataset_dependencies
+                    cursor.execute(
+                        """INSERT INTO feature_partition_update_request_dataset_dependencies
                         (feature_partition_request_id, dataset_partition_id) VALUES (%s, %s)""",
-                        (request["partition_id"], dataset_partition_id))
+                        (request["partition_id"], dataset_partition_id),
+                    )
                 created.append(request)
     connection.commit()
-    return MaterializationJobResponse.model_validate({"job": job, "partitions": [*existing, *created]})
+    return MaterializationJobResponse.model_validate(
+        {"job": job, "partitions": [*existing, *created]}
+    )
 
 
 _COMPLETION_TABLES = {
-    "dataset": ("partition_update_requests", "dataset_partitions", "datasets", "dataset"),
-    "feature": ("feature_partition_update_requests", "feature_partitions", "features", "feature"),
+    "dataset": (
+        "partition_update_requests",
+        "dataset_partitions",
+        "datasets",
+        "dataset",
+    ),
+    "feature": (
+        "feature_partition_update_requests",
+        "feature_partitions",
+        "features",
+        "feature",
+    ),
     "label": ("label_partition_update_requests", "label_partitions", "labels", "label"),
 }
 
 
-def _completion_plan_ids(cursor: Any, resource_type: str, partition_id: UUID) -> set[UUID]:
+def _completion_plan_ids(
+    cursor: Any, resource_type: str, partition_id: UUID
+) -> set[UUID]:
     """Read the pinned input revisions from a derived partition request."""
     table = f"{resource_type}_partition_update_request_dataset_dependencies"
     column = f"{resource_type}_partition_request_id"
-    cursor.execute(f"SELECT dataset_partition_id FROM {table} WHERE {column} = %s", (partition_id,))
+    cursor.execute(
+        f"SELECT dataset_partition_id FROM {table} WHERE {column} = %s", (partition_id,)
+    )
     return {row["dataset_partition_id"] for row in cursor.fetchall()}
 
 
@@ -747,35 +1071,89 @@ def _completion_plan_ids(cursor: Any, resource_type: str, partition_id: UUID) ->
     response_model=list[PartitionResultResponse],
     responses={
         422: error_responses(COMPLETION_VALIDATION)[422],
-        403: {"model": ErrorResponse, "description": "A receipt has an invalid callback token.",
-              "content": {"application/json": {"example": {"detail": "Invalid partition callback token."}}}},
-        409: {"model": ErrorResponse, "description": "Duplicate, stale, conflicting, or unplanned receipt; no batch items are recorded.",
-              "content": {"application/json": {"examples": {
-                  "duplicate": {"summary": "Duplicate partition ID", "value": {"detail": "Completion batch contains duplicate partition IDs."}},
-                  "schema": {"summary": "Schema mismatch", "value": {"detail": "Completion batch has conflicting schemas for one Iceberg table."}},
-                  "receipt": {"summary": "Conflicting retry", "value": {"detail": "Partition receipt conflicts with an existing completion."}},
-                  "plan": {"summary": "Pinned dependencies differ", "value": {"detail": "Callback dataset revisions do not match the immutable input plan."}},
-              }}}},
-        503: {"model": ErrorResponse, "description": "PostgreSQL is unavailable.",
-              "content": {"application/json": {"example": {"detail": "Materialization database is unavailable."}}}},
+        403: {
+            "model": ErrorResponse,
+            "description": "A receipt has an invalid callback token.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid partition callback token."}
+                }
+            },
+        },
+        409: {
+            "model": ErrorResponse,
+            "description": "Duplicate, stale, conflicting, or unplanned receipt; no batch items are recorded.",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "duplicate": {
+                            "summary": "Duplicate partition ID",
+                            "value": {
+                                "detail": "Completion batch contains duplicate partition IDs."
+                            },
+                        },
+                        "schema": {
+                            "summary": "Schema mismatch",
+                            "value": {
+                                "detail": "Completion batch has conflicting schemas for one Iceberg table."
+                            },
+                        },
+                        "receipt": {
+                            "summary": "Conflicting retry",
+                            "value": {
+                                "detail": "Partition receipt conflicts with an existing completion."
+                            },
+                        },
+                        "plan": {
+                            "summary": "Pinned dependencies differ",
+                            "value": {
+                                "detail": "Callback dataset revisions do not match the immutable input plan."
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        503: {
+            "model": ErrorResponse,
+            "description": "PostgreSQL is unavailable.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Materialization database is unavailable."}
+                }
+            },
+        },
     },
     tags=["partition completion"],
 )
 def complete_partitions(
-    payload: Annotated[list[PartitionCompletionRequest], Body(
-        min_length=1,
-        examples=[[{"partition_id": "00000000-0000-0000-0000-000000000001",
-                   "resource_type": "dataset", "row_count": 1250,
-                   "schema": {"timestamp": "timestamp", "symbol": "string"},
-                   "content_hash": "sha256-content-hash", "snapshot_id": 123,
-                   "callback_token": "opaque-token"}]],
-    )],
+    payload: Annotated[
+        list[PartitionCompletionRequest],
+        Body(
+            min_length=1,
+            examples=[
+                [
+                    {
+                        "partition_id": "00000000-0000-0000-0000-000000000001",
+                        "resource_type": "dataset",
+                        "row_count": 1250,
+                        "schema": {"timestamp": "timestamp", "symbol": "string"},
+                        "content_hash": "sha256-content-hash",
+                        "snapshot_id": 123,
+                        "callback_token": "opaque-token",
+                    }
+                ]
+            ],
+        ),
+    ],
     connection: DatabaseConnection,
 ) -> list[PartitionResultResponse]:
     """Authenticate and record an entire Iceberg commit in one database transaction."""
     partition_ids = [item.partition_id for item in payload]
     if len(set(partition_ids)) != len(partition_ids):
-        raise HTTPException(status_code=409, detail="Completion batch contains duplicate partition IDs.")
+        raise HTTPException(
+            status_code=409, detail="Completion batch contains duplicate partition IDs."
+        )
 
     results: dict[UUID, dict[str, Any]] = {}
     requests: dict[UUID, dict[str, Any]] = {}
@@ -786,7 +1164,9 @@ def complete_partitions(
             # mixed-resource batches acquire row locks in one stable order.
             ordered_receipts = []
             for item in payload:
-                request_table, _, _, resource_prefix = _COMPLETION_TABLES[item.resource_type]
+                request_table, _, _, resource_prefix = _COMPLETION_TABLES[
+                    item.resource_type
+                ]
                 cursor.execute(
                     f"""SELECT {resource_prefix}_name AS name, {resource_prefix}_version AS version
                     FROM {request_table} WHERE partition_id = %s""",
@@ -794,12 +1174,24 @@ def complete_partitions(
                 )
                 identity = cursor.fetchone()
                 if identity is None:
-                    raise HTTPException(status_code=403, detail="Invalid partition callback token.")
-                ordered_receipts.append((item.resource_type, identity["name"], identity["version"], str(item.partition_id), item))
+                    raise HTTPException(
+                        status_code=403, detail="Invalid partition callback token."
+                    )
+                ordered_receipts.append(
+                    (
+                        item.resource_type,
+                        identity["name"],
+                        identity["version"],
+                        str(item.partition_id),
+                        item,
+                    )
+                )
 
             # Definition locks serialize schema checks for each Iceberg table.
             for _, _, _, _, item in sorted(ordered_receipts):
-                request_table, receipt_table, resource_table, resource_prefix = _COMPLETION_TABLES[item.resource_type]
+                request_table, receipt_table, resource_table, resource_prefix = (
+                    _COMPLETION_TABLES[item.resource_type]
+                )
                 cursor.execute(
                     f"""SELECT request.job_id, request.status, request.callback_token,
                         request.{resource_prefix}_name AS name,
@@ -815,19 +1207,45 @@ def complete_partitions(
                     (item.partition_id,),
                 )
                 request = cursor.fetchone()
-                if request is None or not secrets.compare_digest(request["callback_token"], item.callback_token):
-                    raise HTTPException(status_code=403, detail="Invalid partition callback token.")
-                if request["deleted_at"] is not None or request["status"] not in {"pending", "created"}:
-                    raise HTTPException(status_code=409, detail="Partition request is not eligible for completion.")
-                if request["status"] == "pending" and request["job_status"] != "submitted":
-                    raise HTTPException(status_code=409, detail="Partition job is not active.")
+                if request is None or not secrets.compare_digest(
+                    request["callback_token"], item.callback_token
+                ):
+                    raise HTTPException(
+                        status_code=403, detail="Invalid partition callback token."
+                    )
+                if request["deleted_at"] is not None or request["status"] not in {
+                    "pending",
+                    "created",
+                }:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Partition request is not eligible for completion.",
+                    )
+                if (
+                    request["status"] == "pending"
+                    and request["job_status"] != "submitted"
+                ):
+                    raise HTTPException(
+                        status_code=409, detail="Partition job is not active."
+                    )
                 if item.resource_type != "dataset":
-                    planned = _completion_plan_ids(cursor, item.resource_type, item.partition_id)
+                    planned = _completion_plan_ids(
+                        cursor, item.resource_type, item.partition_id
+                    )
                     if planned != set(item.dataset_partition_ids or []):
-                        raise HTTPException(status_code=409, detail="Callback dataset revisions do not match the immutable input plan.")
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Callback dataset revisions do not match the immutable input plan.",
+                        )
                 table_key = (item.resource_type, request["name"], request["version"])
-                if table_key in schema_by_table and schema_by_table[table_key] != item.schema_:
-                    raise HTTPException(status_code=409, detail="Completion batch has conflicting schemas for one Iceberg table.")
+                if (
+                    table_key in schema_by_table
+                    and schema_by_table[table_key] != item.schema_
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Completion batch has conflicting schemas for one Iceberg table.",
+                    )
                 schema_by_table[table_key] = item.schema_
                 requests[item.partition_id] = request
 
@@ -839,7 +1257,10 @@ def complete_partitions(
                     (request["name"], request["version"]),
                 )
                 if any(row["schema"] != item.schema_ for row in cursor.fetchall()):
-                    raise HTTPException(status_code=409, detail="Completion schema conflicts with an existing Iceberg table receipt.")
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Completion schema conflicts with an existing Iceberg table receipt.",
+                    )
 
                 cursor.execute(
                     f"""SELECT partition_id, content_hash, snapshot_id, row_count, schema, created_at
@@ -848,29 +1269,51 @@ def complete_partitions(
                 )
                 existing = cursor.fetchone()
                 if existing is not None:
-                    if (existing["content_hash"] != item.content_hash
-                            or existing["snapshot_id"] != item.snapshot_id
-                            or existing["row_count"] != item.row_count
-                            or existing["schema"] != item.schema_):
-                        raise HTTPException(status_code=409, detail="Partition receipt conflicts with an existing completion.")
-                    results[item.partition_id] = {**existing, "resource_type": item.resource_type}
+                    if (
+                        existing["content_hash"] != item.content_hash
+                        or existing["snapshot_id"] != item.snapshot_id
+                        or existing["row_count"] != item.row_count
+                        or existing["schema"] != item.schema_
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Partition receipt conflicts with an existing completion.",
+                        )
+                    results[item.partition_id] = {
+                        **existing,
+                        "resource_type": item.resource_type,
+                    }
                 elif request["status"] != "pending":
-                    raise HTTPException(status_code=409, detail="Completed partition is missing its receipt.")
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Completed partition is missing its receipt.",
+                    )
 
             for item in payload:
                 if item.partition_id in results:
                     continue
-                request_table, receipt_table, _, _ = _COMPLETION_TABLES[item.resource_type]
+                request_table, receipt_table, _, _ = _COMPLETION_TABLES[
+                    item.resource_type
+                ]
                 cursor.execute(
                     f"""INSERT INTO {receipt_table}
                     (partition_id, content_hash, snapshot_id, row_count, schema)
                     VALUES (%s, %s, %s, %s, %s)
                     RETURNING partition_id, content_hash, snapshot_id, row_count, schema, created_at""",
-                    (item.partition_id, item.content_hash, item.snapshot_id, item.row_count, Jsonb(item.schema_)),
+                    (
+                        item.partition_id,
+                        item.content_hash,
+                        item.snapshot_id,
+                        item.row_count,
+                        Jsonb(item.schema_),
+                    ),
                 )
                 receipt = cursor.fetchone()
                 assert receipt is not None
-                results[item.partition_id] = {**receipt, "resource_type": item.resource_type}
+                results[item.partition_id] = {
+                    **receipt,
+                    "resource_type": item.resource_type,
+                }
                 if item.resource_type != "dataset":
                     cursor.execute(
                         f"""INSERT INTO {item.resource_type}_partition_dataset_dependencies
@@ -885,7 +1328,10 @@ def complete_partitions(
                     (item.partition_id,),
                 )
 
-            for job_id, resource_type in {(requests[item.partition_id]["job_id"], item.resource_type) for item in payload}:
+            for job_id, resource_type in {
+                (requests[item.partition_id]["job_id"], item.resource_type)
+                for item in payload
+            }:
                 request_table = _COMPLETION_TABLES[resource_type][0]
                 cursor.execute(
                     f"""UPDATE jobs SET status = 'succeeded', updated_at = now()
@@ -893,21 +1339,31 @@ def complete_partitions(
                       AND NOT EXISTS (SELECT 1 FROM {request_table} WHERE job_id = %s AND status <> 'created')""",
                     (job_id, job_id),
                 )
-    return [PartitionResultResponse.model_validate(results[item.partition_id]) for item in payload]
+    return [
+        PartitionResultResponse.model_validate(results[item.partition_id])
+        for item in payload
+    ]
 
 
 @app.get("/jobs", tags=["jobs"])
 def list_jobs(connection: DatabaseConnection) -> list[dict[str, Any]]:
     """List materialization jobs and their versioned resource targets."""
     with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute("SELECT id, type, status, created_at, updated_at FROM jobs ORDER BY created_at DESC")
+        cursor.execute(
+            "SELECT id, type, status, created_at, updated_at FROM jobs ORDER BY created_at DESC"
+        )
         jobs = list(cursor.fetchall())
         for job in jobs:
             job["targets"] = _job_targets(cursor, job["id"])
         return jobs
 
 
-@app.get("/jobs/{job_id}", response_model=JobResponse, responses=error_responses(JOB_VALIDATION), tags=["jobs"])
+@app.get(
+    "/jobs/{job_id}",
+    response_model=JobResponse,
+    responses=error_responses(JOB_VALIDATION),
+    tags=["jobs"],
+)
 def get_job(job_id: UUID, connection: DatabaseConnection) -> JobResponse:
     """Return aggregate status for one materialization job."""
     with connection.cursor(row_factory=dict_row) as cursor:
@@ -917,14 +1373,21 @@ def get_job(job_id: UUID, connection: DatabaseConnection) -> JobResponse:
         )
         job = cursor.fetchone()
     if job is None:
-        raise HTTPException(status_code=404, detail="Materialization job does not exist.")
+        raise HTTPException(
+            status_code=404, detail="Materialization job does not exist."
+        )
     with connection.cursor(row_factory=dict_row) as cursor:
         job["targets"] = _job_targets(cursor, job_id)
         job["partitions"] = _job_partitions(cursor, job_id)
     prefix = job["type"].removesuffix("_materialization")
     job["spark_application_name"] = f"{prefix}-{job_id}".lower()
-    job["headlamp_url"] = _headlamp_resource_url("customresources/sparkapplications.sparkoperator.k8s.io", job["spark_application_name"])
-    job["kubernetes_resources"] = _job_kubernetes_resources(job["spark_application_name"])
+    job["headlamp_url"] = _headlamp_resource_url(
+        "customresources/sparkapplications.sparkoperator.k8s.io",
+        job["spark_application_name"],
+    )
+    job["kubernetes_resources"] = _job_kubernetes_resources(
+        job["spark_application_name"]
+    )
     return JobResponse.model_validate(job)
 
 
@@ -942,8 +1405,14 @@ def _attach_minio_locations(resource: dict[str, Any], table_path: str) -> None:
     resource["minio_table_url"] = _minio_browser_url(table_path)
     for partition in resource.get("partitions", []):
         timestamp = partition["timestamp"]
-        partition_day = timestamp.date().isoformat() if isinstance(timestamp, datetime) else str(timestamp)[:10]
-        partition["minio_url"] = _minio_browser_url(f"{table_path}/data/timestamp_day={partition_day}")
+        partition_day = (
+            timestamp.date().isoformat()
+            if isinstance(timestamp, datetime)
+            else str(timestamp)[:10]
+        )
+        partition["minio_url"] = _minio_browser_url(
+            f"{table_path}/data/timestamp_day={partition_day}"
+        )
 
 
 def _headlamp_resource_url(resource_path: str, resource_name: str) -> str | None:
@@ -952,19 +1421,37 @@ def _headlamp_resource_url(resource_path: str, resource_name: str) -> str | None
     if not headlamp_url:
         return None
     namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
-    return f"{headlamp_url.rstrip('/')}/c/main/{resource_path}/{namespace}/{resource_name}"
+    return (
+        f"{headlamp_url.rstrip('/')}/c/main/{resource_path}/{namespace}/{resource_name}"
+    )
 
 
 def _job_kubernetes_resources(application_name: str) -> list[dict[str, str]]:
     """Return Headlamp links for the application and any extant Spark driver or executors."""
-    application_url = _headlamp_resource_url("customresources/sparkapplications.sparkoperator.k8s.io", application_name)
-    resources = [{"resource_type": "Spark Application", "resource_id": application_name, "url": application_url}] if application_url else []
+    application_url = _headlamp_resource_url(
+        "customresources/sparkapplications.sparkoperator.k8s.io", application_name
+    )
+    resources = (
+        [
+            {
+                "resource_type": "Spark Application",
+                "resource_id": application_name,
+                "url": application_url,
+            }
+        ]
+        if application_url
+        else []
+    )
     if not application_url:
         return resources
     namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
     try:
         kubernetes_client.CustomObjectsApi().get_namespaced_custom_object(
-            "sparkoperator.k8s.io", "v1beta2", namespace, "sparkapplications", application_name
+            "sparkoperator.k8s.io",
+            "v1beta2",
+            namespace,
+            "sparkapplications",
+            application_name,
         )
     except ApiException as error:
         if error.status == 404:
@@ -972,10 +1459,14 @@ def _job_kubernetes_resources(application_name: str) -> list[dict[str, str]]:
     except Exception:
         return resources
     try:
-        pods = kubernetes_client.CoreV1Api().list_namespaced_pod(
-            namespace,
-            label_selector=f"sparkoperator.k8s.io/app-name={application_name}",
-        ).items
+        pods = (
+            kubernetes_client.CoreV1Api()
+            .list_namespaced_pod(
+                namespace,
+                label_selector=f"sparkoperator.k8s.io/app-name={application_name}",
+            )
+            .items
+        )
     except Exception:
         return resources
     named_pods = [
@@ -991,7 +1482,13 @@ def _job_kubernetes_resources(application_name: str) -> list[dict[str, str]]:
             continue
         url = _headlamp_resource_url("pods", name)
         if url:
-            resources.append({"resource_type": f"{role.title()} Pod", "resource_id": name, "url": url})
+            resources.append(
+                {
+                    "resource_type": f"{role.title()} Pod",
+                    "resource_id": name,
+                    "url": url,
+                }
+            )
     return resources
 
 

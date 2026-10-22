@@ -1,6 +1,7 @@
 """Triple-barrier label strategy."""
 
-from pyspark.sql import DataFrame, Window, functions as F
+from pyspark.sql import DataFrame, Window
+from pyspark.sql import functions as F
 
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.transforms._types import Dataset
@@ -16,17 +17,25 @@ class TripleBarrierLabelTransform(LabelTransform):
     volatility_lookback_bars: int
     profit_taking_multiplier: float
     stop_loss_multiplier: float
+
     def __call__(self) -> DataFrame:
         """Return profit-taking, stop-loss, or timeout labels without future leakage."""
         by_symbol = Window.partitionBy("symbol").orderBy("timestamp")
         volatility_window = by_symbol.rowsBetween(-self.volatility_lookback_bars, -1)
-        source = self.market_data.frame.select("timestamp", "symbol", "High", "Low", "Close")
-        indexed_observations = source.withColumn("bar_index", F.row_number().over(by_symbol))
+        source = self.market_data.frame.select(
+            "timestamp", "symbol", "High", "Low", "Close"
+        )
+        indexed_observations = source.withColumn(
+            "bar_index", F.row_number().over(by_symbol)
+        )
         observations = (
-            indexed_observations
-            .withColumn("previous_close", F.lag("Close").over(by_symbol))
+            indexed_observations.withColumn(
+                "previous_close", F.lag("Close").over(by_symbol)
+            )
             .withColumn("log_return", F.log(F.col("Close") / F.col("previous_close")))
-            .withColumn("volatility", F.stddev_samp("log_return").over(volatility_window))
+            .withColumn(
+                "volatility", F.stddev_samp("log_return").over(volatility_window)
+            )
             .withColumn(
                 "future_bars",
                 F.sort_array(
@@ -53,7 +62,8 @@ class TripleBarrierLabelTransform(LabelTransform):
             )
             .withColumn(
                 "upper_barrier",
-                F.col("close") * (1 + self.profit_taking_multiplier * F.col("volatility")),
+                F.col("close")
+                * (1 + self.profit_taking_multiplier * F.col("volatility")),
             )
             .withColumn(
                 "lower_barrier",
@@ -61,10 +71,12 @@ class TripleBarrierLabelTransform(LabelTransform):
             )
         )
         profit_hits = F.filter(
-            F.col("future_bars"), lambda bar: bar["future_high"] >= F.col("upper_barrier")
+            F.col("future_bars"),
+            lambda bar: bar["future_high"] >= F.col("upper_barrier"),
         )
         stop_hits = F.filter(
-            F.col("future_bars"), lambda bar: bar["future_low"] <= F.col("lower_barrier")
+            F.col("future_bars"),
+            lambda bar: bar["future_low"] <= F.col("lower_barrier"),
         )
         return (
             events.where(F.size("future_bars") == self.horizon_bars)
@@ -74,8 +86,13 @@ class TripleBarrierLabelTransform(LabelTransform):
                 "vertical_barrier_timestamp",
                 F.element_at("future_bars", -1).getField("future_timestamp"),
             )
-            .withColumn("profit_taking_bar_index", F.col("profit_hit").getField("future_bar_index"))
-            .withColumn("stop_loss_bar_index", F.col("stop_hit").getField("future_bar_index"))
+            .withColumn(
+                "profit_taking_bar_index",
+                F.col("profit_hit").getField("future_bar_index"),
+            )
+            .withColumn(
+                "stop_loss_bar_index", F.col("stop_hit").getField("future_bar_index")
+            )
             .withColumn("timestamp", F.col("event_timestamp"))
             .withColumn("symbol", F.col("event_symbol"))
             .withColumn("horizon_bars", F.lit(self.horizon_bars).cast("int"))
@@ -85,7 +102,10 @@ class TripleBarrierLabelTransform(LabelTransform):
                     F.col("profit_taking_bar_index").isNotNull()
                     & (
                         F.col("stop_loss_bar_index").isNull()
-                        | (F.col("profit_taking_bar_index") < F.col("stop_loss_bar_index"))
+                        | (
+                            F.col("profit_taking_bar_index")
+                            < F.col("stop_loss_bar_index")
+                        )
                     ),
                     F.lit("profit_taking"),
                 )
@@ -93,13 +113,18 @@ class TripleBarrierLabelTransform(LabelTransform):
                     F.col("stop_loss_bar_index").isNotNull()
                     & (
                         F.col("profit_taking_bar_index").isNull()
-                        | (F.col("stop_loss_bar_index") < F.col("profit_taking_bar_index"))
+                        | (
+                            F.col("stop_loss_bar_index")
+                            < F.col("profit_taking_bar_index")
+                        )
                     ),
                     F.lit("stop_loss"),
                 )
                 .when(
                     F.col("profit_taking_bar_index").isNotNull()
-                    & (F.col("profit_taking_bar_index") == F.col("stop_loss_bar_index")),
+                    & (
+                        F.col("profit_taking_bar_index") == F.col("stop_loss_bar_index")
+                    ),
                     F.lit("ambiguous"),
                 )
                 .otherwise(F.lit("timeout")),

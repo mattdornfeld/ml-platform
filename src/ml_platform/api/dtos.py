@@ -8,7 +8,9 @@ from uuid import UUID
 from pydantic import ConfigDict, Field, computed_field, field_validator, model_validator
 
 from ml_platform.common.types import BaseConfig
-from ml_platform.data_sdk.materializers._materialization_validator import DiscriminatedValidationConfig
+from ml_platform.data_sdk.materializers._materialization_validator import (
+    DiscriminatedValidationConfig,
+)
 
 
 class _ApiModel(BaseConfig):
@@ -118,7 +120,9 @@ class FeatureCreateRequest(_ApiModel):
     version: int = Field(gt=0)
     dtype: Literal["double", "float", "int", "bigint"]
     frequency: Literal["hourly", "daily"]
-    feature_keys: list[FeatureKey] = Field(default_factory=lambda: [FeatureKey.SYMBOL], min_length=1)
+    feature_keys: list[FeatureKey] = Field(
+        default_factory=lambda: [FeatureKey.SYMBOL], min_length=1
+    )
     datasets: list[FeatureDatasetDependency] = Field(min_length=1)
     transform: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -131,9 +135,13 @@ class FeatureCreateRequest(_ApiModel):
         identities = {(dataset.name, dataset.version) for dataset in self.datasets}
         arguments = {dataset.argument_name for dataset in self.datasets}
         if len(identities) != len(self.datasets):
-            raise ValueError("Feature datasets must have unique name and version identities.")
+            raise ValueError(
+                "Feature datasets must have unique name and version identities."
+            )
         if len(arguments) != len(self.datasets):
-            raise ValueError("Feature datasets must have unique transform argument names.")
+            raise ValueError(
+                "Feature datasets must have unique transform argument names."
+            )
         if len(set(self.feature_keys)) != len(self.feature_keys):
             raise ValueError("Feature keys must be unique.")
         return self
@@ -176,7 +184,9 @@ class PartitionMaterializationRequest(_ApiModel):
             if timestamp.utcoffset() != timedelta(0):
                 raise ValueError("Partition timestamps must be in UTC.")
             if any((timestamp.minute, timestamp.second, timestamp.microsecond)):
-                raise ValueError("Partition timestamps must be aligned to an exact hour.")
+                raise ValueError(
+                    "Partition timestamps must be aligned to an exact hour."
+                )
         return timestamps
 
 
@@ -265,7 +275,9 @@ class PartitionCompletionRequest(_ApiModel):
     def require_named_schema_fields(cls, schema: dict[str, str]) -> dict[str, str]:
         """Reject empty column names or type declarations in committed schemas."""
         if any(not name.strip() or not dtype.strip() for name, dtype in schema.items()):
-            raise ValueError("Completion schema requires non-empty column names and types.")
+            raise ValueError(
+                "Completion schema requires non-empty column names and types."
+            )
         return schema
 
     @model_validator(mode="after")

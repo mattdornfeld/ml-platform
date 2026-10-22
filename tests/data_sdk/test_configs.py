@@ -2,7 +2,12 @@
 
 import unittest
 
-from ml_platform.data_sdk.configs import DatasetConfig, FeatureKey, PartitionType, RunFrequency
+from ml_platform.data_sdk.configs import (
+    DatasetConfig,
+    FeatureKey,
+    PartitionType,
+    RunFrequency,
+)
 from ml_platform.data_sdk.materializers import MinimumRowsValidationConfig
 
 
@@ -39,10 +44,12 @@ class DatasetConfigTest(unittest.TestCase):
             version=1,
             run_frequency=RunFrequency.DAILY,
             keys=[FeatureKey.SYMBOL],
-            validations=[MinimumRowsValidationConfig(
-                minimum_rows=1,
-                reason="Each requested partition requires a row.",
-            )],
+            validations=[
+                MinimumRowsValidationConfig(
+                    minimum_rows=1,
+                    reason="Each requested partition requires a row.",
+                )
+            ],
         )
 
         self.assertEqual(config.validations[0].temporal_filter.type, "all_partitions")

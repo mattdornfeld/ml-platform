@@ -1,20 +1,24 @@
 """Private common contracts and Iceberg plumbing for API-dispatched materializers."""
 
-from abc import ABC, abstractmethod
 import argparse
-from dataclasses import dataclass
-from functools import cached_property
-from datetime import datetime
 import json
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
+from functools import cached_property
 from pathlib import Path
 from urllib.request import Request, urlopen
 
 from pydantic import Field, field_validator
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
 
 from ml_platform.common.types import BaseConfig
-from ml_platform.data_sdk.materializers._constants import materialization_api_url, spark_master
+from ml_platform.data_sdk.materializers._constants import (
+    materialization_api_url,
+    spark_master,
+)
 from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
-from ml_platform.data_sdk.materializers.exceptions import DuplicateValidationOverrideError
 from ml_platform.data_sdk.materializers._materialization_validator import (
     DiscriminatedValidationConfig,
     MaterializationValidator,
@@ -22,30 +26,50 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
     ValidationConfig,
     ValidationConfigs,
 )
+from ml_platform.data_sdk.materializers.exceptions import (
+    DuplicateValidationOverrideError,
+)
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._types import PartitionType
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
 
 
 class PartitionDependency(BaseConfig):
     """One pinned parent dataset partition required by a derived output."""
 
-    partition_id: str = Field(min_length=1, description="Control-plane identifier of the pinned parent partition.")
-    dataset_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$",
-                              description="Name of the parent dataset owning this partition.")
-    dataset_version: int = Field(ge=1, description="Version of the parent dataset owning this partition.")
-    timestamp: datetime = Field(description="UTC timestamp that identifies the parent logical partition.")
-    snapshot_id: int = Field(ge=0, description="Iceberg snapshot containing the pinned parent partition revision.")
+    partition_id: str = Field(
+        min_length=1,
+        description="Control-plane identifier of the pinned parent partition.",
+    )
+    dataset_name: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Name of the parent dataset owning this partition.",
+    )
+    dataset_version: int = Field(
+        ge=1, description="Version of the parent dataset owning this partition."
+    )
+    timestamp: datetime = Field(
+        description="UTC timestamp that identifies the parent logical partition."
+    )
+    snapshot_id: int = Field(
+        ge=0,
+        description="Iceberg snapshot containing the pinned parent partition revision.",
+    )
 
 
 class MaterializerPartition(BaseConfig):
     """One requested output partition and its authenticated completion receipt."""
 
-    partition_id: str = Field(min_length=1, description="Control-plane identifier for the requested output partition.")
-    timestamp: datetime = Field(description="UTC timestamp that identifies the requested logical output partition.")
-    callback_token: str = Field(min_length=1,
-                                description="Opaque token required to report successful partition completion.")
+    partition_id: str = Field(
+        min_length=1,
+        description="Control-plane identifier for the requested output partition.",
+    )
+    timestamp: datetime = Field(
+        description="UTC timestamp that identifies the requested logical output partition."
+    )
+    callback_token: str = Field(
+        min_length=1,
+        description="Opaque token required to report successful partition completion.",
+    )
     partition_dependencies: list[PartitionDependency] = Field(
         default_factory=list,
         description="Pinned parent dataset partition revisions required to produce this output partition.",
@@ -55,9 +79,17 @@ class MaterializerPartition(BaseConfig):
 class MaterializerConfig(BaseConfig):
     """Strict immutable API runtime contract shared by all materializers."""
 
-    name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase resource name.")
-    version: int = Field(ge=1, description="Positive immutable version number for the resource definition.")
-    description: str = Field(min_length=1, description="Human-readable description of the materialized resource.")
+    name: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase resource name."
+    )
+    version: int = Field(
+        ge=1,
+        description="Positive immutable version number for the resource definition.",
+    )
+    description: str = Field(
+        min_length=1,
+        description="Human-readable description of the materialized resource.",
+    )
     validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list,
         description="Declared runtime validation checks applied to materialized output.",
@@ -65,7 +97,10 @@ class MaterializerConfig(BaseConfig):
     partitions: list[MaterializerPartition] = Field(
         min_length=1, description="Logical output partitions this job must materialize."
     )
-    warehouse_dir: str = Field(min_length=1, description="Iceberg warehouse URI or local directory for output tables.")
+    warehouse_dir: str = Field(
+        min_length=1,
+        description="Iceberg warehouse URI or local directory for output tables.",
+    )
 
     @classmethod
     def iceberg_catalog(cls) -> str:
@@ -74,7 +109,9 @@ class MaterializerConfig(BaseConfig):
 
     @field_validator("validations")
     @classmethod
-    def _unique_validation_types(cls, validations: list[ValidationConfig]) -> list[ValidationConfig]:
+    def _unique_validation_types(
+        cls, validations: list[ValidationConfig]
+    ) -> list[ValidationConfig]:
         """Reject ambiguous YAML overrides before a materializer consumes this config."""
         validation_types = {validation.type for validation in validations}
         if len(validation_types) != len(validations):
@@ -101,6 +138,11 @@ class MaterializerConfig(BaseConfig):
 @dataclass(frozen=True)
 class Materializer[Config: MaterializerConfig](ABC):
     """Shared Spark lifecycle and partition callbacks for one materialization."""
+
+    @property
+    def _partition_type(self) -> PartitionType:
+        """Return the output cadence declared by this concrete materializer config."""
+        return self.config.partition_type  # type: ignore[attr-defined]
 
     config: Config
 
@@ -137,8 +179,13 @@ class Materializer[Config: MaterializerConfig](ABC):
             .config("spark.executor.memory", "8g")
             .config("spark.sql.shuffle.partitions", "64")
             .config("spark.scheduler.mode", "FAIR")
-            .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
-            .config(f"spark.sql.catalog.{catalog}", "org.apache.iceberg.spark.SparkCatalog")
+            .config(
+                "spark.sql.extensions",
+                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+            )
+            .config(
+                f"spark.sql.catalog.{catalog}", "org.apache.iceberg.spark.SparkCatalog"
+            )
             .config(f"spark.sql.catalog.{catalog}.type", "hadoop")
             .config(f"spark.sql.catalog.{catalog}.warehouse", warehouse)
             .config("spark.sql.session.timeZone", "UTC")
@@ -157,7 +204,7 @@ class Materializer[Config: MaterializerConfig](ABC):
             RequestedPartitionsValidationConfig(
                 reason="Output rows must belong to the requested logical partitions.",
                 timestamps=self.config.partition_timestamps,
-                partition_type=self.config.partition_type,  # type: ignore[attr-defined]
+                partition_type=self._partition_type,
             ),
         )
 
@@ -169,32 +216,51 @@ class Materializer[Config: MaterializerConfig](ABC):
     def validate(self, data_frame: DataFrame) -> None:
         """Run this materialization's complete resolved validation sequence."""
         validation_configs = ValidationConfigs(
-            default_validation_configs=self._base_validation_configs + self.validation_configs,
+            default_validation_configs=self._base_validation_configs
+            + self.validation_configs,
             override_validation_configs=tuple(self.config.validations),
         )
-        MaterializationValidator(validation_configs=validation_configs).validate(data_frame)
+        MaterializationValidator(validation_configs=validation_configs).validate(
+            data_frame
+        )
 
     def _complete_partitions(self, spark: SparkSession, snapshot_id: int) -> None:
         """Report committed partition revisions through the control-plane API."""
         table = self.iceberg_table
         timestamps = self.config.partition_timestamps
         partition_keys = table.partition_keys(timestamps)
-        content_hashes = table.partition_content_hashes(spark, timestamps, self._row_digest())
+        content_hashes = table.partition_content_hashes(
+            spark, timestamps, self._row_digest()
+        )
         row_counts = table.partition_row_counts(spark, timestamps)
         table_schema = table.schema_fields(spark)
         receipts = []
-        for partition, partition_key in zip(self.config.partitions, partition_keys, strict=True):
-            receipts.append({
-                "partition_id": partition.partition_id,
-                "resource_type": table.resource_type,
-                "row_count": row_counts.get(partition_key, 0),
-                "schema": table_schema,
-                "content_hash": content_hashes.get(partition_key, table.empty_content_hash()),
-                "snapshot_id": snapshot_id,
-                "callback_token": partition.callback_token,
-                **({"dataset_partition_ids": [dependency.partition_id for dependency in partition.partition_dependencies]}
-                   if partition.partition_dependencies else {}),
-            })
+        for partition, partition_key in zip(
+            self.config.partitions, partition_keys, strict=True
+        ):
+            receipts.append(
+                {
+                    "partition_id": partition.partition_id,
+                    "resource_type": table.resource_type,
+                    "row_count": row_counts.get(partition_key, 0),
+                    "schema": table_schema,
+                    "content_hash": content_hashes.get(
+                        partition_key, table.empty_content_hash()
+                    ),
+                    "snapshot_id": snapshot_id,
+                    "callback_token": partition.callback_token,
+                    **(
+                        {
+                            "dataset_partition_ids": [
+                                dependency.partition_id
+                                for dependency in partition.partition_dependencies
+                            ]
+                        }
+                        if partition.partition_dependencies
+                        else {}
+                    ),
+                }
+            )
         request = Request(
             f"{materialization_api_url()}/partitions/complete",
             data=json.dumps(receipts).encode(),
@@ -217,12 +283,14 @@ class Materializer[Config: MaterializerConfig](ABC):
         rows = [(timestamp,) for timestamp in self.config.partition_timestamps]
         return spark.createDataFrame(rows, "requested_partition timestamp").distinct()
 
-    def _filter_partitions(self, data_frame: DataFrame, requested_partitions: DataFrame) -> DataFrame:
+    def _filter_partitions(
+        self, data_frame: DataFrame, requested_partitions: DataFrame
+    ) -> DataFrame:
         """Keep transform output within this job's requested logical partitions."""
         return (
             data_frame.withColumn(
                 "requested_partition",
-                F.date_trunc(self.config.partition_type.partition_unit, F.col("timestamp")),  # type: ignore[attr-defined]
+                F.date_trunc(self._partition_type.partition_unit, F.col("timestamp")),
             )
             .join(requested_partitions, "requested_partition", "left_semi")
             .drop("requested_partition")
@@ -231,8 +299,14 @@ class Materializer[Config: MaterializerConfig](ABC):
     @classmethod
     def main(cls) -> None:
         """Run one serialized materialization job from the standard CLI contract."""
-        parser = argparse.ArgumentParser(description=f"Materialize one {cls.__name__} job.")
-        parser.add_argument("--config-json", required=True, help="Serialized materializer configuration.")
+        parser = argparse.ArgumentParser(
+            description=f"Materialize one {cls.__name__} job."
+        )
+        parser.add_argument(
+            "--config-json",
+            required=True,
+            help="Serialized materializer configuration.",
+        )
         args = parser.parse_args()
         config = cls._config_from_json(args.config_json)
         materializer = cls(config)
@@ -241,7 +315,9 @@ class Materializer[Config: MaterializerConfig](ABC):
             transform = materializer._transform(spark_session)
             requested_partitions = materializer._requested_partitions(spark_session)
             transformed_data_frame = transform()
-            data_frame = materializer._filter_partitions(transformed_data_frame, requested_partitions)
+            data_frame = materializer._filter_partitions(
+                transformed_data_frame, requested_partitions
+            )
             materializer.validate(data_frame)
             materializer.iceberg_table.create(spark_session)
             materializer.iceberg_table.write(data_frame)

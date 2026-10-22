@@ -1,12 +1,12 @@
 """Tests for immutable records that implement abstract property contracts."""
 
+import unittest
 from abc import ABC, abstractmethod
 from dataclasses import FrozenInstanceError
 from inspect import signature
-import unittest
 
-from ml_platform.data_sdk.utils import record
 from ml_platform.data_sdk.configs._configs import PartitionType
+from ml_platform.data_sdk.utils import record
 
 
 class Partitioned(ABC):
@@ -55,6 +55,7 @@ class RecordTest(unittest.TestCase):
 
     def test_record_preserves_the_original_class_object(self) -> None:
         """The decorator does not replace the type used by class patterns."""
+
         class RawRecord(Partitioned):
             """An undecorated record used to assert type identity."""
 
@@ -81,7 +82,9 @@ class RecordTest(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             value.partition_type = "hourly"  # type: ignore[misc]
 
-    def test_config_field_fulfills_abstract_property_and_supports_class_patterns(self) -> None:
+    def test_config_field_fulfills_abstract_property_and_supports_class_patterns(
+        self,
+    ) -> None:
         """A constructor config field becomes an immutable concrete property."""
         value = ConfiguredRecord(config="label-definition")
 
@@ -99,7 +102,9 @@ class RecordTest(unittest.TestCase):
 
     def test_partition_type_preserves_its_enum_type_for_case_matching(self) -> None:
         """Pattern matching receives the declared PartitionType enum rather than a string."""
-        value = TypedPartitionedRecord(partition_type=PartitionType.HOURLY, name="market_data")
+        value = TypedPartitionedRecord(
+            partition_type=PartitionType.HOURLY, name="market_data"
+        )
 
         match value.partition_type:
             case PartitionType.HOURLY:
@@ -108,4 +113,3 @@ class RecordTest(unittest.TestCase):
                 description = "daily partitions"
 
         self.assertEqual(description, "hourly partitions")
-

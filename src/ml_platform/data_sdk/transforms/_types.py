@@ -6,10 +6,10 @@ from enum import StrEnum
 from typing import assert_never
 
 from pydantic import Field
+from pyspark.sql import DataFrame
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk._exceptions import DataSdkError
-from pyspark.sql import DataFrame
 
 
 class FeatureKey(StrEnum):
@@ -104,7 +104,9 @@ class PartitionType(StrEnum):
 
     def normalize_timestamp(self, timestamp: datetime) -> datetime:
         """Normalize one timestamp to this cadence's UTC partition boundary."""
-        normalized = timestamp.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        normalized = timestamp.astimezone(timezone.utc).replace(
+            minute=0, second=0, microsecond=0
+        )
         if self is PartitionType.DAILY:
             return normalized.replace(hour=0)
         return normalized
@@ -113,13 +115,17 @@ class PartitionType(StrEnum):
 class DatasetDependency(BaseConfig):
     """Immutable declared dataset dependency for a derived materialization."""
 
-    name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase name of the upstream dataset.")
+    name: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Stable lowercase name of the upstream dataset.",
+    )
     version: int = Field(ge=1, description="Immutable version of the upstream dataset.")
     dataset_type: DatasetType = Field(
         description="Kind of upstream dataset used to resolve its Iceberg namespace."
     )
     num_lookback_partitions: int = Field(
-        ge=0, description="Number of preceding dataset partitions required for each output partition."
+        ge=0,
+        description="Number of preceding dataset partitions required for each output partition.",
     )
 
     @property

@@ -3,9 +3,9 @@
 from ml_platform.data_sdk.configs._configs import (
     BaseConfig,
     DataConfig,
-    DataType,
     DatasetConfig,
     DatasetType,
+    DataType,
     FeatureConfig,
     FeatureDatasetConfig,
     FeatureKey,
@@ -13,9 +13,9 @@ from ml_platform.data_sdk.configs._configs import (
     MarketDataConfig,
     PartitionType,
     RunFrequency,
-    TripleBarrierConfig,
     TimeRange,
     TransformConfig,
+    TripleBarrierConfig,
 )
 
 __all__ = [

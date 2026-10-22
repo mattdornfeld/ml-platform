@@ -43,14 +43,27 @@ validations:
 """)
 
     @patch("ml_platform.cli.materialization._api_request")
-    def test_dataset_sync_creates_configured_and_deletes_removed(self, request: object) -> None:
-        request.side_effect = [[
-            {"name": "obsolete", "version": 1, "deleted_at": None},
-            {"name": "prices", "version": 2, "deleted_at": None, "config": {"description": "Test prices."}},
-        ], {}]
+    def test_dataset_sync_creates_configured_and_deletes_removed(
+        self, request: object
+    ) -> None:
+        request.side_effect = [
+            [
+                {"name": "obsolete", "version": 1, "deleted_at": None},
+                {
+                    "name": "prices",
+                    "version": 2,
+                    "deleted_at": None,
+                    "config": {"description": "Test prices."},
+                },
+            ],
+            {},
+        ]
         result = sync_resources("http://api", "dataset", self.root)
         self.assertEqual(result, {"created": [], "deleted": ["obsolete v1"]})
-        self.assertEqual(request.call_args_list[1].args[1:3], ("DELETE", "/datasets/obsolete/versions/1"))
+        self.assertEqual(
+            request.call_args_list[1].args[1:3],
+            ("DELETE", "/datasets/obsolete/versions/1"),
+        )
 
     @patch("ml_platform.cli.materialization._api_request")
     def test_feature_sync_resolves_dataset_identity(self, request: object) -> None:
@@ -58,4 +71,15 @@ validations:
         result = sync_resources("http://api", "feature", self.root)
         self.assertEqual(result, {"created": ["returns v1"], "deleted": []})
         payload = request.call_args_list[1].args[3]
-        self.assertEqual(payload["datasets"], [{"name": "prices", "version": 2, "dataset_type": "market_data", "argument_name": "market_data", "num_lookback_partitions": 1}])
+        self.assertEqual(
+            payload["datasets"],
+            [
+                {
+                    "name": "prices",
+                    "version": 2,
+                    "dataset_type": "market_data",
+                    "argument_name": "market_data",
+                    "num_lookback_partitions": 1,
+                }
+            ],
+        )
