@@ -85,6 +85,7 @@ class MNISTClassifier(pl.LightningModule):
         """Initialize the MLP layers and persist the optimizer learning rate."""
         super().__init__()
         self.save_hyperparameters()
+        self.learning_rate = learning_rate
         self.model = nn.Sequential(
             nn.Flatten(),
             nn.Linear(28 * 28, 128),
@@ -121,4 +122,4 @@ class MNISTClassifier(pl.LightningModule):
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Create the Adam optimizer configured with the saved learning rate."""
-        return torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        return torch.optim.Adam(self.parameters(), lr=self.learning_rate)

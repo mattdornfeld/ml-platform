@@ -81,7 +81,7 @@ class DatasetCreateRequest(_ApiModel):
     dataset_type: DatasetType
     config: MarketDataDatasetConfig
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def id(self) -> str:
         """Return the immutable resource ID derived from name and version."""

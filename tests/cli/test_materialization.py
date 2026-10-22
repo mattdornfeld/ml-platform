@@ -19,6 +19,7 @@ class ResourceSyncTest(unittest.TestCase):
 version: 2
 dataset_type: market_data
 description: Test prices.
+keys: [symbol]
 symbols: [AAPL]
 time_range: {start_date: 2026-01-01, end_date: 2026-01-02}
 """)
@@ -30,6 +31,7 @@ feature_keys: [symbol]
 datasets:
   - name: prices
     version: 2
+    dataset_type: market_data
     argument_name: market_data
     num_lookback_partitions: 1
 transform: ml_platform.data_sdk.LogReturnTransform

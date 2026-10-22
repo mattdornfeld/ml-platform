@@ -35,7 +35,7 @@ def _load_yaml(path: str | Path) -> dict[str, Any]:
     loaded = OmegaConf.to_container(OmegaConf.load(Path(path)), resolve=True)
     if not isinstance(loaded, dict):
         raise ValueError(f"Configuration must be a mapping: {path}")
-    return loaded
+    return {str(key): value for key, value in loaded.items()}
 
 
 def _timestamps(values: list[str]) -> dict[str, list[str]]:
@@ -87,6 +87,7 @@ def _feature_payload(config: dict[str, Any]) -> dict[str, Any]:
         {
             "name": dataset["name"],
             "version": dataset["version"],
+            "dataset_type": dataset["dataset_type"],
             "argument_name": dataset["argument_name"],
             "num_lookback_partitions": dataset["num_lookback_partitions"],
         }

@@ -93,7 +93,7 @@ class MaterializerConfig(BaseConfig):
     def partition_timestamps(self) -> tuple[datetime, ...]:
         """Return requested timestamps normalized to this resource's partition cadence."""
         return tuple(
-            self.partition_type.normalize_timestamp(partition.timestamp)
+            self.partition_type.normalize_timestamp(partition.timestamp)  # type: ignore[attr-defined]
             for partition in self.partitions
         )
 
@@ -157,7 +157,7 @@ class Materializer[Config: MaterializerConfig](ABC):
             RequestedPartitionsValidationConfig(
                 reason="Output rows must belong to the requested logical partitions.",
                 timestamps=self.config.partition_timestamps,
-                partition_type=self.config.partition_type,
+                partition_type=self.config.partition_type,  # type: ignore[attr-defined]
             ),
         )
 
@@ -222,7 +222,7 @@ class Materializer[Config: MaterializerConfig](ABC):
         return (
             data_frame.withColumn(
                 "requested_partition",
-                F.date_trunc(self.config.partition_type.partition_unit, F.col("timestamp")),
+                F.date_trunc(self.config.partition_type.partition_unit, F.col("timestamp")),  # type: ignore[attr-defined]
             )
             .join(requested_partitions, "requested_partition", "left_semi")
             .drop("requested_partition")

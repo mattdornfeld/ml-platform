@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import json
 from importlib import import_module
 from inspect import Parameter, signature
-from typing import TypeGuard, get_type_hints
+from typing import Callable, TypeGuard, get_type_hints
 
 from pydantic import Field
 from pyspark.sql import DataFrame, SparkSession
@@ -44,11 +44,6 @@ from ml_platform.data_sdk.transforms._types import (
 class TransformMaterializationConfig(MaterializerConfig, TransformConfig):
     """Runtime transformation definition enriched with materialization-specific inputs."""
 
-    feature_keys: list[str] = Field(
-        default_factory=lambda: ["symbol"],
-        min_length=1,
-        description="Ordered entity-key columns received from the control-plane JSON job payload.",
-    )
 
 
 @dataclass(frozen=True)
@@ -79,7 +74,7 @@ class TransformMaterializer[
     @property
     def _feature_key_columns(self) -> tuple[str, ...]:
         """Return the immutable configured entity columns for one transform row."""
-        return tuple(self.config.feature_keys)
+        return tuple(feature_key.value for feature_key in self.config.feature_keys)
 
     @property
     def iceberg_table(self) -> IcebergTable:
@@ -205,18 +200,18 @@ class TransformMaterializer[
         return injected_datasets
 
     @staticmethod
-    def _is_transform_class[Transform: DataTransform](
+    def _is_transform_class[ConcreteTransform: DataTransform](
         candidate: object,
-        transform_base: type[Transform],
-    ) -> TypeGuard[type[Transform]]:
+        transform_base: type[ConcreteTransform],
+    ) -> TypeGuard[type[ConcreteTransform]]:
         """Return whether an imported object implements the requested transform contract."""
         return isinstance(candidate, type) and issubclass(candidate, transform_base)
 
     @staticmethod
-    def _load_transform[Transform: DataTransform](
+    def _load_transform[ConcreteTransform: DataTransform](
         import_path: str,
-        transform_base: type[Transform],
-    ) -> type[Transform]:
+        transform_base: type[ConcreteTransform],
+    ) -> Callable[..., ConcreteTransform]:
         """Load a configured transform and preserve its verified concrete subtype."""
         module_name, class_name = import_path.rsplit(".", maxsplit=1)
         try:
@@ -231,11 +226,11 @@ class TransformMaterializer[
             )
         return transform
 
-    def _inject_transform[Transform: DataTransform](
+    def _inject_transform[ConcreteTransform: DataTransform](
         self,
-        transform_class: type[Transform],
+        transform_class: Callable[..., ConcreteTransform],
         datasets: dict[str, Dataset],
-    ) -> Transform:
+    ) -> ConcreteTransform:
         """Construct a transform after verifying its API-declared dependencies and parameters."""
         config = self.config
         constructor_parameters = {

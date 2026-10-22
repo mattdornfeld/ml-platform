@@ -491,6 +491,9 @@ class MaterializationValidator:
                         )
                         InputFeatureKeysValidation(config.feature_keys, input_frames).validate(data_frame)
                     case _ as unsupported_config:
-                        assert_never(unsupported_config)
+                        raise UnsupportedValidationOverrideError(
+                            "Materialization validator does not support validation type "
+                            f"{unsupported_config.type!r}."
+                        )
             except DataFrameValidationError as error:
                 raise type(error)(f"{config.reason}: {error}") from error

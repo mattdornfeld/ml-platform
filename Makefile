@@ -21,9 +21,9 @@ venv:
 lock: venv
 	UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) lock
 
-## Run the complete test suite, including the Spark/Iceberg integration test.
+## Run pytest, including production mypy checks and available Spark/Iceberg integration tests.
 test: configure
-	JAVA_HOME="$(SPARK_JAVA_HOME)" UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) run --locked python -m unittest discover -s tests -v
+	JAVA_HOME="$(SPARK_JAVA_HOME)" UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) run --locked pytest -v
 
 ## Serve the control-plane dashboard from the local Minikube cluster.
 ui:

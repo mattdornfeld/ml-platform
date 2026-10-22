@@ -103,7 +103,7 @@ def validation_example(
     return {"detail": [detail]}
 
 
-def error_responses(examples: dict[str, dict[str, Any]]) -> dict[int, dict[str, Any]]:
+def error_responses(examples: dict[str, dict[str, Any]]) -> dict[int | str, dict[str, Any]]:
     """Document every currently possible error response for one route."""
     return {
         422: {
@@ -514,7 +514,7 @@ def create_feature(payload: FeatureCreateRequest, connection: DatabaseConnection
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING name, version, dtype, frequency, feature_keys, validations, transform, description, parameters, created_at""",
                 (payload.name, payload.version, payload.dtype, payload.frequency, Json([key.value for key in payload.feature_keys]),
-                 Json(payload.validations.model_dump()), payload.transform, payload.description, Json(payload.parameters)))
+                 Json([validation.model_dump() for validation in payload.validations]), payload.transform, payload.description, Json(payload.parameters)))
             row = cursor.fetchone()
             for dependency in payload.datasets:
                 cursor.execute("""INSERT INTO feature_dataset_dependencies
@@ -868,7 +868,9 @@ def complete_partitions(
                     RETURNING partition_id, content_hash, snapshot_id, row_count, schema, created_at""",
                     (item.partition_id, item.content_hash, item.snapshot_id, item.row_count, Jsonb(item.schema_)),
                 )
-                results[item.partition_id] = {**cursor.fetchone(), "resource_type": item.resource_type}
+                receipt = cursor.fetchone()
+                assert receipt is not None
+                results[item.partition_id] = {**receipt, "resource_type": item.resource_type}
                 if item.resource_type != "dataset":
                     cursor.execute(
                         f"""INSERT INTO {item.resource_type}_partition_dataset_dependencies
@@ -976,13 +978,20 @@ def _job_kubernetes_resources(application_name: str) -> list[dict[str, str]]:
         ).items
     except Exception:
         return resources
-    for pod in sorted(pods, key=lambda value: value.metadata.name):
-        role = (pod.metadata.labels or {}).get("spark-role")
+    named_pods = [
+        (pod.metadata.name, pod)
+        for pod in pods
+        if pod.metadata is not None and pod.metadata.name is not None
+    ]
+    for name, pod in sorted(named_pods):
+        metadata = pod.metadata
+        assert metadata is not None
+        role = (metadata.labels or {}).get("spark-role")
         if role not in {"driver", "executor"}:
             continue
-        url = _headlamp_resource_url("pods", pod.metadata.name)
+        url = _headlamp_resource_url("pods", name)
         if url:
-            resources.append({"resource_type": f"{role.title()} Pod", "resource_id": pod.metadata.name, "url": url})
+            resources.append({"resource_type": f"{role.title()} Pod", "resource_id": name, "url": url})
     return resources
 
 

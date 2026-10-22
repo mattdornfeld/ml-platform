@@ -131,25 +131,61 @@ def _yahoo_chart_rows(payload: dict[str, Any], symbol: str) -> list[tuple[object
         raise YahooFinancePayloadError(
             f"Yahoo Finance response for {symbol!r} contains an invalid chart result."
         )
-    timestamps = result.get("timestamp"); indicators = result.get("indicators")
+    timestamps = result.get("timestamp")
+    indicators = result.get("indicators")
     quotes = indicators.get("quote") if isinstance(indicators, dict) else None
     values = quotes[0] if isinstance(quotes, list) and quotes else None
     if not isinstance(timestamps, list) or not isinstance(values, dict):
         raise YahooFinancePayloadError(
             f"Yahoo Finance response for {symbol!r} is missing timestamp or OHLCV data."
         )
-    fields = {column: values.get(column.lower()) for column in OHLCV_COLUMNS}
-    missing = [column for column, values in fields.items() if not isinstance(values, list)]
-    if missing:
+    open_values = values.get("open")
+    high_values = values.get("high")
+    low_values = values.get("low")
+    close_values = values.get("close")
+    volume_values = values.get("volume")
+    if (
+        not isinstance(open_values, list)
+        or not isinstance(high_values, list)
+        or not isinstance(low_values, list)
+        or not isinstance(close_values, list)
+        or not isinstance(volume_values, list)
+    ):
         raise YahooFinancePayloadError(
-            f"Yahoo Finance response for {symbol!r} is missing OHLCV columns: {', '.join(missing)}."
+            f"Yahoo Finance response for {symbol!r} is missing one or more OHLCV columns."
         )
-    if any(len(values) != len(timestamps) for values in fields.values()):
+    if any(len(column_values) != len(timestamps) for column_values in (
+        open_values,
+        high_values,
+        low_values,
+        close_values,
+        volume_values,
+    )):
         raise YahooFinancePayloadError(
             f"Yahoo Finance response for {symbol!r} has OHLCV arrays inconsistent with timestamp count "
             f"{len(timestamps)}."
         )
-    return [(datetime.fromtimestamp(timestamp, tz=timezone.utc), symbol, float(open_), float(high), float(low), float(close), int(volume)) for timestamp, open_, high, low, close, volume in zip(timestamps, fields["Open"], fields["High"], fields["Low"], fields["Close"], fields["Volume"], strict=True) if None not in (timestamp, open_, high, low, close, volume)]
+    return [
+        (
+            datetime.fromtimestamp(timestamp, tz=timezone.utc),
+            symbol,
+            float(open_),
+            float(high),
+            float(low),
+            float(close),
+            int(volume),
+        )
+        for timestamp, open_, high, low, close, volume in zip(
+            timestamps,
+            open_values,
+            high_values,
+            low_values,
+            close_values,
+            volume_values,
+            strict=True,
+        )
+        if None not in (timestamp, open_, high, low, close, volume)
+    ]
 
 
 def _with_market_session(frame: DataFrame) -> DataFrame:

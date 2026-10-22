@@ -37,6 +37,12 @@ class TimeRange(BaseConfig):
     start_date: date = Field(description="First included UTC calendar date.")
     end_date: date = Field(description="First excluded UTC calendar date.")
 
+    @field_validator("start_date", "end_date", mode="before")
+    @classmethod
+    def parse_yaml_date(cls, value: date | str) -> date:
+        """Parse ISO-8601 YAML date values before strict model validation."""
+        return date.fromisoformat(value) if isinstance(value, str) else value
+
     @model_validator(mode="after")
     def validate_date_range(self) -> "TimeRange":
         """Require an end date after the required inclusive start date."""
@@ -89,6 +95,12 @@ class DatasetConfig(DataConfig):
         description="Number of preceding partitions required when this dataset is a dependency.",
     )
 
+    @field_validator("keys", mode="before")
+    @classmethod
+    def parse_keys(cls, keys: list[FeatureKey | str]) -> list[FeatureKey]:
+        """Parse YAML key literals into the closed FeatureKey enum."""
+        return [FeatureKey(key) for key in keys]
+
     @model_validator(mode="before")
     @classmethod
     def infer_partition_type(cls, values: object) -> object:
@@ -131,6 +143,12 @@ class TransformConfig(DataConfig):
         default_factory=dict,
         description="Typed keyword arguments passed to the transform constructor.",
     )
+
+    @field_validator("feature_keys", mode="before")
+    @classmethod
+    def parse_feature_keys(cls, feature_keys: list[FeatureKey | str]) -> list[FeatureKey]:
+        """Parse YAML key literals into the closed FeatureKey enum."""
+        return [FeatureKey(feature_key) for feature_key in feature_keys]
 
     @property
     def partition_type(self) -> PartitionType:
