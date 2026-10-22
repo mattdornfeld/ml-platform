@@ -57,7 +57,7 @@ def feature_worker() -> FeatureMaterializer:
             "partition_id": "feature-partition",
             "timestamp": "2026-01-01T10:00:00Z",
             "callback_token": "feature-token",
-            "dataset_partitions": [{
+            "partition_dependencies": [{
                 "partition_id": "parent-partition",
                 "dataset_name": "sp500",
                 "dataset_version": 3,
@@ -80,7 +80,7 @@ def label_worker() -> LabelMaterializer:
         "partitions": [{
             "partition_id": "label-partition", "timestamp": "2026-01-01T00:00:00Z",
             "callback_token": "label-token",
-            "dataset_partitions": [{
+            "partition_dependencies": [{
                 "partition_id": "parent-partition", "dataset_name": "sp500",
                 "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z",
                 "snapshot_id": 42,

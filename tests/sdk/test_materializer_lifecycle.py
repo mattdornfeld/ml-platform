@@ -120,7 +120,7 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
             "partitions": [{
                 "partition_id": "feature-hour", "timestamp": "2026-01-01T10:00:00Z",
                 "callback_token": "feature-token",
-                "dataset_partitions": [{
+                "partition_dependencies": [{
                     "partition_id": "market-day", "dataset_name": "lifecycle_market",
                     "dataset_version": 1, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 42,
                 }],
@@ -170,7 +170,7 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
             "partitions": [{
                 "partition_id": "label-day", "timestamp": "2026-01-01T00:00:00Z",
                 "callback_token": "label-token",
-                "dataset_partitions": [{"partition_id": "market-day", "dataset_name": "lifecycle_market", "dataset_version": 1, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 42}],
+                "partition_dependencies": [{"partition_id": "market-day", "dataset_name": "lifecycle_market", "dataset_version": 1, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 42}],
             }],
         }))
         source = self.spark.createDataFrame(

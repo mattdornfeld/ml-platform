@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from pyspark.sql import DataFrame
 
-from ml_platform.data_sdk.materializers._base import MaterializerInputPartition, MaterializerPartition
+from ml_platform.data_sdk.materializers._base import PartionDependency, MaterializerPartition
 from ml_platform.data_sdk.materializers._feature import FeatureMaterializationConfig, FeatureMaterializer
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._types import Dataset, FeatureDatasetDependency
@@ -35,9 +35,9 @@ class PlannedInputTest(unittest.TestCase):
         spark = MagicMock()
         frame = spark.read.option.return_value.table.return_value.where.return_value
         frame.dropDuplicates.return_value = frame
-        callbacks = [MaterializerPartition(partition_id="output", timestamp=datetime(2026, 10, 19, tzinfo=timezone.utc), callback_token="token", dataset_partitions=[
-            MaterializerInputPartition(partition_id="parent", dataset_name="sp500", dataset_version=3, timestamp=datetime(2026, 10, 19, tzinfo=timezone.utc), snapshot_id=42),
-            MaterializerInputPartition(partition_id="other-parent", dataset_name="company_facts", dataset_version=2, timestamp=datetime(2026, 10, 19, tzinfo=timezone.utc), snapshot_id=99),
+        callbacks = [MaterializerPartition(partition_id="output", timestamp=datetime(2026, 10, 19, tzinfo=timezone.utc), callback_token="token", partition_dependencies=[
+            PartionDependency(partition_id="parent", dataset_name="sp500", dataset_version=3, timestamp=datetime(2026, 10, 19, tzinfo=timezone.utc), snapshot_id=42),
+            PartionDependency(partition_id="other-parent", dataset_name="company_facts", dataset_version=2, timestamp=datetime(2026, 10, 19, tzinfo=timezone.utc), snapshot_id=99),
         ])]
 
         result = FeatureMaterializer._planned_dataset(spark, callbacks, FeatureDatasetDependency(name="sp500", version=3, argument_name="market_data", num_lookback_partitions=0))
@@ -65,7 +65,7 @@ class PlannedInputTest(unittest.TestCase):
             ],
             "partitions": [{
                 "partition_id": "output", "timestamp": timestamp, "callback_token": "token",
-                "dataset_partitions": [
+                "partition_dependencies": [
                     {"partition_id": "prices-parent", "dataset_name": "prices_v2", "dataset_version": 1,
                      "timestamp": timestamp, "snapshot_id": 42},
                     {"partition_id": "facts-parent", "dataset_name": "company_facts", "dataset_version": 2,

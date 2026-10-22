@@ -21,7 +21,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 
-class MaterializerInputPartition(BaseConfig):
+class PartionDependency(BaseConfig):
     """One pinned parent dataset partition required by a derived output."""
 
     partition_id: str = Field(min_length=1, description="Control-plane identifier of the pinned parent partition.")
@@ -37,7 +37,7 @@ class MaterializerPartition(BaseConfig):
     partition_id: str = Field(min_length=1, description="Control-plane identifier for the requested output partition.")
     timestamp: datetime = Field(description="UTC timestamp that identifies the requested logical output partition.")
     callback_token: str = Field(min_length=1, description="Opaque token required to report successful partition completion.")
-    dataset_partitions: list[MaterializerInputPartition] = Field(
+    partition_dependencies: list[PartionDependency] = Field(
         default_factory=list,
         description="Pinned parent dataset partition revisions required to produce this output partition.",
     )

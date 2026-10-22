@@ -3,7 +3,7 @@
 from ml_platform.data_sdk.materializers._base import (
     Materializer,
     MaterializerConfig,
-    MaterializerInputPartition,
+    PartionDependency,
     MaterializerPartition,
     MaterializerValidations,
 )
@@ -19,5 +19,5 @@ __all__ = [
     "DatasetMaterializationConfig", "DatasetMaterializer", "DatasetDependency",
     "FeatureDatasetDependency", "FeatureMaterializationConfig", "FeatureMaterializer",
 "LabelMaterializationConfig", "LabelMaterializer", "Materializer",
-    "MaterializerConfig", "MaterializerInputPartition", "MaterializerPartition", "MaterializerValidations",
+    "MaterializerConfig", "PartionDependency", "MaterializerPartition", "MaterializerValidations",
 ]

@@ -110,7 +110,7 @@ class MaterializerValidationTest(unittest.TestCase):
             "transform": "ml_platform.data_sdk.LogReturnTransform",
             "partitions": [{
                 "partition_id": "output", "timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc), "callback_token": "token",
-                "dataset_partitions": [{
+                "partition_dependencies": [{
                     "partition_id": "input", "dataset_name": "sp500", "dataset_version": 3,
                     "timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc), "snapshot_id": 1,
                 }],

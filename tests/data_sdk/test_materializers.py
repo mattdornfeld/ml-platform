@@ -26,7 +26,7 @@ from ml_platform.data_sdk.materializers import (
     LabelMaterializationConfig,
     Materializer,
     MaterializerConfig,
-    MaterializerInputPartition,
+    PartionDependency,
     MaterializerPartition,
     MaterializerValidations,
 )
@@ -74,7 +74,7 @@ class MaterializerContractTest(unittest.TestCase):
         config = FeatureMaterializer._config_from_json(json.dumps({
             "name": "log_return", "version": 1, "dtype": "double", "frequency": "daily",
             "feature_keys": ["symbol"], "description": "Returns.", "warehouse_dir": "s3a://warehouse",
-            "partitions": [{"partition_id": "feature-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "dataset_partitions": [{"partition_id": "dataset-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}],
+            "partitions": [{"partition_id": "feature-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "partition_dependencies": [{"partition_id": "dataset-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}],
             "datasets": [{"name": "sp500", "version": 3, "argument_name": "market_data", "num_lookback_partitions": 1}],
             "transform": "ml_platform.data_sdk.feature_transforms._log_return.LogReturnTransform",
             "parameters": {"lookback_bars": 1},
@@ -87,7 +87,7 @@ class MaterializerContractTest(unittest.TestCase):
         """Label worker JSON describes its transform, inputs, and parameters."""
         config = LabelMaterializer._config_from_json(json.dumps({
             "name": "hourly_triple_barrier", "version": 1, "description": "Labels.", "warehouse_dir": "s3a://warehouse",
-            "validations": {}, "partitions": [{"partition_id": "label-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "dataset_partitions": [{"partition_id": "parent-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}], "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 2}],
+            "validations": {}, "partitions": [{"partition_id": "label-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "partition_dependencies": [{"partition_id": "parent-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}], "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 2}],
             "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
             "parameters": {"horizon_bars": 24, "volatility_lookback_bars": 24, "profit_taking_multiplier": 1.0, "stop_loss_multiplier": 1.0},
         }))
@@ -134,7 +134,7 @@ class MaterializerContractTest(unittest.TestCase):
                 {
                     "name": "log_return", "version": 1, "dtype": "double", "frequency": "daily",
                     "feature_keys": ["symbol"], "description": "Returns.", "warehouse_dir": "s3a://warehouse",
-                    "partitions": [{"partition_id": "feature-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "dataset_partitions": [{"partition_id": "dataset-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}],
+                    "partitions": [{"partition_id": "feature-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "partition_dependencies": [{"partition_id": "dataset-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}],
                     "datasets": [{"name": "sp500", "version": 3, "argument_name": "market_data", "num_lookback_partitions": 1}],
                     "transform": "ml_platform.data_sdk.feature_transforms._log_return.LogReturnTransform",
                     "parameters": {"lookback_bars": 1}, "validations": {},
@@ -179,7 +179,7 @@ class MaterializerContractTest(unittest.TestCase):
             MarketDataConfig,
             TripleBarrierConfig,
             DatasetDependency,
-            MaterializerInputPartition,
+            PartionDependency,
             MaterializerPartition,
             MaterializerValidations,
             MaterializerConfig,

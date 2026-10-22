@@ -150,7 +150,7 @@ class LabelsIntegrationTest(unittest.TestCase):
                 "partition_id": "synthetic-label-day",
                 "timestamp": "2026-01-02T00:00:00Z",
                 "callback_token": "synthetic-label-token",
-                "dataset_partitions": [{"partition_id": "synthetic-market-day", "dataset_name": "sp500",
+                "partition_dependencies": [{"partition_id": "synthetic-market-day", "dataset_name": "sp500",
                                         "dataset_version": 3, "timestamp": "2026-01-02T00:00:00Z", "snapshot_id": 1}],
             }],
         }))

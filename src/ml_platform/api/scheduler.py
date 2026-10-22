@@ -169,7 +169,7 @@ class JobScheduler:
                         'partition_id', request.partition_id,
                         'timestamp', request.timestamp,
                         'callback_token', request.callback_token,
-                        'dataset_partitions', COALESCE((
+                        'partition_dependencies', COALESCE((
                             SELECT json_agg(json_build_object(
                                 'partition_id', planned.dataset_partition_id,
                                 'dataset_name', parent_request.dataset_name,

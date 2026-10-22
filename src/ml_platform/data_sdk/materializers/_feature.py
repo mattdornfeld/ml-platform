@@ -55,9 +55,9 @@ class FeatureMaterializationConfig(MaterializerConfig):
 
     @field_validator("partitions")
     @classmethod
-    def _require_input_partition_plans(cls, partitions: list[MaterializerPartition]) -> list[MaterializerPartition]:
-        if any(not partition.dataset_partitions for partition in partitions):
-            raise ValueError("Feature partitions must include pinned dataset_partitions.")
+    def _require_partition_dependencies(cls, partitions: list[MaterializerPartition]) -> list[MaterializerPartition]:
+        if any(not partition.partition_dependencies for partition in partitions):
+            raise ValueError("Feature partitions must include pinned partition_dependencies.")
         return partitions
 
     @field_validator("feature_keys")
@@ -88,7 +88,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
 
     def _partition_receipt_data(self, partition: MaterializerPartition) -> dict[str, object]:
         """Pin the exact dataset revisions consumed by this feature partition."""
-        return {"dataset_partition_ids": [parent.partition_id for parent in partition.dataset_partitions]}
+        return {"dataset_partition_ids": [parent.partition_id for parent in partition.partition_dependencies]}
 
     @property
     def _feature_key_columns(self) -> tuple[str, ...]:
@@ -104,10 +104,10 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     def _planned_dataset(spark: Any, callbacks: list[MaterializerPartition], dataset: DatasetDependency) -> DataFrame:
         """Load only this dataset's pinned Iceberg revisions and day partitions."""
         planned_partitions = {
-            (item.partition_id, item.timestamp, item.snapshot_id)
+            (partition_dependency.partition_id, partition_dependency.timestamp, partition_dependency.snapshot_id)
             for callback in callbacks
-            for item in callback.dataset_partitions
-            if (item.dataset_name, item.dataset_version) == (dataset.name, dataset.version)
+            for partition_dependency in callback.partition_dependencies
+            if (partition_dependency.dataset_name, partition_dependency.dataset_version) == (dataset.name, dataset.version)
         }
         if not planned_partitions:
             raise ValueError(f"Feature job has no immutable dataset partition plan for {dataset.id}.")
@@ -536,9 +536,9 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         """Inject every declared dataset under its explicit constructor argument name."""
         declared_ids = {(dataset.name, dataset.version) for dataset in self.config.datasets}
         planned_ids = {
-            (parent.dataset_name, parent.dataset_version)
+            (partition_dependency.dataset_name, partition_dependency.dataset_version)
             for callback in self.config.partitions
-            for parent in callback.dataset_partitions
+            for partition_dependency in callback.partition_dependencies
         }
         if planned_ids != declared_ids:
             raise ValueError("Feature dataset partition plan does not match declared datasets.")

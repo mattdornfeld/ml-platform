@@ -34,9 +34,9 @@ class LabelMaterializationConfig(MaterializerConfig):
 
     @field_validator("partitions")
     @classmethod
-    def _require_input_partition_plans(cls, partitions: list[MaterializerPartition]) -> list[MaterializerPartition]:
-        if any(not partition.dataset_partitions for partition in partitions):
-            raise ValueError("Label partitions must include pinned dataset_partitions.")
+    def _require_partition_dependencies(cls, partitions: list[MaterializerPartition]) -> list[MaterializerPartition]:
+        if any(not partition.partition_dependencies for partition in partitions):
+            raise ValueError("Label partitions must include pinned partition_dependencies.")
         return partitions
 
     @field_validator("feature_keys")
@@ -76,7 +76,7 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
 
     def _partition_receipt_data(self, partition: MaterializerPartition) -> dict[str, object]:
         """Pin the input dataset revisions used for this label partition."""
-        return {"dataset_partition_ids": [parent.partition_id for parent in partition.dataset_partitions]}
+        return {"dataset_partition_ids": [partition_dependency.partition_id for partition_dependency in partition.partition_dependencies]}
 
     @property
     def _feature_key_columns(self) -> tuple[str, ...]:
