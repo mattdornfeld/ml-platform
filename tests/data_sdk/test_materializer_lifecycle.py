@@ -27,7 +27,7 @@ def dataset_worker() -> DatasetMaterializer:
         "description": "Hourly market bars.",
         "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily",
         "symbols": ["AAPL"],
-        "validations": {"allow_empty_partitions": True},
+        "validations": [],
         "warehouse_dir": "temporary-warehouse",
         "partitions": [{
             "partition_id": "dataset-partition",
@@ -53,6 +53,7 @@ def feature_worker() -> FeatureMaterializer:
         }],
         "transform": "ml_platform.data_sdk.feature_transforms._relative_volume.RelativeVolumeTransform",
         "parameters": {"lookback_bars": 2},
+        "validations": [{"type": "minimum_rows", "minimum_rows": 1}],
         "warehouse_dir": "temporary-warehouse",
         "partitions": [{
             "partition_id": "feature-partition",
@@ -187,7 +188,7 @@ class MaterializerLifecycleTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     json.loads(properties["resource.validations"]),
-                    worker.config.validations.model_dump(mode="json"),
+                    [validation.model_dump(mode="json") for validation in worker.config.validations],
                 )
                 self.assertNotIn(f"{resource_type}.name", properties)
 

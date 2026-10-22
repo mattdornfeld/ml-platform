@@ -5,7 +5,10 @@ description: Triple-barrier long-short labels from hourly market data.
 dtype: int
 frequency: daily
 feature_keys: [symbol]
-validations: {}
+validations:
+  - type: minimum_rows
+    minimum_rows: 1
+
 horizon_bars: 24
 volatility_lookback_bars: 24
 profit_taking_multiplier: 1.0

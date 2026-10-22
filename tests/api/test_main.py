@@ -62,14 +62,14 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                 "partition_type": "daily",
                 "symbols": ["AAPL"],
                 "time_range": {"start_date": "2026-01-01", "end_date": "2026-01-02"},
-                "validations": {"allow_empty_partitions": True},
+                "validations": [{"type": "minimum_rows", "minimum_rows": 1}],
             },
         })
 
-        self.assertTrue(request.config.validations.allow_empty_partitions)
+        self.assertEqual(request.config.validations[0].minimum_rows, 1)
         self.assertEqual(
             request.config.model_dump(mode="json")["validations"],
-            {"allow_empty_partitions": True},
+            [{"type": "minimum_rows", "temporal_filter": {"type": "all_partitions"}, "minimum_rows": 1}],
         )
 
     def test_dataset_partition_request_rejects_non_hour_timestamp(self) -> None:

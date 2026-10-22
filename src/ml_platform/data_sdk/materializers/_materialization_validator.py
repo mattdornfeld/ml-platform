@@ -1,6 +1,8 @@
 """Typed DataFrame validation shared by every materializer."""
 
+from abc import ABC
 from dataclasses import dataclass
+from typing import Annotated, Literal
 
 from pydantic import Field
 from pyspark.sql import DataFrame
@@ -10,39 +12,101 @@ from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.transforms._types import Dataset
 
 
-class MaterializerValidations(BaseConfig):
-    """Explicit validation policy applied to every requested output partition."""
+class TemporalFilterConfig(BaseConfig, ABC):
+    """Select requested partitions to which a partition-level validation applies."""
 
-    min_rows_per_partition: int = Field(
-        default=1,
-        ge=1,
-        description="Minimum rows required for each non-empty requested output partition.",
+    type: str = Field(description="Discriminator for the temporal filter implementation.")
+
+
+class AllPartitionsTemporalFilterConfig(TemporalFilterConfig):
+    """Apply a partition-level validation to every requested partition."""
+
+    type: Literal["all_partitions"] = Field(
+        default="all_partitions",
+        description="Apply the validation to every requested partition.",
     )
-    allow_empty_partitions: bool = Field(
-        default=False,
-        description="Whether requested output partitions may have no emitted rows and receive empty receipts.",
+
+
+TemporalFilter = Annotated[AllPartitionsTemporalFilterConfig, Field(discriminator="type")]
+
+
+class ValidationConfig(BaseConfig, ABC):
+    """Base type for one declared materialization validation."""
+
+    type: str = Field(description="Discriminator for the validation implementation.")
+
+
+class PartitionValidationConfig(ValidationConfig, ABC):
+    """Validation applied to a selected subset of requested output partitions."""
+
+    temporal_filter: TemporalFilter = Field(
+        default_factory=AllPartitionsTemporalFilterConfig,
+        description="Requested output partitions to which this validation applies.",
     )
-    require_finite_feature_value: bool = Field(
-        default=True,
-        description="Whether feature values must be finite rather than NaN or infinite.",
+
+
+class MinimumRowsValidationConfig(PartitionValidationConfig):
+    """Require a minimum number of output rows in each selected partition."""
+
+    type: Literal["minimum_rows"] = Field(default="minimum_rows", description="Require a minimum row count.")
+    minimum_rows: int = Field(ge=1, description="Minimum output rows required in each selected partition.")
+
+
+class FiniteFeatureValueValidationConfig(ValidationConfig):
+    """Require feature values to be finite after casting to their configured dtype."""
+
+    type: Literal["finite_feature_value"] = Field(
+        default="finite_feature_value",
+        description="Reject NaN and positive or negative infinity feature values.",
     )
-    require_feature_keys_from_input: bool = Field(
-        default=True,
-        description="Whether output feature keys must be present in the declared input datasets.",
+
+
+class FeatureKeysFromInputValidationConfig(ValidationConfig):
+    """Require feature keys to occur in at least one injected input dataset."""
+
+    type: Literal["feature_keys_from_input"] = Field(
+        default="feature_keys_from_input",
+        description="Require feature-key values to occur in an injected input dataset.",
     )
+
+
+Validation = Annotated[
+    MinimumRowsValidationConfig | FiniteFeatureValueValidationConfig | FeatureKeysFromInputValidationConfig,
+    Field(discriminator="type"),
+]
 
 
 @dataclass(frozen=True)
 class MaterializationValidator:
-    """Validate prepared DataFrames against one materialization job's policy.
+    """Apply declared and mandatory DataFrame invariants before an Iceberg write.
 
-    The validator never mutates or persists a DataFrame. It raises ``ValueError``
-    before a write when a required schema, key, value, or partition invariant fails.
-    Empty requested partitions are permitted only when explicitly configured.
+    Required columns, exact layouts, non-null persisted values, unique logical keys,
+    unexpected output partitions, and declared transform layouts are always enforced.
+    Each configured ``ValidationConfig`` adds its own check; partition-level checks
+    operate only on requested partitions selected by their ``temporal_filter``.
     """
 
-    validations: MaterializerValidations
+    validations: list[Validation]
     context: str
+
+    def _configured(self, validation_type: type[ValidationConfig]) -> list[ValidationConfig]:
+        """Return every declared validation with the requested concrete type."""
+        return [validation for validation in self.validations if isinstance(validation, validation_type)]
+
+    @staticmethod
+    def _filtered_partitions(requested: DataFrame, filter_config: TemporalFilter, partition_column: str) -> DataFrame:
+        """Return requested partitions selected by a statically declared temporal filter."""
+        match filter_config:
+            case AllPartitionsTemporalFilterConfig():
+                return requested.select(partition_column).distinct()
+
+    def requires_rows_for_all_partitions(self) -> bool:
+        """Return whether every requested partition must contain rows after writing."""
+        return any(
+            isinstance(validation, MinimumRowsValidationConfig)
+            and isinstance(validation.temporal_filter, AllPartitionsTemporalFilterConfig)
+            for validation in self.validations
+        )
 
     def required_columns(self, frame: DataFrame, required: set[str]) -> None:
         """Reject output that omits any required column."""
@@ -77,30 +141,26 @@ class MaterializationValidator:
             raise ValueError(f"{self.context} emitted duplicate ({', '.join(columns)}) rows.")
 
     def partition_coverage(self, frame: DataFrame, requested: DataFrame, *, partition_column: str) -> None:
-        """Reject unexpected output and enforce requested-partition row policy."""
+        """Reject unexpected output and apply each configured partition-level check."""
         requested_keys = requested.select(partition_column).distinct()
         emitted_keys = frame.select(partition_column).distinct()
-        missing = requested_keys.join(emitted_keys, partition_column, "left_anti")
         unexpected = emitted_keys.join(requested_keys, partition_column, "left_anti")
         if unexpected.limit(1).count():
-            raise ValueError(f"{self.context} output partitions do not exactly match requested partitions.")
-        if missing.limit(1).count() and not self.validations.allow_empty_partitions:
-            raise ValueError(f"{self.context} output partitions do not exactly match requested partitions.")
-        counts = frame.groupBy(partition_column).count()
-        too_small = counts.where(F.col("count") < self.validations.min_rows_per_partition)
-        if too_small.limit(1).count():
-            raise ValueError(
-                f"{self.context} emitted fewer than {self.validations.min_rows_per_partition} rows for a requested partition."
-            )
+            raise ValueError(f"{self.context} emitted output outside requested partitions.")
 
-    def non_empty(self, frame: DataFrame) -> None:
-        """Require output rows unless the job explicitly permits empty partitions."""
-        if not self.validations.allow_empty_partitions and not frame.limit(1).count():
-            raise ValueError(f"{self.context} returned no rows.")
+        counts = frame.groupBy(partition_column).count()
+        for validation in self._configured(MinimumRowsValidationConfig):
+            assert isinstance(validation, MinimumRowsValidationConfig)
+            selected = self._filtered_partitions(requested_keys, validation.temporal_filter, partition_column)
+            selected_counts = selected.join(counts, partition_column, "left").fillna({"count": 0})
+            if selected_counts.where(F.col("count") < validation.minimum_rows).limit(1).count():
+                raise ValueError(
+                    f"{self.context} emitted fewer than {validation.minimum_rows} rows for a selected partition."
+                )
 
     def finite_column(self, frame: DataFrame, column: str) -> None:
-        """Reject NaN and infinite values when finite values are required."""
-        if not self.validations.require_finite_feature_value:
+        """Reject non-finite values when the finite-feature-value validation is configured."""
+        if not self._configured(FiniteFeatureValueValidationConfig):
             return
         value = F.col(column).cast("double")
         invalid = frame.where(F.isnan(value) | (value == float("inf")) | (value == float("-inf")))
@@ -110,8 +170,8 @@ class MaterializationValidator:
     def feature_keys_from_inputs(
         self, frame: DataFrame, *, feature_keys: tuple[str, ...], datasets: dict[str, Dataset]
     ) -> None:
-        """Require output entity keys to exist in one of the injected datasets."""
-        if not self.validations.require_feature_keys_from_input:
+        """Require input membership when the corresponding validation is configured."""
+        if not self._configured(FeatureKeysFromInputValidationConfig):
             return
         input_key_frames: list[DataFrame] = []
         for dataset in datasets.values():

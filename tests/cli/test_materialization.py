@@ -34,7 +34,9 @@ datasets:
     num_lookback_partitions: 1
 transform: ml_platform.data_sdk.LogReturnTransform
 description: Returns
-validations: {min_rows_per_partition: 1}
+validations:
+  - type: minimum_rows
+    minimum_rows: 1
 """)
 
     @patch("ml_platform.cli.materialization._api_request")

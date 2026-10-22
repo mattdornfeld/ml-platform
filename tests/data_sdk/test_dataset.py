@@ -29,7 +29,7 @@ class DatasetWorkerTest(unittest.TestCase):
         transform.return_value.iceberg_partition_spec = "days(timestamp)"
         config = DatasetMaterializer._config_from_json(json.dumps({
             "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily",
-            "description": "Test market data.", "validations": {}, "symbols": ["AAPL"],
+            "description": "Test market data.", "validations": [], "symbols": ["AAPL"],
             "warehouse_dir": "temporary-warehouse",
             "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
         }))

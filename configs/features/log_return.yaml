@@ -14,4 +14,7 @@ datasets:
 transform: ml_platform.data_sdk.LogReturnTransform
 description: One-bar close-to-close log return.
 validations:
-  min_rows_per_partition: 1
+  - type: minimum_rows
+    minimum_rows: 1
+  - type: finite_feature_value
+  - type: feature_keys_from_input

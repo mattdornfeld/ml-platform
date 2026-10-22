@@ -7,35 +7,13 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from ml_platform.common.types import BaseConfig
+from ml_platform.data_sdk.materializers._materialization_validator import Validation
 from ml_platform.data_sdk.transforms._types import DataType, FeatureKey, PartitionType
-
-
-class DataValidations(BaseConfig):
-    """Shared validation policy marker for versioned data resources."""
-
-    allow_empty_partitions: bool = Field(
-        default=False,
-        description="Whether a requested partition may be materialized without emitted rows.",
-    )
 
 
 class RunFrequency(StrEnum):
     HOURLY = "hourly"
     DAILY = "daily"
-
-
-class FeatureValidations(DataValidations):
-    """Configurable validation requirements for returned feature DataFrames."""
-
-    min_rows_per_partition: int = Field(
-        default=1, ge=1, description="Minimum number of rows required for every materialized partition."
-    )
-    require_finite_feature_value: bool = Field(
-        default=True, description="Whether feature values must exclude NaN and positive or negative infinity."
-    )
-    require_feature_keys_from_input: bool = Field(
-        default=True, description="Whether output feature keys must come from the input datasets."
-    )
 
 
 class DatasetType(StrEnum):
@@ -73,8 +51,10 @@ class DataConfig(BaseConfig):
         min_length=1,
         description="Ordered logical entity-key columns that identify each output row.",
     )
-    validations: DataValidations = Field(default_factory=DataValidations,
-                                         description="Data quality validations applied during materialization.")
+    validations: list[Validation] = Field(
+        default_factory=list,
+        description="Data quality validations applied during materialization.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -145,9 +125,6 @@ class FeatureConfig(DataConfig):
     )
     parameters: dict[str, int | float | str | bool] = Field(
         default_factory=dict, description="Typed keyword arguments passed to the feature transform constructor."
-    )
-    validations: FeatureValidations = Field(
-        default_factory=FeatureValidations, description="Feature-specific data quality validation policy."
     )
 
     @field_validator("datasets")

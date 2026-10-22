@@ -16,7 +16,7 @@ from simple_classproperty import ClasspropertyMeta, classproperty
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import materialization_api_url, spark_master
-from ml_platform.data_sdk.materializers._materialization_validator import MaterializationValidator, MaterializerValidations
+from ml_platform.data_sdk.materializers._materialization_validator import MaterializationValidator, Validation
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._types import DatasetDependency
 from pyspark.sql import DataFrame, SparkSession
@@ -56,8 +56,9 @@ class MaterializerConfig(BaseConfig):
     name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase resource name.")
     version: int = Field(ge=1, description="Positive immutable version number for the resource definition.")
     description: str = Field(min_length=1, description="Human-readable description of the materialized resource.")
-    validations: MaterializerValidations = Field(
-        default_factory=MaterializerValidations, description="Runtime validation policy for materialized output."
+    validations: list[Validation] = Field(
+        default_factory=list,
+        description="Declared runtime validation checks applied to materialized output.",
     )
     datasets: list[DatasetDependency] = Field(
         default_factory=list, description="Versioned upstream datasets required by this resource."
@@ -273,7 +274,10 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
             "resource.dependencies": json.dumps(
                 [dataset.model_dump(mode="json") for dataset in self.config.datasets], sort_keys=True
             ),
-            "resource.validations": json.dumps(self.config.validations.model_dump(mode="json"), sort_keys=True),
+            "resource.validations": json.dumps(
+                [validation.model_dump(mode="json") for validation in self.config.validations],
+                sort_keys=True,
+            ),
         } | self._additional_table_properties()
 
     def _ensure_table(self, spark: SparkSession, *, schema: str, partition_spec: str) -> None:
@@ -297,8 +301,7 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         return MaterializationValidator(self.config.validations, f"{type(self).__name__} transform")
 
     def _validate_frame(self, frame: DataFrame, spark: SparkSession, partition_spec: str) -> None:
-        """Apply the shared validation policy before any Iceberg write."""
-        self._validator.non_empty(frame)
+        """Allow resource materializers to apply the shared validation policy before writing."""
 
     def _write_frame(self, frame: DataFrame) -> None:
         """Merge keyed rows or replace touched Iceberg partitions atomically."""
@@ -391,9 +394,10 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         """Report committed partition revisions through the control-plane API."""
         target_partition_keys = self._target_partition_keys(partition_spec)
         content_hashes = self._partition_content_hashes(spark, partition_spec)
-        missing = set(target_partition_keys) - content_hashes.keys()
-        if missing and not self.config.validations.allow_empty_partitions:
-            raise ValueError(f"Transform produced no rows for requested partitions: {sorted(missing)}.")
+        if self._validator.requires_rows_for_all_partitions():
+            missing = set(target_partition_keys) - content_hashes.keys()
+            if missing:
+                raise ValueError(f"Transform produced no rows for required partitions: {sorted(missing)}.")
         row_counts = self._partition_row_counts(spark, partition_spec)
         table_schema = {
             field.name: field.dataType.simpleString()

@@ -10,7 +10,9 @@ from pyspark.sql import SparkSession, functions as F
 
 from ml_platform.data_sdk.materializers import (
     MaterializerPartition,
-    MaterializerValidations,
+    MinimumRowsValidationConfig,
+    FiniteFeatureValueValidationConfig,
+    FeatureKeysFromInputValidationConfig,
     MaterializationValidator,
 )
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
@@ -39,7 +41,7 @@ class MaterializerValidationTest(unittest.TestCase):
 
     def test_schema_null_and_duplicate_key_checks(self) -> None:
         """Reject malformed, uncastable, and duplicate output rows."""
-        validator = MaterializationValidator(MaterializerValidations(), "Feature transform")
+        validator = MaterializationValidator([], "Feature transform")
         source = self.spark.createDataFrame(
             [("2026-01-01", "AAA", "1"), ("2026-01-01", "BBB", "invalid")],
             "timestamp string, symbol string, feature_value string",
@@ -57,7 +59,7 @@ class MaterializerValidationTest(unittest.TestCase):
 
     def test_partition_coverage_and_minimum_rows(self) -> None:
         """Require the exact requested partitions and configured row minimum."""
-        validator = MaterializationValidator(MaterializerValidations(min_rows_per_partition=2), "Feature transform")
+        validator = MaterializationValidator([MinimumRowsValidationConfig(minimum_rows=2)], "Feature transform")
         requested = self.spark.createDataFrame([("2026-01-01",), ("2026-01-02",)], "day string")
         valid = self.spark.createDataFrame(
             [("2026-01-01", "AAA"), ("2026-01-01", "BBB"),
@@ -67,10 +69,10 @@ class MaterializerValidationTest(unittest.TestCase):
         validator.partition_coverage(valid, requested, partition_column="day")
         with self.assertRaisesRegex(ValueError, "fewer than 3 rows"):
             MaterializationValidator(
-                MaterializerValidations(min_rows_per_partition=3), "Feature transform"
+                [MinimumRowsValidationConfig(minimum_rows=3)], "Feature transform"
             ).partition_coverage(valid, requested, partition_column="day")
         missing = valid.where("day = '2026-01-01'")
-        with self.assertRaisesRegex(ValueError, "requested partitions"):
+        with self.assertRaisesRegex(ValueError, "fewer than 2 rows"):
             validator.partition_coverage(missing, requested, partition_column="day")
         extra = valid.unionByName(self.spark.createDataFrame([("2026-01-03", "AAA")], valid.schema))
         with self.assertRaisesRegex(ValueError, "requested partitions"):
@@ -85,7 +87,7 @@ class MaterializerValidationTest(unittest.TestCase):
         worker = DatasetMaterializer(
             SimpleNamespace(
                 partitions=[requested],
-                validations=MaterializerValidations(allow_empty_partitions=True),
+                validations=[],
             )
         )
         source = self.spark.createDataFrame(
@@ -109,6 +111,11 @@ class MaterializerValidationTest(unittest.TestCase):
             "warehouse_dir": "temporary-warehouse", "dtype": "double", "frequency": "daily",
             "datasets": [{"name": "sp500", "version": 3, "argument_name": "market_data", "num_lookback_partitions": 1}],
             "transform": "ml_platform.data_sdk.LogReturnTransform",
+            "validations": [
+                {"type": "minimum_rows", "minimum_rows": 1},
+                {"type": "finite_feature_value"},
+                {"type": "feature_keys_from_input"},
+            ],
             "partitions": [{
                 "partition_id": "output", "timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc), "callback_token": "token",
                 "partition_dependencies": [{

@@ -3,6 +3,7 @@
 import unittest
 
 from ml_platform.data_sdk.configs import DataConfig, FeatureKey, PartitionType, RunFrequency
+from ml_platform.data_sdk.materializers import MinimumRowsValidationConfig
 
 
 class DataConfigTest(unittest.TestCase):
@@ -31,14 +32,14 @@ class DataConfigTest(unittest.TestCase):
 
         self.assertIs(config.partition_type, PartitionType.DAILY)
 
-    def test_empty_partitions_are_an_explicit_validation_choice(self) -> None:
-        """Resource definitions can opt into empty partition receipts."""
+    def test_partition_validations_default_to_all_requested_partitions(self) -> None:
+        """Partition-level validations default to every requested partition."""
         config = DataConfig(
             name="market_data",
             version=1,
             run_frequency=RunFrequency.DAILY,
             keys=[FeatureKey.SYMBOL],
-            validations={"allow_empty_partitions": True},
+            validations=[MinimumRowsValidationConfig(minimum_rows=1)],
         )
 
-        self.assertTrue(config.validations.allow_empty_partitions)
+        self.assertEqual(config.validations[0].temporal_filter.type, "all_partitions")

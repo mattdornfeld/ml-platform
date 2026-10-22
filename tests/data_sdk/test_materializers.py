@@ -7,10 +7,8 @@ from unittest.mock import patch
 
 from ml_platform.data_sdk.configs import (
     DataConfig,
-    DataValidations,
     DatasetConfig,
     FeatureConfig,
-    FeatureValidations,
     LabelConfig,
     MarketDataConfig,
     TimeRange,
@@ -28,7 +26,7 @@ from ml_platform.data_sdk.materializers import (
     MaterializerConfig,
     PartionDependency,
     MaterializerPartition,
-    MaterializerValidations,
+    MinimumRowsValidationConfig,
     WriteMode,
 )
 from ml_platform.data_sdk.transforms._base import DataTransform
@@ -56,7 +54,7 @@ class MaterializerContractTest(unittest.TestCase):
         """Dataset worker JSON contains the API-supplied identity and type."""
         config = DatasetMaterializer._config_from_json(json.dumps({
             "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily",
-            "description": "Hourly prices.", "validations": {}, "symbols": ["aapl"],
+            "description": "Hourly prices.", "validations": [], "symbols": ["aapl"],
             "warehouse_dir": "s3a://warehouse",
             "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
         }))
@@ -65,7 +63,7 @@ class MaterializerContractTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             DatasetMaterializer._config_from_json(json.dumps({
                 "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily", "description": "Hourly prices.",
-                "validations": {}, "symbols": ["AAPL"], "warehouse_dir": "s3a://warehouse",
+                "validations": [], "symbols": ["AAPL"], "warehouse_dir": "s3a://warehouse",
                 "time_range": {"start_date": "2026-01-01", "end_date": "2026-01-02"},
                 "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
             }))
@@ -79,16 +77,20 @@ class MaterializerContractTest(unittest.TestCase):
             "datasets": [{"name": "sp500", "version": 3, "argument_name": "market_data", "num_lookback_partitions": 1}],
             "transform": "ml_platform.data_sdk.feature_transforms._log_return.LogReturnTransform",
             "parameters": {"lookback_bars": 1},
-            "validations": {"min_rows_per_partition": 2, "require_finite_feature_value": True, "require_feature_keys_from_input": True},
+            "validations": [
+                {"type": "minimum_rows", "minimum_rows": 2},
+                {"type": "finite_feature_value"},
+                {"type": "feature_keys_from_input"},
+            ],
         }))
         self.assertEqual(config.datasets[0].id, "sp500_v3")
-        self.assertEqual(config.validations.min_rows_per_partition, 2)
+        self.assertEqual(config.validations[0].minimum_rows, 2)
 
     def test_label_materializer_deserializes_transform_contract(self) -> None:
         """Label worker JSON describes its transform, inputs, and parameters."""
         config = LabelMaterializer._config_from_json(json.dumps({
             "name": "hourly_triple_barrier", "version": 1, "description": "Labels.", "warehouse_dir": "s3a://warehouse",
-            "validations": {}, "partitions": [{"partition_id": "label-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "partition_dependencies": [{"partition_id": "parent-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}], "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 2}],
+            "validations": [], "partitions": [{"partition_id": "label-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "partition_dependencies": [{"partition_id": "parent-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}], "datasets": [{"name": "sp500", "version": 3, "num_lookback_partitions": 2}],
             "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
             "parameters": {"horizon_bars": 24, "volatility_lookback_bars": 24, "profit_taking_multiplier": 1.0, "stop_loss_multiplier": 1.0},
         }))
@@ -140,7 +142,7 @@ class MaterializerContractTest(unittest.TestCase):
                 DatasetMaterializer,
                 {
                     "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily",
-                    "description": "Hourly prices.", "validations": {}, "symbols": ["AAPL"],
+                    "description": "Hourly prices.", "validations": [], "symbols": ["AAPL"],
                     "warehouse_dir": "s3a://warehouse",
                     "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
                 },
@@ -153,7 +155,7 @@ class MaterializerContractTest(unittest.TestCase):
                     "partitions": [{"partition_id": "feature-partition", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token", "partition_dependencies": [{"partition_id": "dataset-partition", "dataset_name": "sp500", "dataset_version": 3, "timestamp": "2026-01-01T00:00:00Z", "snapshot_id": 1}]}],
                     "datasets": [{"name": "sp500", "version": 3, "argument_name": "market_data", "num_lookback_partitions": 1}],
                     "transform": "ml_platform.data_sdk.feature_transforms._log_return.LogReturnTransform",
-                    "parameters": {"lookback_bars": 1}, "validations": {},
+                    "parameters": {"lookback_bars": 1}, "validations": [],
                 },
             ),
         )
@@ -191,9 +193,7 @@ class MaterializerContractTest(unittest.TestCase):
     def test_data_sdk_model_fields_have_schema_descriptions(self) -> None:
         """Every Pydantic field exposed by the data SDK is self-documenting."""
         models = (
-            DataValidations,
-            FeatureValidations,
-            TimeRange,
+                            TimeRange,
             DataConfig,
             DatasetConfig,
             LabelConfig,
@@ -203,7 +203,7 @@ class MaterializerContractTest(unittest.TestCase):
             DatasetDependency,
             PartionDependency,
             MaterializerPartition,
-            MaterializerValidations,
+            MinimumRowsValidationConfig,
             MaterializerConfig,
             DatasetMaterializationConfig,
             FeatureMaterializationConfig,
@@ -220,7 +220,7 @@ class MaterializerContractTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             DatasetMaterializer._config_from_json(json.dumps({
                 "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily", "description": "Hourly prices.",
-                "validations": {}, "symbols": ["AAPL"], "warehouse_dir": "s3a://warehouse",
+                "validations": [], "symbols": ["AAPL"], "warehouse_dir": "s3a://warehouse",
                 "partitions": [{"partition_id": "partition-1", "timestamp": "2026-01-01T00:00:00Z", "callback_token": "token"}],
                 "unexpected": True,
             }))

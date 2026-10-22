@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import ConfigDict, Field, computed_field, field_validator, model_validator
 
 from ml_platform.common.types import BaseConfig
+from ml_platform.data_sdk.materializers._materialization_validator import Validation
 
 
 class _ApiModel(BaseConfig):
@@ -48,23 +49,6 @@ class FeatureKey(StrEnum):
     SYMBOL = "symbol"
 
 
-class DataValidations(_ApiModel):
-    """Validation policy shared by every materialized resource."""
-
-    allow_empty_partitions: bool = Field(
-        default=False,
-        description="Whether requested partitions may complete without emitted rows.",
-    )
-
-
-class FeatureValidations(DataValidations):
-    """Configurable validation requirements for returned feature DataFrames."""
-
-    min_rows_per_partition: int = Field(default=1, ge=1)
-    require_finite_feature_value: bool = True
-    require_feature_keys_from_input: bool = True
-
-
 class DatasetType(StrEnum):
     """Dataset types accepted by the control plane."""
 
@@ -82,7 +66,7 @@ class MarketDataDatasetConfig(_ApiModel):
     """Definition fields for a market-data dataset, excluding its derived ID."""
 
     description: str = Field(default="Market data.", min_length=1)
-    validations: DataValidations = Field(default_factory=DataValidations)
+    validations: list[Validation] = Field(default_factory=list)
     keys: list[FeatureKey] = Field(min_length=1)
     partition_type: Literal["hourly", "daily"]
     symbols: list[str] = Field(min_length=1)
@@ -138,7 +122,7 @@ class FeatureCreateRequest(_ApiModel):
     transform: str = Field(min_length=1)
     description: str = Field(min_length=1)
     parameters: dict[str, Any] = Field(default_factory=dict)
-    validations: FeatureValidations = Field(default_factory=FeatureValidations)
+    validations: list[Validation] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_dataset_arguments(self) -> "FeatureCreateRequest":

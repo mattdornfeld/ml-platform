@@ -7,7 +7,16 @@ from ml_platform.data_sdk.materializers._base import (
     MaterializerPartition,
     WriteMode,
 )
-from ml_platform.data_sdk.materializers._materialization_validator import MaterializationValidator, MaterializerValidations
+from ml_platform.data_sdk.materializers._materialization_validator import (
+    AllPartitionsTemporalFilterConfig,
+    FeatureKeysFromInputValidationConfig,
+    FiniteFeatureValueValidationConfig,
+    MaterializationValidator,
+    MinimumRowsValidationConfig,
+    TemporalFilterConfig,
+    Validation,
+    ValidationConfig,
+)
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializationConfig, DatasetMaterializer
 from ml_platform.data_sdk.materializers._feature import (
     FeatureMaterializationConfig,
@@ -20,6 +29,9 @@ __all__ = [
     "DatasetMaterializationConfig", "DatasetMaterializer", "DatasetDependency",
     "FeatureDatasetDependency", "FeatureMaterializationConfig", "FeatureMaterializer",
     "LabelMaterializationConfig", "LabelMaterializer", "Materializer",
-    "MaterializationValidator", "MaterializerConfig", "MaterializerPartition", "MaterializerValidations",
+    "AllPartitionsTemporalFilterConfig", "FeatureKeysFromInputValidationConfig",
+    "FiniteFeatureValueValidationConfig", "MaterializationValidator", "MaterializerConfig",
+    "MaterializerPartition", "MinimumRowsValidationConfig", "TemporalFilterConfig", "Validation",
+    "ValidationConfig",
     "PartionDependency", "WriteMode",
 ]

@@ -222,19 +222,21 @@ The harness always enforces the following invariants before any Iceberg write:
 - the returned column set is exactly `timestamp`, the configured feature keys, and `feature_value`;
 - `timestamp`, every feature key, and `feature_value` are non-null, and `feature_value` is castable to the registered `dtype`;
 - each `(timestamp, feature_keys)` tuple is unique; and
-- the emitted output-partition set contains no partition outside the requested output-partition set. Missing requested partitions fail unless the resource validation policy explicitly permits empty partitions.
+- the emitted output-partition set contains no partition outside the requested output-partition set.
 
-The feature YAML or API `validations` object configures the remaining checks:
+The feature YAML or API `validations` field is a list of tagged `ValidationConfig` objects:
 
 ```yaml
 validations:
-  min_rows_per_partition: 1
-  allow_empty_partitions: false
-  require_finite_feature_value: true
-  require_feature_keys_from_input: true
+  - type: minimum_rows
+    minimum_rows: 1
+    temporal_filter:
+      type: all_partitions
+  - type: finite_feature_value
+  - type: feature_keys_from_input
 ```
 
-`MaterializationValidator` is the shared pre-write contract for every materializer. It validates required or exact columns, non-null persisted values, unique logical keys, requested partition coverage, minimum row counts, and static transform layout declarations. `min_rows_per_partition` defaults to `1` and applies to each non-empty requested partition. `allow_empty_partitions` defaults to `false`; when `true`, a requested partition may have no rows and receives an empty receipt with row count zero and the empty content hash. Output from an unrequested partition always fails. Feature materializers additionally apply finite-value and input-key-membership policies. When enabled (the default), `require_finite_feature_value` rejects `NaN`, positive infinity, and negative infinity after the dtype cast. When enabled (the default), `require_feature_keys_from_input` rejects feature-key values that do not occur in the injected input datasets.
+`MaterializationValidator` is the shared pre-write contract for every materializer. It always validates required or exact columns, non-null persisted values, unique logical keys, unexpected output partitions, and static transform layout declarations. Each declared validation independently contributes its check. `minimum_rows` applies to each requested partition selected by its `temporal_filter`, which defaults to `all_partitions`; partitions outside that filter may complete empty. `finite_feature_value` rejects `NaN`, positive infinity, and negative infinity after the dtype cast. `feature_keys_from_input` rejects feature-key values that do not occur in the injected input datasets.
 
 ### Commit and completion
 
