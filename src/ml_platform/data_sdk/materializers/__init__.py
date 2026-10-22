@@ -9,6 +9,12 @@ from ml_platform.data_sdk.materializers._base import (
 )
 from ml_platform.data_sdk.materializers._materialization_validator import (
     AllPartitionsTemporalFilterConfig,
+    CompletionValidationInput,
+    DatasetValidationInput,
+    FeatureValidationInput,
+    LabelValidationInput,
+    PartitionValidationInput,
+    ValidationInput,
     FeatureKeysFromInputValidationConfig,
     FiniteFeatureValueValidationConfig,
     MaterializationValidator,
@@ -30,7 +36,9 @@ __all__ = [
     "DatasetMaterializationConfig", "DatasetMaterializer", "DatasetDependency",
     "FeatureDatasetDependency", "FeatureMaterializationConfig", "FeatureMaterializer",
     "LabelMaterializationConfig", "LabelMaterializer", "Materializer",
-    "AllPartitionsTemporalFilterConfig", "FeatureKeysFromInputValidationConfig",
+    "AllPartitionsTemporalFilterConfig", "CompletionValidationInput", "DatasetValidationInput",
+    "FeatureKeysFromInputValidationConfig", "FeatureValidationInput", "LabelValidationInput",
+    "PartitionValidationInput", "ValidationInput",
     "FiniteFeatureValueValidationConfig", "MaterializationValidator", "MaterializerConfig",
     "MaterializerPartition", "MinimumRowsValidationConfig", "TemporalFilterConfig", "Validation",
     "ValidationConfig", "XnysRegularSessionTemporalFilterConfig",

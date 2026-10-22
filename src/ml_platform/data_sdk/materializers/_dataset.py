@@ -6,7 +6,7 @@ from simple_classproperty import classproperty
 from pyspark.sql import DataFrame, SparkSession, functions as F
 
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, WriteMode
-from ml_platform.data_sdk.materializers._materialization_validator import _DatasetValidationInput, MaterializationValidator
+from ml_platform.data_sdk.materializers._materialization_validator import DatasetValidationInput, MaterializationValidator
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
 
@@ -150,7 +150,7 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
             "output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp"))
         )
         self._validator.validate(
-            _DatasetValidationInput(
+            DatasetValidationInput(
                 frame=frame,
                 partitioned_frame=partitioned,
                 requested_partitions=requested_partitions,

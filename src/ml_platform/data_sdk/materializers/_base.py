@@ -16,7 +16,7 @@ from simple_classproperty import ClasspropertyMeta, classproperty
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import materialization_api_url, spark_master
-from ml_platform.data_sdk.materializers._materialization_validator import _CompletionValidationInput, MaterializationValidator, Validation
+from ml_platform.data_sdk.materializers._materialization_validator import CompletionValidationInput, MaterializationValidator, Validation
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._types import DatasetDependency
 from pyspark.sql import DataFrame, SparkSession
@@ -386,7 +386,7 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         target_partition_keys = self._target_partition_keys(partition_spec)
         content_hashes = self._partition_content_hashes(spark, partition_spec)
         self._validator.validate(
-            _CompletionValidationInput(
+            CompletionValidationInput(
                 target_partition_keys=target_partition_keys,
                 content_hashes=content_hashes,
             )

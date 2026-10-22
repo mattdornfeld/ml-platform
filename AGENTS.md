@@ -11,3 +11,5 @@
 - Prefer frozen dataclasses for materializer instance properties. Avoid mutable materializer instance state; pass or recompute transient workflow data instead of assigning mutable caches to `self`.
 - Do not infer or derive runtime behavior, schemas, partitioning, or other implementation details from metadata without explicit user approval. Prefer static declarations and strong types.
 - Do not introduce optional properties, arguments, or return types without explicit user approval. Prefer required, statically typed interfaces.
+- For exhaustive structural pattern matching, use `case _ as unsupported_value:` followed by `assert_never(unsupported_value)` rather than a bare capture pattern or `case _:`. This preserves a clear wildcard branch and enables static exhaustiveness checking.
+- Keep classes public unless they are intentionally module-internal implementation details. Minimize each class's public method surface by making implementation methods private; retain public methods only for explicit contracts and entry points.

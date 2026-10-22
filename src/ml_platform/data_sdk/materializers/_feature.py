@@ -14,7 +14,7 @@ from pyspark.sql import functions as F
 
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition, WriteMode
-from ml_platform.data_sdk.materializers._materialization_validator import _FeatureValidationInput, MaterializationValidator
+from ml_platform.data_sdk.materializers._materialization_validator import FeatureValidationInput, MaterializationValidator
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._types import (
     DataType,
@@ -482,7 +482,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         partitioned = frame.withColumn("output_partition", FeatureMaterializer._partition_key(config))
         partition_interval = FeatureMaterializer(config)._partition_interval(expected_partition_spec)
         MaterializationValidator(config.validations).validate(
-            _FeatureValidationInput(
+            FeatureValidationInput(
                 frame=frame,
                 partitioned_frame=partitioned,
                 requested_partitions=requested_partitions,
@@ -595,7 +595,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[self.config.frequency]
         partitioned = frame.withColumn("output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp")))
         self._validator.validate(
-            _FeatureValidationInput(
+            FeatureValidationInput(
                 frame=frame,
                 partitioned_frame=partitioned,
                 requested_partitions=requested_partitions,

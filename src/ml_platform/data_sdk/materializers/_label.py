@@ -13,7 +13,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition, WriteMode
-from ml_platform.data_sdk.materializers._materialization_validator import _LabelValidationInput, MaterializationValidator
+from ml_platform.data_sdk.materializers._materialization_validator import LabelValidationInput, MaterializationValidator
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.transforms._types import DataType, Dataset, DatasetDependency, FeatureKey, PartitionType
 
@@ -228,7 +228,7 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
             "output_partition timestamp",
         ).distinct()
         self._validator.validate(
-            _LabelValidationInput(
+            LabelValidationInput(
                 frame=frame,
                 partitioned_frame=partitioned,
                 requested_partitions=requested_partitions,

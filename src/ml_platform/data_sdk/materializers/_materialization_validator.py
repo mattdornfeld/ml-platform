@@ -94,7 +94,7 @@ Validation = Annotated[
 
 
 @dataclass(frozen=True)
-class _PartitionValidationInput(ABC):
+class PartitionValidationInput(ABC):
     """Static structural requirements common to one partitioned output frame."""
 
     frame: DataFrame
@@ -108,12 +108,12 @@ class _PartitionValidationInput(ABC):
 
 
 @dataclass(frozen=True)
-class _DatasetValidationInput(_PartitionValidationInput):
+class DatasetValidationInput(PartitionValidationInput):
     """Validation contract for a dataset output frame."""
 
 
 @dataclass(frozen=True)
-class _FeatureValidationInput(_PartitionValidationInput):
+class FeatureValidationInput(PartitionValidationInput):
     """Validation contract for a feature output frame and its input datasets."""
 
     feature_value_column: str
@@ -130,7 +130,7 @@ class _FeatureValidationInput(_PartitionValidationInput):
 
 
 @dataclass(frozen=True)
-class _CompletionValidationInput:
+class CompletionValidationInput:
     """Committed output-partition receipts awaiting control-plane acknowledgement."""
 
     target_partition_keys: tuple[str, ...]
@@ -142,7 +142,7 @@ class _CompletionValidationInput:
 
 
 @dataclass(frozen=True)
-class _LabelValidationInput(_PartitionValidationInput):
+class LabelValidationInput(PartitionValidationInput):
     """Validation contract for a label output frame."""
 
     actual_schema: str
@@ -151,7 +151,7 @@ class _LabelValidationInput(_PartitionValidationInput):
     expected_partition_spec: str
 
 
-_ValidationInput = _CompletionValidationInput | _DatasetValidationInput | _FeatureValidationInput | _LabelValidationInput
+ValidationInput = CompletionValidationInput | DatasetValidationInput | FeatureValidationInput | LabelValidationInput
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,7 @@ class MaterializationValidator:
         """Freeze the validation policy supplied by the materializer configuration."""
         object.__setattr__(self, "_validations", tuple(validations))
 
-    def _validate_completion(self, validation_input: _CompletionValidationInput) -> None:
+    def _validate_completion(self, validation_input: CompletionValidationInput) -> None:
         """Require committed rows for every partition selected by an all-partitions row rule."""
         requires_rows = any(
             isinstance(validation, MinimumRowsValidationConfig)
@@ -181,14 +181,14 @@ class MaterializationValidator:
         """Return every declared validation with the requested concrete type."""
         return [validation for validation in self._validations if isinstance(validation, validation_type)]
 
-    def _validate_partitioned_output(self, validation_input: _PartitionValidationInput) -> None:
+    def _validate_partitioned_output(self, validation_input: PartitionValidationInput) -> None:
         """Apply structural and partition-level checks common to all resource outputs."""
         self._exact_columns(validation_input.frame, validation_input.exact_columns)
         self._non_null_columns(validation_input.frame, validation_input.non_null_columns)
         self._unique_key(validation_input.frame, validation_input.unique_key_columns)
         self._partition_coverage(validation_input)
 
-    def _partition_coverage(self, validation_input: _PartitionValidationInput) -> None:
+    def _partition_coverage(self, validation_input: PartitionValidationInput) -> None:
         """Reject unexpected output and apply selected partition-level checks."""
         requested_keys = validation_input.requested_partitions.select(validation_input.partition_column).distinct()
         emitted_keys = validation_input.partitioned_frame.select(validation_input.partition_column).distinct()
@@ -211,7 +211,7 @@ class MaterializationValidator:
                     f"Output emitted fewer than {validation.minimum_rows} rows for a selected partition."
                 )
 
-    def _validate_finite_feature_value(self, validation_input: _FeatureValidationInput) -> None:
+    def _validate_finite_feature_value(self, validation_input: FeatureValidationInput) -> None:
         """Reject non-finite feature values when the corresponding rule is declared."""
         if not self._configured(FiniteFeatureValueValidationConfig):
             return
@@ -220,7 +220,7 @@ class MaterializationValidator:
         if invalid.limit(1).count():
             raise ValueError(f"Output emitted a non-finite {validation_input.feature_value_column}.")
 
-    def _validate_feature_keys_from_inputs(self, validation_input: _FeatureValidationInput) -> None:
+    def _validate_feature_keys_from_inputs(self, validation_input: FeatureValidationInput) -> None:
         """Require feature keys to occur in a declared input dataset when configured."""
         if not self._configured(FeatureKeysFromInputValidationConfig):
             return
@@ -279,7 +279,7 @@ class MaterializationValidator:
             raise ValueError(f"Output emitted duplicate ({', '.join(columns)}) rows.")
 
     @staticmethod
-    def _validate_layout(validation_input: _FeatureValidationInput | _LabelValidationInput) -> None:
+    def _validate_layout(validation_input: FeatureValidationInput | LabelValidationInput) -> None:
         """Require a transform's static Iceberg declaration to match its job definition."""
         if validation_input.actual_schema != validation_input.expected_schema:
             raise ValueError("Transform iceberg_schema does not match its configured output definition.")
@@ -331,20 +331,20 @@ class MaterializationValidator:
         partition_end = partition_start + partition_interval
         return partition_start < session_close and partition_end > session_open
 
-    def validate(self, validation_input: _ValidationInput) -> None:
+    def validate(self, validation_input: ValidationInput) -> None:
         """Apply mandatory and declared invariants for one resource output frame."""
         match validation_input:
-            case _CompletionValidationInput():
+            case CompletionValidationInput():
                 self._validate_completion(validation_input)
-            case _DatasetValidationInput():
+            case DatasetValidationInput():
                 self._validate_partitioned_output(validation_input)
-            case _FeatureValidationInput():
+            case FeatureValidationInput():
                 self._validate_partitioned_output(validation_input)
                 self._validate_layout(validation_input)
                 self._validate_finite_feature_value(validation_input)
                 self._validate_feature_keys_from_inputs(validation_input)
-            case _LabelValidationInput():
+            case LabelValidationInput():
                 self._validate_partitioned_output(validation_input)
                 self._validate_layout(validation_input)
-            case unsupported_input:
+            case _ as unsupported_input:
                 assert_never(unsupported_input)
