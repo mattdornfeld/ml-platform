@@ -93,7 +93,7 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
 
         self.assertEqual(self.spark.table(worker._table_identifier).count(), 1)
         self._assert_resource_properties(worker, "dataset", "daily")
-        worker._ensure_table(
+        worker._create_table(
             self.spark,
             schema=transform.iceberg_schema,
             partition_spec=transform.iceberg_partition_spec,
@@ -177,7 +177,7 @@ class MaterializerLifecycleIntegrationTest(unittest.TestCase):
             [("2026-01-01 10:30:00", "AAA", 1)],
             "timestamp string, symbol string, label_value int",
         ).selectExpr("cast(timestamp as timestamp) as timestamp", "symbol", "label_value")
-        worker = LabelMaterializer(config, datasets={})
+        worker = LabelMaterializer(config, datasets=())
         transform = MagicMock()
         transform.return_value = source
         with (

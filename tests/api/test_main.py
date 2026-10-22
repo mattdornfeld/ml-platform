@@ -62,14 +62,23 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                 "partition_type": "daily",
                 "symbols": ["AAPL"],
                 "time_range": {"start_date": "2026-01-01", "end_date": "2026-01-02"},
-                "validations": [{"type": "minimum_rows", "minimum_rows": 1}],
+                "validations": [{
+                    "type": "minimum_rows",
+                    "minimum_rows": 1,
+                    "reason": "Every selected market-data partition requires a row.",
+                }],
             },
         })
 
         self.assertEqual(request.config.validations[0].minimum_rows, 1)
         self.assertEqual(
             request.config.model_dump(mode="json")["validations"],
-            [{"type": "minimum_rows", "temporal_filter": {"type": "all_partitions"}, "minimum_rows": 1}],
+            [{
+                "type": "minimum_rows",
+                "reason": "Every selected market-data partition requires a row.",
+                "temporal_filter": {"type": "all_partitions"},
+                "minimum_rows": 1,
+            }],
         )
 
     def test_dataset_partition_request_rejects_non_hour_timestamp(self) -> None:

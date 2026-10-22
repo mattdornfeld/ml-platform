@@ -1,12 +1,20 @@
 """API-dispatched Spark materializer for market-data datasets."""
 from dataclasses import dataclass
+from datetime import datetime
+from functools import cached_property
 
 from pydantic import Field, field_validator
-from simple_classproperty import classproperty
 from pyspark.sql import DataFrame, SparkSession, functions as F
 
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, WriteMode
-from ml_platform.data_sdk.materializers._materialization_validator import DatasetValidationInput, MaterializationValidator
+from ml_platform.data_sdk.materializers._materialization_validator import (
+    ExactColumnsValidationConfig,
+    FiniteNumericValuesValidationConfig,
+    NonNullValuesValidationConfig,
+    UniqueKeyValidationConfig,
+    ValidationConfig,
+    XnysRegularSessionTemporalFilterConfig,
+)
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
 
@@ -36,46 +44,51 @@ class DatasetMaterializationConfig(MaterializerConfig):
             raise ValueError("Provide at least one non-empty market symbol.")
         return normalized
 
+    @cached_property
+    def partition_timestamps(self) -> tuple[datetime, ...]:
+        """Return requested timestamps normalized to this dataset's cadence."""
+        return self._partition_timestamps_for(self.partition_type)
+
 
 @dataclass(frozen=True)
 class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
     """Construct, validate, persist, and report one market-data materialization job."""
 
-    @classproperty
+    @classmethod
     def config_model(cls) -> type[DatasetMaterializationConfig]:
         """Return the strict runtime contract for market-data jobs."""
         return DatasetMaterializationConfig
 
-    @classproperty
+    @classmethod
     def spark_application_name(cls) -> str:
         """Return the stable Spark application name for market-data jobs."""
         return "ml-platform-dataset-materializer"
 
-    @classproperty
+    @classmethod
     def iceberg_namespace(cls) -> str:
         """Store market-data resources in their dedicated Iceberg namespace."""
         return "market_data"
 
-    @classproperty
+    @classmethod
     def callback_resource(cls) -> str:
         """Report market-data partition receipts as dataset resources."""
         return "dataset"
 
-    @classproperty
+    @classmethod
     def write_mode(cls) -> WriteMode:
         """Merge market rows by their stable timestamp and symbol identity."""
         return WriteMode.MERGE
 
     @classmethod
     def _materialize_frame(
-        cls, frame: DataFrame, *, spark: SparkSession, config: DatasetMaterializationConfig
+        cls, data_frame: DataFrame, *, spark: SparkSession, config: DatasetMaterializationConfig
     ) -> int:
-        """Validate and merge one transform's OHLCV frame into its versioned table."""
+        """Validate and merge one transform's OHLCV data_frame into its versioned table."""
         materializer = cls(config)
-        incoming = materializer._prepare_frame(frame)
+        incoming = materializer._prepare_frame(data_frame)
         transform = materializer._create_transform(spark)
-        materializer.validate(incoming, spark, transform)
-        materializer._ensure_table(
+        materializer.validate(incoming)
+        materializer._create_table(
             spark,
             schema=transform.iceberg_schema,
             partition_spec=transform.iceberg_partition_spec,
@@ -92,14 +105,14 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
 
     @classmethod
     def _materialize_test_frame(
-        cls, frame: DataFrame, *, config: DatasetMaterializationConfig, spark: SparkSession | None = None
+        cls, data_frame: DataFrame, *, config: DatasetMaterializationConfig, spark: SparkSession | None = None
     ) -> int:
-        """Persist a prepared OHLCV frame for local integration callers."""
-        return cls._materialize_frame(frame, spark=spark or frame.sparkSession, config=config)
+        """Persist a prepared OHLCV data_frame for local integration callers."""
+        return cls._materialize_frame(data_frame, spark=spark or data_frame.sparkSession, config=config)
 
-    def _prepare_frame(self, frame: DataFrame) -> DataFrame:
+    def _prepare_frame(self, data_frame: DataFrame) -> DataFrame:
         """Cast OHLCV values to the dataset's persisted types."""
-        return frame.select(
+        return data_frame.select(
             F.col("timestamp").try_cast("timestamp").alias("timestamp"),
             F.col("symbol").cast("string").alias("symbol"),
             F.col("market_session").cast("string").alias("market_session"),
@@ -109,10 +122,10 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
             ],
         )
 
-    def _write_frame(self, frame: DataFrame) -> None:
+    def _write_to_table(self, data_frame: DataFrame) -> None:
         """Cluster source rows by day before the base class merges them."""
         source = (
-            frame.withColumn("_day", F.to_date("timestamp"))
+            data_frame.withColumn("_day", F.to_date("timestamp"))
             .repartition("_day")
             .sortWithinPartitions("_day", "timestamp", "symbol")
             .drop("_day")
@@ -122,6 +135,26 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
     def _row_digest(self) -> F.Column:
         """Hash every persisted market-data value for partition completion receipts."""
         return F.sha2(F.to_json(F.struct(*(F.col(column) for column in _CONTENT_HASH_COLUMNS))), 256)
+
+    @property
+    def _partition_timestamps(self) -> tuple[datetime, ...]:
+        """Return the dataset's normalized requested partition timestamps."""
+        return self.config.partition_timestamps
+
+    @property
+    def _partition_type(self) -> PartitionType:
+        """Return the declared dataset output partition cadence."""
+        return self.config.partition_type
+
+    @property
+    def _minimum_rows_temporal_filter(self) -> XnysRegularSessionTemporalFilterConfig:
+        """Require market-data rows only for partitions overlapping XNYS sessions."""
+        return XnysRegularSessionTemporalFilterConfig()
+
+    @property
+    def _minimum_rows_reason(self) -> str:
+        """Explain the market-data partition completeness requirement."""
+        return "Regular XNYS sessions must contain market data."
 
     def _create_transform(self, spark: SparkSession) -> DatasetTransform:
         """Build the user-facing transform selected by the dataset definition."""
@@ -139,28 +172,28 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
             case unsupported_type:
                 raise NotImplementedError(f"Unsupported dataset type: {unsupported_type}.")
 
-    def validate(self, frame: DataFrame, spark: SparkSession, transform: DatasetTransform) -> None:
-        """Require complete, unique market rows in only the requested partitions."""
-        partition_spec = transform.iceberg_partition_spec
-        requested_partitions = spark.createDataFrame(
-            [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
-            "output_partition timestamp",
-        ).distinct()
-        partitioned = frame.withColumn(
-            "output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp"))
+    @property
+    def validation_configs(self) -> tuple[ValidationConfig, ...]:
+        """Declare the complete dataset output validation policy."""
+        return (
+            ExactColumnsValidationConfig(
+                reason="Market data must use the canonical OHLCV schema.",
+                columns=_CONTENT_HASH_COLUMNS,
+            ),
+            NonNullValuesValidationConfig(
+                reason="Market-data fields must be present and castable.",
+                columns=_CONTENT_HASH_COLUMNS,
+            ),
+            FiniteNumericValuesValidationConfig(
+                reason="Market prices and volume must be finite.",
+                columns=_OHLCV_COLUMNS,
+            ),
+            UniqueKeyValidationConfig(
+                reason="A market-data row is uniquely identified by symbol and timestamp.",
+                columns=_MERGE_KEYS,
+            ),
         )
-        self._validator.validate(
-            DatasetValidationInput(
-                frame=frame,
-                partitioned_frame=partitioned,
-                requested_partitions=requested_partitions,
-                partition_column="output_partition",
-                partition_interval=self._partition_interval(partition_spec),
-                exact_columns=frozenset(_CONTENT_HASH_COLUMNS),
-                non_null_columns=_CONTENT_HASH_COLUMNS,
-                unique_key_columns=_MERGE_KEYS,
-            )
-        )
+
 
 
     def materialize(self, spark: SparkSession, transform: DatasetTransform) -> DataFrame:

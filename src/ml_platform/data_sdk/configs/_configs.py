@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from ml_platform.common.types import BaseConfig
-from ml_platform.data_sdk.materializers._materialization_validator import Validation
+from ml_platform.data_sdk.materializers._materialization_validator import DiscriminatedValidationConfig
 from ml_platform.data_sdk.transforms._types import DataType, FeatureKey, PartitionType
 
 
@@ -51,7 +51,7 @@ class DataConfig(BaseConfig):
         min_length=1,
         description="Ordered logical entity-key columns that identify each output row.",
     )
-    validations: list[Validation] = Field(
+    validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list,
         description="Data quality validations applied during materialization.",
     )

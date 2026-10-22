@@ -3,6 +3,7 @@
 from hashlib import sha256
 from dataclasses import FrozenInstanceError
 import json
+import sys
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -53,7 +54,11 @@ def feature_worker() -> FeatureMaterializer:
         }],
         "transform": "ml_platform.data_sdk.feature_transforms._relative_volume.RelativeVolumeTransform",
         "parameters": {"lookback_bars": 2},
-        "validations": [{"type": "minimum_rows", "minimum_rows": 1}],
+        "validations": [{
+            "type": "minimum_rows",
+            "minimum_rows": 1,
+            "reason": "Each requested feature partition requires a row.",
+        }],
         "warehouse_dir": "temporary-warehouse",
         "partitions": [{
             "partition_id": "feature-partition",
@@ -89,7 +94,13 @@ def label_worker() -> LabelMaterializer:
             }],
         }],
     }))
-    return LabelMaterializer(config, datasets={})
+    return LabelMaterializer(config, datasets=())
+
+
+def run_materializer_main(worker: DatasetMaterializer) -> None:
+    """Run the standard worker CLI with this test worker's serialized config."""
+    with patch.object(sys, "argv", ["materializer", "--config-json", worker.config.model_dump_json()]):
+        type(worker).main()
 
 
 class MaterializerLifecycleTest(unittest.TestCase):
@@ -109,8 +120,8 @@ class MaterializerLifecycleTest(unittest.TestCase):
             patch.object(type(worker), "materialize", return_value=source) as materialize,
             patch.object(type(worker), "_prepare_frame", return_value=prepared) as prepare,
             patch.object(type(worker), "validate") as validate,
-            patch.object(type(worker), "_ensure_table") as ensure,
-            patch.object(type(worker), "_write_frame") as write,
+            patch.object(type(worker), "_create_table") as ensure,
+            patch.object(type(worker), "_write_to_table") as write,
             patch.object(type(worker), "_latest_snapshot_id", return_value=42) as latest_snapshot,
             patch.object(type(worker), "_complete_partitions") as complete,
         ):
@@ -120,12 +131,12 @@ class MaterializerLifecycleTest(unittest.TestCase):
                 ("complete", complete),
             ):
                 calls.attach_mock(method, name)
-            worker()
+            run_materializer_main(worker)
 
         self.assertEqual(calls.mock_calls, [
             call.materialize(spark, transform),
             call.prepare(source),
-            call.validate(prepared, spark, transform),
+            call.validate(prepared),
             call.ensure(spark, schema="timestamp TIMESTAMP", partition_spec="days(timestamp)"),
             call.write(prepared),
             call.snapshot(spark, "ml_platform.market_data.`sp500-v3`"),
@@ -142,31 +153,43 @@ class MaterializerLifecycleTest(unittest.TestCase):
             patch.object(type(worker), "materialize", return_value=MagicMock()),
             patch.object(type(worker), "_prepare_frame", return_value=MagicMock()),
             patch.object(type(worker), "validate", side_effect=ValueError("invalid")),
-            patch.object(type(worker), "_write_frame") as write,
+            patch.object(type(worker), "_write_to_table") as write,
             patch.object(type(worker), "_complete_partitions") as complete,
         ):
             with self.assertRaisesRegex(ValueError, "invalid"):
-                worker()
+                run_materializer_main(worker)
 
         write.assert_not_called()
         complete.assert_not_called()
         spark.stop.assert_called_once_with()
 
     def test_feature_table_uses_definition_metadata(self) -> None:
-        """The base table creator receives feature-specific schema and properties."""
+        """The table creator persists feature-specific schema and properties."""
         worker = feature_worker()
-        with patch.object(type(worker), "_ensure_iceberg_table") as ensure:
-            worker._ensure_table(
-                MagicMock(),
+        spark = MagicMock()
+        spark.catalog.tableExists.return_value = False
+        table_writer = MagicMock()
+        table_writer.tableProperty.side_effect = lambda *_: table_writer
+        table_writer.partitionedBy.return_value = table_writer
+        spark.createDataFrame.return_value.writeTo.return_value.using.return_value = table_writer
+
+        with patch.object(type(worker), "_partition_transform", return_value=MagicMock()):
+            worker._create_table(
+                spark,
                 schema="timestamp TIMESTAMP, symbol STRING, feature_value DOUBLE",
                 partition_spec="hours(timestamp)",
             )
 
-        arguments = ensure.call_args.kwargs
-        self.assertEqual(arguments["schema"], "timestamp TIMESTAMP, symbol STRING, feature_value DOUBLE")
-        self.assertEqual(arguments["partition_spec"], "hours(timestamp)")
-        self.assertEqual(arguments["properties"]["feature.transform"], worker.config.transform)
-        self.assertEqual(arguments["name"], "log_return")
+        spark.createDataFrame.assert_called_once_with(
+            [], "timestamp TIMESTAMP, symbol STRING, feature_value DOUBLE"
+        )
+        table_properties = {
+            call.args[0]: call.args[1]
+            for call in table_writer.tableProperty.call_args_list
+        }
+        self.assertEqual(table_properties["feature.transform"], worker.config.transform)
+        table_writer.partitionedBy.assert_called_once()
+        table_writer.create.assert_called_once_with()
 
     def test_every_resource_uses_shared_table_properties(self) -> None:
         """Resource identity, cadence, lineage and validations come from the base."""
@@ -201,7 +224,7 @@ class MaterializerLifecycleTest(unittest.TestCase):
             SimpleNamespace(key="resource.name", value="sp500"),
         ]
 
-        worker._ensure_table(spark, schema="timestamp TIMESTAMP", partition_spec="days(timestamp)")
+        worker._create_table(spark, schema="timestamp TIMESTAMP", partition_spec="days(timestamp)")
 
         commands = [call.args[0] for call in spark.sql.call_args_list]
         self.assertIn("SHOW TBLPROPERTIES", commands[0])
@@ -220,7 +243,7 @@ class MaterializerLifecycleTest(unittest.TestCase):
             SimpleNamespace(key="resource.frequency", value="*********(redacted)"),
         ]
 
-        worker._ensure_table(spark, schema="timestamp TIMESTAMP", partition_spec="hours(timestamp)")
+        worker._create_table(spark, schema="timestamp TIMESTAMP", partition_spec="hours(timestamp)")
 
         spark.sql.assert_called_once_with(f"SHOW TBLPROPERTIES {worker._table_identifier}")
 
@@ -234,7 +257,7 @@ class MaterializerLifecycleTest(unittest.TestCase):
         with (
             patch.object(type(worker), "_requested_partitions", return_value=requested),
             patch.object(type(worker), "_filter_partitions", return_value=filtered_feature) as filter_partitions,
-            patch.object(type(worker), "_write_frame") as write,
+            patch.object(type(worker), "_write_to_table") as write,
         ):
             transform = MagicMock(iceberg_partition_spec="hours(timestamp)")
             transform.return_value = feature
@@ -255,7 +278,7 @@ class MaterializerLifecycleTest(unittest.TestCase):
         """The shared write strategy uses Iceberg dynamic partition replacement."""
         worker = feature_worker()
         frame = MagicMock()
-        worker._write_frame(frame)
+        worker._write_to_table(frame)
         frame.writeTo.assert_called_once_with("ml_platform.features.`log_return-v1`")
         frame.writeTo.return_value.overwritePartitions.assert_called_once_with()
 
@@ -321,15 +344,6 @@ class MaterializerLifecycleTest(unittest.TestCase):
             "snapshot_id": 92,
             "callback_token": "dataset-token",
         }])
-
-    @patch("ml_platform.data_sdk.materializers._base.urlopen")
-    def test_missing_feature_partition_stops_before_callback(self, open_url: MagicMock) -> None:
-        """A missing feature partition cannot be reported as successfully created."""
-        worker = feature_worker()
-        with patch.object(type(worker), "_partition_content_hashes", return_value={}):
-            with self.assertRaisesRegex(ValueError, "produced no rows"):
-                worker._complete_partitions(MagicMock(), 93, "hours(timestamp)")
-        open_url.assert_not_called()
 
     @patch("ml_platform.data_sdk.materializers._base.urlopen")
     @patch("ml_platform.data_sdk.materializers._base.materialization_api_url", return_value="http://api")

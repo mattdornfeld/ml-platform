@@ -27,6 +27,7 @@ from ml_platform.data_sdk.materializers import (
     PartionDependency,
     MaterializerPartition,
     MinimumRowsValidationConfig,
+    ValidationConfigs,
     WriteMode,
 )
 from ml_platform.data_sdk.transforms._base import DataTransform
@@ -60,6 +61,14 @@ class MaterializerContractTest(unittest.TestCase):
         }))
         self.assertEqual(config.symbols, ["AAPL"])
         self.assertEqual(config.dataset_type, "market_data")
+        dataset_materializer = DatasetMaterializer(config)
+        dataset_validations = {
+            validation.type: validation
+            for validation in dataset_materializer._base_validation_configs
+        }
+        self.assertEqual(dataset_validations["requested_partitions"].partition_type.value, "daily")
+        self.assertEqual(dataset_validations["minimum_rows"].temporal_filter.type, "xnys_regular_session")
+        self.assertEqual(dataset_validations["minimum_rows"].reason, "Regular XNYS sessions must contain market data.")
         with self.assertRaises(ValueError):
             DatasetMaterializer._config_from_json(json.dumps({
                 "name": "sp500", "version": 3, "dataset_type": "market_data", "keys": ["symbol"], "partition_type": "daily", "description": "Hourly prices.",
@@ -78,13 +87,34 @@ class MaterializerContractTest(unittest.TestCase):
             "transform": "ml_platform.data_sdk.feature_transforms._log_return.LogReturnTransform",
             "parameters": {"lookback_bars": 1},
             "validations": [
-                {"type": "minimum_rows", "minimum_rows": 2},
-                {"type": "finite_feature_value"},
-                {"type": "feature_keys_from_input"},
+                {
+                    "type": "minimum_rows",
+                    "minimum_rows": 2,
+                    "reason": "Feature partitions require two rows.",
+                },
+                {
+                    "type": "feature_keys_from_input",
+                    "reason": "Feature keys must occur in source market data.",
+                },
             ],
         }))
         self.assertEqual(config.datasets[0].id, "sp500_v3")
         self.assertEqual(config.validations[0].minimum_rows, 2)
+        feature_materializer = FeatureMaterializer(config)
+        resolved_validations = {
+            validation.type: validation
+            for validation in ValidationConfigs(
+                default_validation_configs=(
+                    feature_materializer._base_validation_configs + feature_materializer.validation_configs
+                ),
+                override_validation_configs=tuple(config.validations),
+            ).resolved_validation_configs
+        }
+        self.assertEqual(resolved_validations["minimum_rows"].minimum_rows, 2)
+        self.assertEqual(resolved_validations["requested_partitions"].partition_type.value, "daily")
+        self.assertIn("non_null_values", resolved_validations)
+        self.assertIn("finite_numeric_values", resolved_validations)
+        self.assertIn("feature_keys_from_input", resolved_validations)
 
     def test_label_materializer_deserializes_transform_contract(self) -> None:
         """Label worker JSON describes its transform, inputs, and parameters."""
@@ -95,6 +125,14 @@ class MaterializerContractTest(unittest.TestCase):
             "parameters": {"horizon_bars": 24, "volatility_lookback_bars": 24, "profit_taking_multiplier": 1.0, "stop_loss_multiplier": 1.0},
         }))
         self.assertEqual(config.name, "hourly_triple_barrier")
+        label_materializer = LabelMaterializer(config, ())
+        label_validations = {
+            validation.type: validation
+            for validation in label_materializer._base_validation_configs
+        }
+        self.assertEqual(label_validations["requested_partitions"].partition_type.value, "daily")
+        self.assertEqual(label_validations["minimum_rows"].temporal_filter.type, "all_partitions")
+        self.assertEqual(label_validations["minimum_rows"].reason, "Label partitions must contain at least one row.")
 
     def test_label_materializer_requires_pinned_inputs(self) -> None:
         """A label worker cannot acknowledge output without exact upstream revisions."""
@@ -109,8 +147,8 @@ class MaterializerContractTest(unittest.TestCase):
                 "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
             }))
 
-    def test_materializer_requires_declared_class_properties(self) -> None:
-        """Every concrete worker declares the complete abstract class-property contract."""
+    def test_materializer_requires_declared_class_methods(self) -> None:
+        """Every concrete worker implements the standard abstract class-method contract."""
         required_properties = {
             "config_model",
             "spark_application_name",
@@ -121,7 +159,9 @@ class MaterializerContractTest(unittest.TestCase):
         self.assertTrue(required_properties.issubset(Materializer.__abstractmethods__))
 
         class MissingNamespaceMaterializer(Materializer[MaterializerConfig]):
-            config_model = MaterializerConfig
+            @classmethod
+            def config_model(cls) -> type[MaterializerConfig]:
+                return MaterializerConfig
 
             def _create_transform(self, spark: object) -> object:
                 raise NotImplementedError
@@ -129,7 +169,11 @@ class MaterializerContractTest(unittest.TestCase):
             def materialize(self, spark: object, transform: object) -> object:
                 raise NotImplementedError
 
-        self.assertTrue(required_properties.issubset(MissingNamespaceMaterializer.__abstractmethods__))
+        self.assertTrue(
+            required_properties.difference({"config_model"}).issubset(
+                MissingNamespaceMaterializer.__abstractmethods__
+            )
+        )
         with self.assertRaises(TypeError):
             MissingNamespaceMaterializer.__new__(MissingNamespaceMaterializer)
         for materializer in (DatasetMaterializer, FeatureMaterializer, LabelMaterializer):
@@ -160,14 +204,27 @@ class MaterializerContractTest(unittest.TestCase):
             ),
         )
         for materializer, document in configurations:
+            spark = object()
+            transform = object()
+            frame = object()
             with (
                 self.subTest(materializer=materializer.__name__),
-                patch.object(materializer, "_run_config") as _run_config,
+                patch.object(materializer, "_create_spark_session", return_value=spark) as create_spark_session,
+                patch.object(materializer, "_create_transform", return_value=transform),
+                patch.object(materializer, "_iceberg_layout", return_value=("schema", "days(timestamp)")),
+                patch.object(materializer, "materialize", return_value=frame),
+                patch.object(materializer, "_prepare_frame", return_value=frame),
+                patch.object(materializer, "validate"),
+                patch.object(materializer, "_create_table"),
+                patch.object(materializer, "_write_to_table"),
+                patch.object(materializer, "_latest_snapshot_id", return_value=1),
+                patch.object(materializer, "_complete_partitions"),
+                patch.object(materializer, "_stop_spark_session"),
                 patch("sys.argv", [materializer.__name__, "--config-json", json.dumps(document)]),
                 patch("builtins.print") as output,
             ):
                 materializer.main()
-                self.assertEqual(_run_config.call_args.args[0].name, document["name"])
+                create_spark_session.assert_called_once_with(document["warehouse_dir"])
                 output.assert_called_once_with("Materialization completed.")
 
     def test_materializers_use_versioned_tables_in_the_shared_catalog(self) -> None:
@@ -178,17 +235,17 @@ class MaterializerContractTest(unittest.TestCase):
 
     def test_materializers_declare_an_enum_write_mode(self) -> None:
         """Every worker selects a closed, typed Iceberg persistence strategy."""
-        self.assertIs(DatasetMaterializer.write_mode, WriteMode.MERGE)
-        self.assertIs(FeatureMaterializer.write_mode, WriteMode.OVERWRITE)
-        self.assertIs(LabelMaterializer.write_mode, WriteMode.MERGE)
+        self.assertIs(DatasetMaterializer.write_mode(), WriteMode.MERGE)
+        self.assertIs(FeatureMaterializer.write_mode(), WriteMode.OVERWRITE)
+        self.assertIs(LabelMaterializer.write_mode(), WriteMode.MERGE)
 
     def test_shared_fields_are_declared_by_materializer_config(self) -> None:
         """All materializer contracts inherit the common resource and partition fields."""
         for field in ("name", "version", "description", "validations", "partitions"):
             self.assertIn(field, MaterializerConfig.model_fields)
-            self.assertIn(field, DatasetMaterializer.config_model.model_fields)
-            self.assertIn(field, FeatureMaterializer.config_model.model_fields)
-            self.assertIn(field, LabelMaterializer.config_model.model_fields)
+            self.assertIn(field, DatasetMaterializer.config_model().model_fields)
+            self.assertIn(field, FeatureMaterializer.config_model().model_fields)
+            self.assertIn(field, LabelMaterializer.config_model().model_fields)
 
     def test_data_sdk_model_fields_have_schema_descriptions(self) -> None:
         """Every Pydantic field exposed by the data SDK is self-documenting."""

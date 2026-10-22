@@ -154,7 +154,7 @@ class LabelsIntegrationTest(unittest.TestCase):
                                         "dataset_version": 3, "timestamp": "2026-01-02T00:00:00Z", "snapshot_id": 1}],
             }],
         }))
-        return LabelMaterializer(config, datasets={})
+        return LabelMaterializer(config, datasets=())
 
     def test_writes_expected_outcomes_and_is_idempotent(self) -> None:
         """Materialize profit, stop, and timeout labels without future leakage."""

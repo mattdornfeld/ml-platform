@@ -15,8 +15,3 @@ transform: ml_platform.data_sdk.TrailingVolatilityTransform
 description: One-day trailing sample volatility of hourly log returns.
 parameters:
   lookback_bars: 24
-validations:
-  - type: minimum_rows
-    minimum_rows: 1
-  - type: finite_feature_value
-  - type: feature_keys_from_input

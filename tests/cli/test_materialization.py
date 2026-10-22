@@ -37,6 +37,7 @@ description: Returns
 validations:
   - type: minimum_rows
     minimum_rows: 1
+    reason: Each requested partition requires a row.
 """)
 
     @patch("ml_platform.cli.materialization._api_request")

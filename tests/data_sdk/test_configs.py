@@ -39,7 +39,10 @@ class DataConfigTest(unittest.TestCase):
             version=1,
             run_frequency=RunFrequency.DAILY,
             keys=[FeatureKey.SYMBOL],
-            validations=[MinimumRowsValidationConfig(minimum_rows=1)],
+            validations=[MinimumRowsValidationConfig(
+                minimum_rows=1,
+                reason="Each requested partition requires a row.",
+            )],
         )
 
         self.assertEqual(config.validations[0].temporal_filter.type, "all_partitions")

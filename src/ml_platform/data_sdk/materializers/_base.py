@@ -1,6 +1,6 @@
 """Private common contracts and Iceberg plumbing for API-dispatched materializers."""
 
-from abc import ABC, ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 import argparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -8,17 +8,25 @@ from enum import StrEnum
 from hashlib import sha256
 import json
 from pathlib import Path
-from typing import Generic, Mapping, TypeVar
+from typing import Mapping
 from urllib.request import Request, urlopen
 
-from pydantic import Field
-from simple_classproperty import ClasspropertyMeta, classproperty
+from pydantic import Field, field_validator
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import materialization_api_url, spark_master
-from ml_platform.data_sdk.materializers._materialization_validator import CompletionValidationInput, MaterializationValidator, Validation
+from ml_platform.data_sdk.materializers._materialization_validator import (
+    AllPartitionsTemporalFilterConfig,
+    DiscriminatedValidationConfig,
+    MaterializationValidator,
+    MinimumRowsValidationConfig,
+    RequestedPartitionsValidationConfig,
+    TemporalFilter,
+    ValidationConfig,
+    ValidationConfigs,
+)
 from ml_platform.data_sdk.transforms._base import DataTransform
-from ml_platform.data_sdk.transforms._types import DatasetDependency
+from ml_platform.data_sdk.transforms._types import DatasetDependency, PartitionType
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
@@ -27,7 +35,8 @@ class PartionDependency(BaseConfig):
     """One pinned parent dataset partition required by a derived output."""
 
     partition_id: str = Field(min_length=1, description="Control-plane identifier of the pinned parent partition.")
-    dataset_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", description="Name of the parent dataset owning this partition.")
+    dataset_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$",
+                              description="Name of the parent dataset owning this partition.")
     dataset_version: int = Field(ge=1, description="Version of the parent dataset owning this partition.")
     timestamp: datetime = Field(description="UTC timestamp that identifies the parent logical partition.")
     snapshot_id: int = Field(ge=0, description="Iceberg snapshot containing the pinned parent partition revision.")
@@ -38,7 +47,8 @@ class MaterializerPartition(BaseConfig):
 
     partition_id: str = Field(min_length=1, description="Control-plane identifier for the requested output partition.")
     timestamp: datetime = Field(description="UTC timestamp that identifies the requested logical output partition.")
-    callback_token: str = Field(min_length=1, description="Opaque token required to report successful partition completion.")
+    callback_token: str = Field(min_length=1,
+                                description="Opaque token required to report successful partition completion.")
     partition_dependencies: list[PartionDependency] = Field(
         default_factory=list,
         description="Pinned parent dataset partition revisions required to produce this output partition.",
@@ -48,7 +58,7 @@ class MaterializerPartition(BaseConfig):
 class MaterializerConfig(BaseConfig):
     """Strict immutable API runtime contract shared by all materializers."""
 
-    @classproperty
+    @classmethod
     def iceberg_catalog(cls) -> str:
         """Return the shared Iceberg catalog used by all materializer jobs."""
         return "ml_platform"
@@ -56,7 +66,7 @@ class MaterializerConfig(BaseConfig):
     name: str = Field(pattern=r"^[a-z][a-z0-9_]*$", description="Stable lowercase resource name.")
     version: int = Field(ge=1, description="Positive immutable version number for the resource definition.")
     description: str = Field(min_length=1, description="Human-readable description of the materialized resource.")
-    validations: list[Validation] = Field(
+    validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list,
         description="Declared runtime validation checks applied to materialized output.",
     )
@@ -68,6 +78,20 @@ class MaterializerConfig(BaseConfig):
     )
     warehouse_dir: str = Field(min_length=1, description="Iceberg warehouse URI or local directory for output tables.")
 
+    @field_validator("validations")
+    @classmethod
+    def _unique_validation_types(cls, validations: list[ValidationConfig]) -> list[ValidationConfig]:
+        """Reject ambiguous YAML overrides before a materializer consumes this config."""
+        validation_types = {validation.type for validation in validations}
+        if len(validation_types) != len(validations):
+            raise ValueError("Validation overrides must use unique types.")
+        return validations
+
+    @property
+    def validation_overrides_by_type(self) -> dict[str, ValidationConfig]:
+        """Return the already-validated YAML overrides by their discriminator."""
+        return {validation.type: validation for validation in self.validations}
+
     @classmethod
     def _iceberg_table_name_for(cls, name: str, version: int) -> str:
         """Return the physical table name for an immutable resource version."""
@@ -78,6 +102,13 @@ class MaterializerConfig(BaseConfig):
         """Return the physical table name for this immutable resource version."""
         return self._iceberg_table_name_for(self.name, self.version)
 
+    def _partition_timestamps_for(self, partition_type: PartitionType) -> tuple[datetime, ...]:
+        """Return requested timestamps normalized to an explicit partition cadence."""
+        return tuple(
+            partition_type.normalize_timestamp(partition.timestamp)
+            for partition in self.partitions
+        )
+
 
 class WriteMode(StrEnum):
     """Iceberg persistence strategies available to materializer implementations."""
@@ -86,65 +117,37 @@ class WriteMode(StrEnum):
     OVERWRITE = "overwrite"
 
 
-Config = TypeVar("Config", bound=MaterializerConfig)
-
-_REQUIRED_MATERIALIZER_CLASS_PROPERTIES = frozenset({
-    "config_model",
-    "spark_application_name",
-    "iceberg_namespace",
-    "callback_resource",
-    "write_mode",
-})
-
-
-class AbstractClasspropertyMeta(ClasspropertyMeta, ABCMeta):
-    """Retain inherited abstract class-property contracts for materializers."""
-
-    def __new__(mcls, name: str, bases: tuple[type, ...], namespace: dict[str, object], **kwargs: object) -> type:
-        """Keep a materializer abstract until every required class property is declared."""
-        materializer_base = next((base for base in bases if isinstance(base, AbstractClasspropertyMeta)), None)
-        cls = super().__new__(mcls, name, bases, namespace, **kwargs)
-        if materializer_base is None:
-            return cls
-        missing = {
-            property_name
-            for property_name in _REQUIRED_MATERIALIZER_CLASS_PROPERTIES
-            if not isinstance(namespace.get(property_name), classproperty)
-        }
-        if missing:
-            cls.__abstractmethods__ = frozenset((*cls.__abstractmethods__, *missing))
-        return cls
-
 @dataclass(frozen=True)
-class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
+class Materializer[Config: MaterializerConfig](ABC):
     """Shared Spark and Iceberg lifecycle for one API-delivered materialization."""
+    config: Config
 
-    @classproperty
+    @classmethod
     @abstractmethod
     def config_model(cls) -> type[Config]:
         """Return the strict runtime configuration model for this worker."""
 
-    @classproperty
+    @classmethod
     @abstractmethod
     def spark_application_name(cls) -> str:
         """Return the stable Spark application name for this worker type."""
 
-    @classproperty
+    @classmethod
     @abstractmethod
     def iceberg_namespace(cls) -> str:
         """Return the Iceberg namespace owned by this materializer type."""
 
-    @classproperty
+    @classmethod
     @abstractmethod
     def callback_resource(cls) -> str:
         """Return the control-plane resource type completed by this worker."""
 
-    @classproperty
+    @classmethod
     @abstractmethod
     def write_mode(cls) -> WriteMode:
         """Return the declared Iceberg persistence strategy for this resource."""
 
-    @classproperty
+    @classmethod
     def iceberg_table_properties(cls) -> Mapping[str, str]:
         """Return shared immutable Iceberg storage settings."""
         return {
@@ -155,28 +158,17 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
             "write.spark.fanout.enabled": "false",
         }
 
-    config: Config
-
     @classmethod
     def _config_from_json(cls, document: str) -> Config:
         """Deserialize and validate one materializer-specific job configuration."""
-        return cls.config_model.model_validate_json(document)
-
-    @classmethod
-    def _run_config(cls, config: Config) -> None:
-        """Materialize one validated API job configuration.
-
-        Subclasses with additional construction dependencies may override this hook
-        while preserving the shared command-line entry point.
-        """
-        cls(config)()
+        return cls.config_model().model_validate_json(document)
 
     @classmethod
     def _iceberg_table_identifier(cls, name: str, version: int) -> str:
         """Resolve an immutable resource version to its Iceberg identifier."""
-        namespace = cls.iceberg_namespace
-        table = cls.config_model._iceberg_table_name_for(name, version)
-        return f"{cls.config_model.iceberg_catalog}.{namespace}.`{table}`"
+        namespace = cls.iceberg_namespace()
+        table = cls.config_model()._iceberg_table_name_for(name, version)
+        return f"{cls.config_model().iceberg_catalog()}.{namespace}.`{table}`"
 
     @property
     def _table_identifier(self) -> str:
@@ -189,10 +181,10 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         warehouse = str(warehouse_dir)
         if "://" not in warehouse:
             warehouse = str(Path(warehouse).resolve())
-        builder = SparkSession.builder.appName(cls.spark_application_name)
+        builder = SparkSession.builder.appName(cls.spark_application_name())
         if master := spark_master():
             builder = builder.master(master)
-        catalog = cls.config_model.iceberg_catalog
+        catalog = cls.config_model().iceberg_catalog()
         return (
             builder.config("spark.driver.memory", "8g")
             .config("spark.executor.memory", "8g")
@@ -211,16 +203,12 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         """Quote a Spark SQL string literal used for table property changes."""
         return "'" + value.replace("'", "''") + "'"
 
-    @classmethod
-    def _ensure_iceberg_table(
-        cls, spark: SparkSession, *, name: str, version: int, schema: str, partition_spec: str, properties: Mapping[str, str]
-    ) -> None:
-        """Create the resource table or reconcile its declared table properties."""
-        namespace = cls.iceberg_namespace
-        catalog = cls.config_model.iceberg_catalog
+    def _create_table(self, spark: SparkSession, *, schema: str, partition_spec: str) -> None:
+        """Create this materialization's Iceberg table or reconcile its metadata."""
         if not schema or not partition_spec:
-            raise NotImplementedError(f"{cls.__name__} must declare an Iceberg schema and partition spec.")
-        identifier = cls._iceberg_table_identifier(name, version)
+            raise NotImplementedError(f"{type(self).__name__} must declare an Iceberg schema and partition spec.")
+        properties = self._table_properties(partition_spec)
+        identifier = self._table_identifier
         if spark.catalog.tableExists(identifier):
             existing_properties = {
                 row.key: row.value for row in spark.sql(f"SHOW TBLPROPERTIES {identifier}").collect()
@@ -234,19 +222,21 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
                     for field in ("name", "version", "frequency", "description", "validations", "upstream_spec")
                 }.intersection(existing_properties)
                 if obsolete_keys:
-                    keys = ", ".join(cls._sql_literal(key) for key in sorted(obsolete_keys))
+                    keys = ", ".join(self._sql_literal(key) for key in sorted(obsolete_keys))
                     spark.sql(f"ALTER TABLE {identifier} UNSET TBLPROPERTIES ({keys})")
                 assignments = ", ".join(
-                    f"{cls._sql_literal(key)} = {cls._sql_literal(value)}"
+                    f"{self._sql_literal(key)} = {self._sql_literal(value)}"
                     for key, value in properties.items()
                 )
                 spark.sql(f"ALTER TABLE {identifier} SET TBLPROPERTIES ({assignments})")
             return
+        catalog = self.config.iceberg_catalog()
+        namespace = self.iceberg_namespace()
         spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{namespace}")
         writer = spark.createDataFrame([], schema).writeTo(identifier).using("iceberg")
         for key, value in properties.items():
             writer = writer.tableProperty(key, value)
-        writer.partitionedBy(cls._partition_transform(partition_spec)).create()
+        writer.partitionedBy(self._partition_transform(partition_spec)).create()
 
     def _additional_table_properties(self) -> Mapping[str, str]:
         """Return optional storage metadata specific to one resource type."""
@@ -255,8 +245,8 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
     def _table_properties(self, partition_spec: str) -> Mapping[str, str]:
         """Return storage settings and the shared resource definition metadata."""
         frequency = {"day": "daily", "hour": "hourly"}[self._partition_unit(partition_spec)]
-        return self.iceberg_table_properties | {
-            "resource.type": self.callback_resource,
+        return self.iceberg_table_properties() | {
+            "resource.type": self.callback_resource(),
             "resource.name": self.config.name,
             "resource.version": str(self.config.version),
             "resource.frequency": frequency,
@@ -270,40 +260,24 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
             ),
         } | self._additional_table_properties()
 
-    def _ensure_table(self, spark: SparkSession, *, schema: str, partition_spec: str) -> None:
-        """Create the resource's Iceberg table using its transform declaration."""
-        self._ensure_iceberg_table(
-            spark,
-            name=self.config.name,
-            version=self.config.version,
-            schema=schema,
-            partition_spec=partition_spec,
-            properties=self._table_properties(partition_spec),
-        )
-
-    def _prepare_frame(self, frame: DataFrame) -> DataFrame:
+    def _prepare_frame(self, data_frame: DataFrame) -> DataFrame:
         """Cast or normalize a transform result before validation and persistence."""
-        return frame
+        return data_frame
 
-    @property
-    def _validator(self) -> MaterializationValidator:
-        """Return the validation contract bound to this materialization job."""
-        return MaterializationValidator(self.config.validations)
-
-    def _write_frame(self, frame: DataFrame) -> None:
+    def _write_to_table(self, data_frame: DataFrame) -> None:
         """Merge keyed rows or replace touched Iceberg partitions atomically."""
-        if self.write_mode is WriteMode.OVERWRITE:
-            frame.writeTo(self._table_identifier).overwritePartitions()
+        if self.write_mode() is WriteMode.OVERWRITE:
+            data_frame.writeTo(self._table_identifier).overwritePartitions()
             return
         raise NotImplementedError(f"{type(self).__name__} must implement merge writes.")
 
     @staticmethod
-    def _merge_frame(frame: DataFrame, identifier: str, keys: tuple[str, ...]) -> None:
+    def _merge_frame(data_frame: DataFrame, identifier: str, keys: tuple[str, ...]) -> None:
         """Upsert a prepared DataFrame by its resource-specific row key."""
         if not keys:
             raise ValueError("An Iceberg merge requires at least one key column.")
 
-        source = frame.alias("source")
+        source = data_frame.alias("source")
         predicate = F.col(f"source.{keys[0]}") == F.col(f"{identifier}.{keys[0]}")
         for key in keys[1:]:
             predicate = predicate & (F.col(f"source.{key}") == F.col(f"{identifier}.{key}"))
@@ -316,16 +290,12 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
 
     def _partition_interval(self, partition_spec: str) -> timedelta:
         """Return the fixed duration represented by one output partition."""
-        return timedelta(days=1) if self._partition_unit(partition_spec) == "day" else timedelta(hours=1)
+        return PartitionType.from_iceberg_partition_spec(partition_spec).partition_interval
 
     @staticmethod
     def _partition_unit(partition_spec: str) -> str:
         """Return the Spark timestamp truncation unit for the Iceberg partition spec."""
-        transform = partition_spec.split("(", maxsplit=1)[0]
-        try:
-            return {"days": "day", "hours": "hour"}[transform]
-        except KeyError as error:
-            raise ValueError(f"Unsupported Iceberg partition transform: {transform}.") from error
+        return PartitionType.from_iceberg_partition_spec(partition_spec).partition_unit
 
     def _partition_timestamp(self, timestamp: datetime, partition_spec: str) -> datetime:
         """Normalize a requested timestamp to its UTC Iceberg partition boundary."""
@@ -385,12 +355,6 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         """Report committed partition revisions through the control-plane API."""
         target_partition_keys = self._target_partition_keys(partition_spec)
         content_hashes = self._partition_content_hashes(spark, partition_spec)
-        self._validator.validate(
-            CompletionValidationInput(
-                target_partition_keys=target_partition_keys,
-                content_hashes=content_hashes,
-            )
-        )
         row_counts = self._partition_row_counts(spark, partition_spec)
         table_schema = {
             field.name: field.dataType.simpleString()
@@ -401,7 +365,7 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         for partition, partition_key in zip(self.config.partitions, target_partition_keys, strict=True):
             receipts.append({
                 "partition_id": partition.partition_id,
-                "resource_type": self.callback_resource,
+                "resource_type": self.callback_resource(),
                 "row_count": row_counts.get(partition_key, 0),
                 "schema": table_schema,
                 "content_hash": content_hashes.get(partition_key, empty_hash),
@@ -428,8 +392,6 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         except KeyError as error:
             raise ValueError(f"Unsupported Iceberg partition transform: {partition_spec}.") from error
 
-
-
     @staticmethod
     def _latest_snapshot_id(spark: SparkSession, identifier: str) -> int:
         """Return the latest Iceberg snapshot committed for a table."""
@@ -454,18 +416,59 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
 
     def _iceberg_layout(self, transform: DataTransform) -> tuple[str, str]:
         """Return the output layout declared by a dataset transform."""
-        schema = getattr(transform, "iceberg_schema", None)
-        partition_spec = getattr(transform, "iceberg_partition_spec", None)
-        if not isinstance(schema, str) or not isinstance(partition_spec, str):
-            raise NotImplementedError(
-                f"{type(self).__name__} must provide an Iceberg layout for {type(transform).__name__}."
-            )
-        return schema, partition_spec
+        return transform.iceberg_schema, transform.iceberg_partition_spec
 
+    @property
     @abstractmethod
-    def validate(self, frame: DataFrame, spark: SparkSession, transform: DataTransform) -> None:
-        """Allow resource materializers to apply the shared validation policy before writing."""
+    def _partition_timestamps(self) -> tuple[datetime, ...]:
+        """Return requested output partition boundaries for validation."""
 
+    @property
+    @abstractmethod
+    def _partition_type(self) -> PartitionType:
+        """Return the explicit cadence of requested output partitions."""
+
+    @property
+    def _minimum_rows_temporal_filter(self) -> TemporalFilter:
+        """Select every requested partition for the shared minimum-row check."""
+        return AllPartitionsTemporalFilterConfig()
+
+    @property
+    def _minimum_rows_reason(self) -> str:
+        """Explain why selected output partitions must contain at least one row."""
+        return "Each selected output partition must contain at least one row."
+
+    @property
+    def _base_validation_configs(self) -> tuple[ValidationConfig, ...]:
+        """Declare partition validations shared by every materialization."""
+        return (
+            RequestedPartitionsValidationConfig(
+                reason="Output rows must belong to the requested logical partitions.",
+                timestamps=self._partition_timestamps,
+                partition_type=self._partition_type,
+            ),
+            MinimumRowsValidationConfig(
+                reason=self._minimum_rows_reason,
+                minimum_rows=1,
+                timestamps=self._partition_timestamps,
+                partition_type=self._partition_type,
+                temporal_filter=self._minimum_rows_temporal_filter,
+            ),
+        )
+
+    @property
+    @abstractmethod
+    def validation_configs(self) -> tuple[ValidationConfig, ...]:
+        ...
+
+    def validate(self, data_frame: DataFrame) -> None:
+        """Run this materialization's complete resolved validation sequence."""
+        MaterializationValidator(
+            validation_configs=ValidationConfigs(
+                default_validation_configs=self._base_validation_configs + self.validation_configs,
+                override_validation_configs=tuple(self.config.validations),
+            ),
+        ).validate(data_frame)
 
     @abstractmethod
     def materialize(self, spark: SparkSession, transform: DataTransform) -> DataFrame:
@@ -478,21 +481,17 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         parser.add_argument("--config-json", required=True, help="Serialized materializer configuration.")
         args = parser.parse_args()
         config = cls._config_from_json(args.config_json)
-        cls._run_config(config)
-        print("Materialization completed.")
-
-
-    def __call__(self) -> None:
-        """Execute the configured materialization and always close its Spark session."""
-        spark = self._create_spark_session(self.config.warehouse_dir)
+        materializer = cls(config)
+        spark_session = materializer._create_spark_session(config.warehouse_dir)
         try:
-            transform = self._create_transform(spark)
-            schema, partition_spec = self._iceberg_layout(transform)
-            frame = self._prepare_frame(self.materialize(spark, transform))
-            self.validate(frame, spark, transform)
-            self._ensure_table(spark, schema=schema, partition_spec=partition_spec)
-            self._write_frame(frame)
-            snapshot_id = self._latest_snapshot_id(spark, self._table_identifier)
-            self._complete_partitions(spark, snapshot_id, partition_spec)
+            transform = materializer._create_transform(spark_session)
+            schema, partition_spec = materializer._iceberg_layout(transform)
+            data_frame = materializer._prepare_frame(materializer.materialize(spark_session, transform))
+            materializer.validate(data_frame)
+            materializer._create_table(spark_session, schema=schema, partition_spec=partition_spec)
+            materializer._write_to_table(data_frame)
+            snapshot_id = materializer._latest_snapshot_id(spark_session, materializer._table_identifier)
+            materializer._complete_partitions(spark_session, snapshot_id, partition_spec)
         finally:
-            self._stop_spark_session(spark)
+            materializer._stop_spark_session(spark_session)
+        print("Materialization completed.")

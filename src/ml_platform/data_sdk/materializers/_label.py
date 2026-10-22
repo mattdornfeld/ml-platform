@@ -1,19 +1,24 @@
 """Iceberg label materializer dispatched by the control plane."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from importlib import import_module
 from inspect import Parameter, signature
 from pathlib import Path
-from types import MappingProxyType
 from typing import Mapping, cast, get_type_hints
 
 from pydantic import Field, field_validator
-from simple_classproperty import classproperty
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition, WriteMode
-from ml_platform.data_sdk.materializers._materialization_validator import LabelValidationInput, MaterializationValidator
+from ml_platform.data_sdk.materializers._materialization_validator import (
+    ExactColumnsValidationConfig,
+    FiniteNumericValuesValidationConfig,
+    NonNullValuesValidationConfig,
+    UniqueKeyValidationConfig,
+    ValidationConfig,
+)
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.transforms._types import DataType, Dataset, DatasetDependency, FeatureKey, PartitionType
 
@@ -48,6 +53,16 @@ class LabelMaterializationConfig(MaterializerConfig):
             raise ValueError("Feature keys must be unique.")
         return feature_keys
 
+    @property
+    def partition_type(self) -> PartitionType:
+        """Return the explicit partition cadence configured for this resource."""
+        return PartitionType(self.frequency)
+
+    @property
+    def partition_timestamps(self) -> tuple[datetime, ...]:
+        """Return requested timestamps normalized to this resource's cadence."""
+        return self._partition_timestamps_for(self.partition_type)
+
 
 @dataclass(frozen=True)
 class LabelResource:
@@ -61,36 +76,32 @@ class LabelResource:
 class LabelMaterializer(Materializer[LabelMaterializationConfig]):
     """Construct, validate, persist, and report one label materialization."""
 
-    @classproperty
+    @classmethod
     def config_model(cls) -> type[LabelMaterializationConfig]:
         """Return the strict runtime contract for label jobs."""
         return LabelMaterializationConfig
 
-    @classproperty
+    @classmethod
     def spark_application_name(cls) -> str:
         """Return the stable Spark application name for label jobs."""
         return "ml-platform-label-materializer"
 
-    @classproperty
+    @classmethod
     def iceberg_namespace(cls) -> str:
         """Store label resources in their dedicated Iceberg namespace."""
         return "labels"
 
-    @classproperty
+    @classmethod
     def callback_resource(cls) -> str:
         """Report label partition receipts as label resources."""
         return "label"
 
-    @classproperty
+    @classmethod
     def write_mode(cls) -> WriteMode:
         """Merge labels by their timestamp and configured feature-key identity."""
         return WriteMode.MERGE
 
-    datasets: Mapping[str, Dataset]
-
-    def __post_init__(self) -> None:
-        """Freeze a snapshot of the datasets supplied at construction."""
-        object.__setattr__(self, "datasets", MappingProxyType(dict(self.datasets)))
+    datasets: tuple[tuple[str, Dataset], ...]
 
     def _partition_receipt_data(self, partition: MaterializerPartition) -> dict[str, object]:
         """Pin the input dataset revisions used for this label partition."""
@@ -101,10 +112,10 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
         """Return the immutable configured entity columns for one label row."""
         return tuple(self.config.feature_keys)
 
-    def _prepare_frame(self, frame: DataFrame) -> DataFrame:
+    def _prepare_frame(self, data_frame: DataFrame) -> DataFrame:
         """Cast a strategy result to the canonical label table schema."""
         expected_columns = {"timestamp", *self._feature_key_columns, "label_value"}
-        return frame.select(
+        return data_frame.select(
             F.col("timestamp").try_cast("timestamp").alias("timestamp"),
             *(F.col(key).cast("string").alias(key) for key in self._feature_key_columns),
             F.col("label_value").try_cast(self.config.dtype).alias("label_value"),
@@ -115,14 +126,29 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
         columns = ("timestamp", *self._feature_key_columns, "label_value")
         return F.sha2(F.to_json(F.struct(*(F.col(column) for column in columns))), 256)
 
-    def _write_frame(self, frame: DataFrame) -> None:
+    @property
+    def _partition_timestamps(self) -> tuple[datetime, ...]:
+        """Return the label's normalized requested partition timestamps."""
+        return self.config.partition_timestamps
+
+    @property
+    def _partition_type(self) -> PartitionType:
+        """Return the declared label output partition cadence."""
+        return self.config.partition_type
+
+    @property
+    def _minimum_rows_reason(self) -> str:
+        """Explain the label partition completeness requirement."""
+        return "Label partitions must contain at least one row."
+
+    def _write_to_table(self, data_frame: DataFrame) -> None:
         """Merge labels using their canonical timestamp and feature-key identity."""
-        self._merge_frame(frame, self._table_identifier, ("timestamp", *self._feature_key_columns))
+        self._merge_frame(data_frame, self._table_identifier, ("timestamp", *self._feature_key_columns))
 
     @classmethod
     def _label_id(cls, resource: LabelResource) -> str:
         """Return the physical versioned label table name."""
-        return cls.config_model._iceberg_table_name_for(resource.name, resource.version)
+        return cls.config_model()._iceberg_table_name_for(resource.name, resource.version)
 
     @classmethod
     def _table_identifier_for(cls, resource: LabelResource) -> str:
@@ -132,15 +158,15 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
     @classmethod
     def _storage_path(cls, warehouse_dir: str | Path, resource: LabelResource) -> Path:
         """Return the resource's versioned warehouse directory."""
-        return Path(warehouse_dir).resolve() / cls.iceberg_namespace / cls._label_id(resource)
+        return Path(warehouse_dir).resolve() / cls.iceberg_namespace() / cls._label_id(resource)
 
     @staticmethod
     def _load_transform(import_path: str) -> type[LabelTransform]:
         """Load a LabelTransform class referenced by the API-delivered definition."""
         module_name, class_name = import_path.rsplit(".", maxsplit=1)
         try:
-            transform = getattr(import_module(module_name), class_name)
-        except (AttributeError, ImportError) as error:
+            transform = import_module(module_name).__dict__[class_name]
+        except (ImportError, KeyError) as error:
             raise ValueError(f"Cannot load label transform: {import_path}") from error
         if not isinstance(transform, type) or not issubclass(transform, LabelTransform):
             raise ValueError(f"Label transform must inherit LabelTransform: {import_path}")
@@ -198,51 +224,40 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
         """Persist one transform result through the label table lifecycle."""
         schema, partition_spec = self._iceberg_layout(transform)
         labels = self._prepare_frame(transform().localCheckpoint(eager=True))
-        self.validate(labels, spark, transform)
-        self._ensure_table(spark, schema=schema, partition_spec=partition_spec)
-        self._write_frame(labels)
+        self.validate(labels)
+        self._create_table(spark, schema=schema, partition_spec=partition_spec)
+        self._write_to_table(labels)
         return labels.count()
 
     def _create_transform(self, spark: SparkSession) -> LabelTransform:
         """Instantiate the configured label transform with its pinned inputs."""
         transform = self._instantiate_transform(
-            self._load_transform(self.config.transform), self.config.parameters, self.datasets
+            self._load_transform(self.config.transform), self.config.parameters, dict(self.datasets)
         )
         return transform
 
-    def validate(self, frame: DataFrame, spark: SparkSession, transform: LabelTransform) -> None:
-        """Validate typed labels, requested partitions, and transform layout."""
-        partition_spec = transform.iceberg_partition_spec
-        expected_schema = (
-            "timestamp TIMESTAMP, "
-            f"{', '.join(f'{key} STRING' for key in self._feature_key_columns)}, "
-            f"label_value {self.config.dtype.upper()}"
+    @property
+    def validation_configs(self) -> tuple[ValidationConfig, ...]:
+        """Declare the complete label output validation policy."""
+        return (
+            ExactColumnsValidationConfig(
+                reason="Label output must use the canonical label schema.",
+                columns=("timestamp", *self._feature_key_columns, "label_value"),
+            ),
+            NonNullValuesValidationConfig(
+                reason="Label keys and values must be present and castable.",
+                columns=("timestamp", *self._feature_key_columns, "label_value"),
+            ),
+            FiniteNumericValuesValidationConfig(
+                reason="Label values must be finite.",
+                columns=("label_value",),
+            ),
+            UniqueKeyValidationConfig(
+                reason="Each label key may have one value per timestamp.",
+                columns=("timestamp", *self._feature_key_columns),
+            ),
         )
-        expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[self.config.frequency]
-        partitioned = frame.withColumn(
-            "output_partition",
-            F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp")),
-        )
-        requested_partitions = spark.createDataFrame(
-            [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
-            "output_partition timestamp",
-        ).distinct()
-        self._validator.validate(
-            LabelValidationInput(
-                frame=frame,
-                partitioned_frame=partitioned,
-                requested_partitions=requested_partitions,
-                partition_column="output_partition",
-                partition_interval=self._partition_interval(partition_spec),
-                exact_columns=frozenset({"timestamp", *self._feature_key_columns, "label_value"}),
-                non_null_columns=("timestamp", *self._feature_key_columns, "label_value"),
-                unique_key_columns=("timestamp", *self._feature_key_columns),
-                actual_schema=transform.iceberg_schema,
-                expected_schema=expected_schema,
-                actual_partition_spec=transform.iceberg_partition_spec,
-                expected_partition_spec=expected_partition_spec,
-            )
-        )
+
 
 
 

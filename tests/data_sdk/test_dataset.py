@@ -1,6 +1,7 @@
 """Unit tests for API-dispatched dataset worker dispatch."""
 
 import json
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -38,12 +39,13 @@ class DatasetWorkerTest(unittest.TestCase):
         with (
             patch.object(type(worker), "_prepare_frame", return_value=MagicMock()) as prepare,
             patch.object(type(worker), "validate") as validate,
-            patch.object(type(worker), "_ensure_table") as ensure,
-            patch.object(type(worker), "_write_frame") as write,
+            patch.object(type(worker), "_create_table") as ensure,
+            patch.object(type(worker), "_write_to_table") as write,
             patch.object(type(worker), "_latest_snapshot_id", return_value=7),
             patch.object(type(worker), "_complete_partitions") as complete,
         ):
-            result = worker()
+            with patch.object(sys, "argv", ["dataset-materializer", "--config-json", config.model_dump_json()]):
+                result = type(worker).main()
         self.assertIsNone(result)
         self.assertEqual(transform.call_args.kwargs["symbols"], ["AAPL"])
         self.assertEqual(transform.call_args.kwargs["partitions"][0].date().isoformat(), "2026-01-01")
@@ -74,18 +76,18 @@ class DatasetWorkerTest(unittest.TestCase):
             }],
         }))
         worker = DatasetMaterializer(config)
-        with patch.object(DatasetMaterializer, "_write_frame") as write:
+        with patch.object(DatasetMaterializer, "_write_to_table") as write:
             with self.assertRaisesRegex(NotImplementedError, "Unsupported dataset type: unsupported"):
                 worker._create_transform(MagicMock())
         write.assert_not_called()
 
     @patch("ml_platform.data_sdk.materializers._dataset.F")
-    @patch.object(DatasetMaterializer, "_ensure_table")
+    @patch.object(DatasetMaterializer, "_create_table")
     @patch.object(DatasetMaterializer, "validate")
     def test_dataset_frame_uses_dataframe_merge_api(
         self,
         validate: MagicMock,
-        _ensure_table: MagicMock,
+        _create_table: MagicMock,
         _functions: MagicMock,
     ) -> None:
         """Dataset persistence uses the DataFrame merge chain rather than SQL text."""

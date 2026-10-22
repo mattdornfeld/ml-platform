@@ -4,22 +4,25 @@ from datetime import datetime, timedelta, timezone
 import os
 import sys
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from pyspark.sql import SparkSession, functions as F
 
 from ml_platform.data_sdk.materializers import (
+    ExactColumnsValidationConfig,
     MaterializerPartition,
+    MaterializationValidator,
+    ValidationConfigs,
     MinimumRowsValidationConfig,
-    FiniteFeatureValueValidationConfig,
     FeatureKeysFromInputValidationConfig,
     XnysRegularSessionTemporalFilterConfig,
-    MaterializationValidator,
+    MinimumRowsValidation,
 )
-from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
+from ml_platform.data_sdk.materializers._dataset import DatasetMaterializationConfig, DatasetMaterializer
 from ml_platform.data_sdk.dataset_transforms._market_data import MarketDataTransform
+from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
 from ml_platform.data_sdk.materializers._feature import FeatureMaterializationConfig, FeatureMaterializer
-from ml_platform.data_sdk.transforms._types import Dataset, DatasetReference
 
 
 class MaterializerValidationTest(unittest.TestCase):
@@ -58,51 +61,66 @@ class MaterializerValidationTest(unittest.TestCase):
 
         calendar = xcals.get_calendar("XNYS")
         self.assertFalse(
-            MaterializationValidator._overlaps_xnys_regular_session(
+            MinimumRowsValidation._overlaps_xnys_regular_session(
                 datetime(2026, 1, 1, tzinfo=timezone.utc), timedelta(days=1), calendar
             )
         )
         self.assertTrue(
-            MaterializationValidator._overlaps_xnys_regular_session(
+            MinimumRowsValidation._overlaps_xnys_regular_session(
                 datetime(2026, 1, 2, tzinfo=timezone.utc), timedelta(days=1), calendar
             )
         )
         self.assertTrue(
-            MaterializationValidator._overlaps_xnys_regular_session(
+            MinimumRowsValidation._overlaps_xnys_regular_session(
                 datetime(2026, 1, 2, 14, tzinfo=timezone.utc), timedelta(hours=1), calendar
             )
         )
         self.assertFalse(
-            MaterializationValidator._overlaps_xnys_regular_session(
+            MinimumRowsValidation._overlaps_xnys_regular_session(
                 datetime(2026, 1, 2, 21, tzinfo=timezone.utc), timedelta(hours=1), calendar
             )
         )
 
+    def test_validator_runs_only_the_injected_dataframe_validations(self) -> None:
+        """The shared validator has no dependency on any materializer resource type."""
+        frame = self.spark.createDataFrame([("AAA",)], "symbol string")
+        validator = MaterializationValidator(
+            ValidationConfigs(
+                default_validation_configs=(ExactColumnsValidationConfig(
+                    reason="Output must contain only the configured columns.",
+                    columns=("symbol",),
+                ),),
+                override_validation_configs=(),
+            )
+        )
+
+        self.assertIsNone(validator.validate(frame))
+        with self.assertRaisesRegex(ValueError, "Output must contain only the configured columns"):
+            validator.validate(frame.selectExpr("symbol", "1 AS unexpected"))
+
     def test_dataset_rejects_duplicate_and_unrequested_rows(self) -> None:
         """Market rows may leave requested days empty but cannot mutate other days."""
         requested = MaterializerPartition(
-            partition_id="day", timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            partition_id="day", timestamp=datetime(2026, 1, 3, tzinfo=timezone.utc),
             callback_token="token",
         )
-        worker = DatasetMaterializer(
-            SimpleNamespace(
-                partitions=[requested],
-                validations=[],
-            )
-        )
+        worker = DatasetMaterializer(DatasetMaterializationConfig(
+            name="market", version=1, description="Test market data.", warehouse_dir="warehouse",
+            dataset_type="market_data", keys=[FeatureKey.SYMBOL], partition_type=PartitionType.DAILY, symbols=["AAA"],
+            validations=[], partitions=[requested],
+        ))
         source = self.spark.createDataFrame(
-            [("2026-01-01 15:30:00", "AAA", "regular", 100.0, 101.0, 99.0, 100.5, 1000)],
+            [("2026-01-03 15:30:00", "AAA", "regular", 100.0, 101.0, 99.0, 100.5, 1000)],
             "timestamp string, symbol string, market_session string, Open double, High double, "
             "Low double, Close double, Volume long",
         )
         prepared = worker._prepare_frame(source)
-        self.assertIsNone(worker.validate(prepared, self.spark, self._daily_dataset_transform()))
-        self.assertIsNone(worker.validate(prepared.limit(0), self.spark, self._daily_dataset_transform()))
+        self.assertIsNone(worker.validate(prepared))
         with self.assertRaisesRegex(ValueError, "duplicate"):
-            worker.validate(prepared.unionByName(prepared), self.spark, self._daily_dataset_transform())
-        next_day = source.withColumn("timestamp", F.lit("2026-01-02 15:30:00"))
+            worker.validate(prepared.unionByName(prepared))
+        next_day = source.withColumn("timestamp", F.lit("2026-01-04 15:30:00"))
         with self.assertRaisesRegex(ValueError, "requested partitions"):
-            worker.validate(worker._prepare_frame(next_day), self.spark, self._daily_dataset_transform())
+            worker.validate(worker._prepare_frame(next_day))
 
     def test_feature_specific_value_and_input_key_policies(self) -> None:
         """Feature policy checks remain enforced after shared structural validation."""
@@ -112,9 +130,15 @@ class MaterializerValidationTest(unittest.TestCase):
             "datasets": [{"name": "sp500", "version": 3, "argument_name": "market_data", "num_lookback_partitions": 1}],
             "transform": "ml_platform.data_sdk.LogReturnTransform",
             "validations": [
-                {"type": "minimum_rows", "minimum_rows": 1},
-                {"type": "finite_feature_value"},
-                {"type": "feature_keys_from_input"},
+                {
+                    "type": "minimum_rows",
+                    "minimum_rows": 1,
+                    "reason": "Each requested feature partition requires a row.",
+                },
+                {
+                    "type": "feature_keys_from_input",
+                    "reason": "Feature keys must occur in source market data.",
+                },
             ],
             "partitions": [{
                 "partition_id": "output", "timestamp": datetime(2026, 1, 1, tzinfo=timezone.utc), "callback_token": "token",
@@ -124,11 +148,8 @@ class MaterializerValidationTest(unittest.TestCase):
                 }],
             }],
         })
-        requested = self.spark.createDataFrame([("2026-01-01",)], "day string").selectExpr(
-            "cast(day as timestamp) as output_partition"
-        )
         source = self.spark.createDataFrame([("AAA",)], "symbol string")
-        datasets = {"market_data": Dataset(DatasetReference("sp500", 3, 1), source)}
+        source.createOrReplaceTempView("input_market_data")
 
         def feature(symbol: str, value: float):
             return self.spark.createDataFrame(
@@ -136,24 +157,22 @@ class MaterializerValidationTest(unittest.TestCase):
             )
 
         worker = FeatureMaterializer(config)
+        def validate_feature(frame: object) -> None:
+            with patch.object(FeatureMaterializer, "_dataset_table_identifier", return_value="input_market_data"):
+                worker.validate(frame)
+
         accepted = worker._prepare_frame(feature("AAA", 1.0))
-        self.assertIsNone(FeatureMaterializer._validate_feature_frame(accepted, config, requested, datasets))
+        self.assertIsNone(validate_feature(accepted))
         with self.assertRaisesRegex(ValueError, "non-finite"):
-            FeatureMaterializer._validate_feature_frame(
-                worker._prepare_frame(feature("AAA", float("nan"))), config, requested, datasets
-            )
+            validate_feature(worker._prepare_frame(feature("AAA", float("nan"))))
         with self.assertRaisesRegex(ValueError, "absent from input"):
-            FeatureMaterializer._validate_feature_frame(
-                worker._prepare_frame(feature("BBB", 1.0)), config, requested, datasets
-            )
+            validate_feature(worker._prepare_frame(feature("BBB", 1.0)))
         uncastable = self.spark.createDataFrame(
             [("2026-01-01", "AAA", "invalid")],
             "timestamp string, symbol string, feature_value string",
         )
         with self.assertRaisesRegex(ValueError, "non-null, castable"):
-            FeatureMaterializer._validate_feature_frame(
-                worker._prepare_frame(uncastable), config, requested, datasets
-            )
+            validate_feature(worker._prepare_frame(uncastable))
 
     def test_feature_partition_filter_respects_hourly_frequency(self) -> None:
         """Two requested hours replace two hourly partitions, not their entire day."""

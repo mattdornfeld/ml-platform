@@ -1,5 +1,6 @@
 """Spark worker for one API-submitted feature materialization job."""
 from dataclasses import dataclass
+from datetime import datetime
 from importlib import import_module
 from inspect import Parameter, signature
 import json
@@ -8,13 +9,19 @@ from threading import Lock
 from typing import Any, Literal, cast, get_type_hints
 
 from pydantic import Field, field_validator
-from simple_classproperty import classproperty
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
 from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig, MaterializerPartition, WriteMode
-from ml_platform.data_sdk.materializers._materialization_validator import FeatureValidationInput, MaterializationValidator
+from ml_platform.data_sdk.materializers._materialization_validator import (
+    ExactColumnsValidationConfig,
+    FeatureKeysFromInputValidationConfig,
+    FiniteNumericValuesValidationConfig,
+    NonNullValuesValidationConfig,
+    UniqueKeyValidationConfig,
+    ValidationConfig,
+)
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._types import (
     DataType,
@@ -74,32 +81,42 @@ class FeatureMaterializationConfig(MaterializerConfig):
 
 
 
+    @property
+    def partition_type(self) -> PartitionType:
+        """Return the explicit partition cadence configured for this resource."""
+        return PartitionType(self.frequency)
+
+    @property
+    def partition_timestamps(self) -> tuple[datetime, ...]:
+        """Return requested timestamps normalized to this resource's cadence."""
+        return self._partition_timestamps_for(self.partition_type)
+
 
 @dataclass(frozen=True)
 class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     """Materialize API-pinned feature partitions with their immutable inputs."""
 
-    @classproperty
+    @classmethod
     def config_model(cls) -> type[FeatureMaterializationConfig]:
         """Return the strict runtime contract for feature jobs."""
         return FeatureMaterializationConfig
 
-    @classproperty
+    @classmethod
     def spark_application_name(cls) -> str:
         """Return the stable Spark application name for feature jobs."""
         return "ml-platform-feature-materializer"
 
-    @classproperty
+    @classmethod
     def iceberg_namespace(cls) -> str:
         """Store feature resources in their dedicated Iceberg namespace."""
         return "features"
 
-    @classproperty
+    @classmethod
     def callback_resource(cls) -> str:
         """Report feature partition receipts as feature resources."""
         return "feature"
 
-    @classproperty
+    @classmethod
     def write_mode(cls) -> WriteMode:
         """Replace only the feature partitions emitted by the transform."""
         return WriteMode.OVERWRITE
@@ -113,10 +130,10 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         """Return the immutable configured entity columns for one feature row."""
         return tuple(self.config.feature_keys)
 
-    @classproperty
+    @classmethod
     def _dependency_manifest_table_identifier(cls) -> str:
         """Return the shared feature-to-dataset dependency manifest identifier."""
-        return f"{cls.config_model.iceberg_catalog}.{cls.iceberg_namespace}.dependencies"
+        return f"{cls.config_model().iceberg_catalog()}.{cls.iceberg_namespace()}.dependencies"
 
     @staticmethod
     def _planned_dataset(spark: Any, callbacks: list[MaterializerPartition], dataset: DatasetDependency) -> DataFrame:
@@ -158,13 +175,13 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
                     dependency.version,
                     dependency.num_lookback_partitions,
                 ),
-                frame=spark.table(FeatureMaterializer._dataset_table_identifier(dependency)),
+                data_frame=spark.table(FeatureMaterializer._dataset_table_identifier(dependency)),
             )
             for dependency in config.datasets
         }
         transform = worker._instantiate_feature_transform(layout_datasets)
         schema, partition_spec = worker._iceberg_layout(transform)
-        worker._ensure_table(
+        worker._create_table(
             spark,
             schema=schema,
             partition_spec=partition_spec,
@@ -184,9 +201,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         datasets = FeatureMaterializer._load_datasets(spark, config, target_dependencies)
         feature = worker._feature_transform(datasets)
         prepared_feature = worker._prepare_frame(feature)
-        FeatureMaterializer._validate_feature_frame(
-            prepared_feature, config, materialization_targets, datasets
-        )
+        worker.validate(prepared_feature)
         row_count = prepared_feature.count()
         FeatureMaterializer._delete_feature_partitions(spark, config, targets)
         if row_count:
@@ -239,7 +254,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
             ).select("input_partition").distinct()
             datasets[dataset.argument_name] = Dataset(
                 metadata=DatasetReference(dataset.name, dataset.version, dataset.num_lookback_partitions),
-                frame=(
+                data_frame=(
                     spark.table(FeatureMaterializer._dataset_table_identifier(dataset))
                     .withColumn("input_partition", F.date_trunc("day", F.col("timestamp")))
                     .join(parent_partitions, "input_partition", "inner")
@@ -273,10 +288,10 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     @staticmethod
     def _dataset_partition_hashes(spark: SparkSession, dataset: DatasetDependency) -> DataFrame:
         """Compute deterministic content hashes for physical dataset partitions."""
-        frame = spark.table(FeatureMaterializer._dataset_table_identifier(dataset))
-        row = F.to_json(F.struct(*(F.col(column).alias(column) for column in sorted(frame.columns))))
+        data_frame = spark.table(FeatureMaterializer._dataset_table_identifier(dataset))
+        row = F.to_json(F.struct(*(F.col(column).alias(column) for column in sorted(data_frame.columns))))
         return (
-            frame.withColumn("input_partition", F.date_trunc("day", F.col("timestamp")))
+            data_frame.withColumn("input_partition", F.date_trunc("day", F.col("timestamp")))
             .withColumn("row_hash", F.sha2(row, 256))
             .groupBy("input_partition")
             .agg(F.sha2(F.concat_ws("", F.sort_array(F.collect_list("row_hash"))), 256).alias("content_hash"))
@@ -294,7 +309,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         identifier = FeatureMaterializer._feature_table_identifier(config)
         completed = spark.table(identifier).select(FeatureMaterializer._partition_key(config).alias("output_partition")).distinct()
         missing = _output_partitions.join(completed, "output_partition", "left_anti")
-        stored = spark.table(FeatureMaterializer._dependency_manifest_table_identifier).where(
+        stored = spark.table(FeatureMaterializer._dependency_manifest_table_identifier()).where(
             (F.col("feature_name") == config.name) & (F.col("feature_version") == config.version)
         ).select("output_partition", "dataset_id", "input_partition", "content_hash")
         changed = dependencies.join(
@@ -328,7 +343,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     @staticmethod
     def _ensure_dependency_table(spark: SparkSession) -> None:
         """Create the feature-output to dataset-partition dependency manifest."""
-        identifier = FeatureMaterializer._dependency_manifest_table_identifier
+        identifier = FeatureMaterializer._dependency_manifest_table_identifier()
         if spark.catalog.tableExists(identifier):
             return
         (
@@ -352,7 +367,7 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     ) -> None:
         """Replace only the dependency records for output partitions just materialized."""
         with _DEPENDENCY_WRITE_LOCK:
-            identifier = FeatureMaterializer._dependency_manifest_table_identifier
+            identifier = FeatureMaterializer._dependency_manifest_table_identifier()
             replacement_targets = (
                 targets.select("output_partition")
                 .withColumn("feature_name", F.lit(config.name))
@@ -376,13 +391,12 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
                 "feature_name", "feature_version", "output_partition", "dataset_id", "input_partition", "content_hash"
             )
             if replacement.limit(1).count():
-                replacement.writeTo(FeatureMaterializer._dependency_manifest_table_identifier).append()
+                replacement.writeTo(FeatureMaterializer._dependency_manifest_table_identifier()).append()
 
     @staticmethod
     def _partition_key(config: FeatureMaterializationConfig) -> F.Column:
         """Return the timestamp bucket used by the configured Iceberg partition transform."""
-        partition_unit = {"hourly": "hour", "daily": "day"}[config.frequency]
-        return F.date_trunc(partition_unit, F.col("timestamp"))
+        return F.date_trunc(PartitionType(config.frequency).partition_unit, F.col("timestamp"))
 
 
     @staticmethod
@@ -390,8 +404,8 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         """Load a FeatureTransform class referenced by its dotted import path."""
         module_name, class_name = import_path.rsplit(".", maxsplit=1)
         try:
-            transform = getattr(import_module(module_name), class_name)
-        except (AttributeError, ImportError) as error:
+            transform = import_module(module_name).__dict__[class_name]
+        except (ImportError, KeyError) as error:
             raise ValueError(f"Cannot load feature transform: {import_path}") from error
         if not isinstance(transform, type) or not issubclass(transform, FeatureTransform):
             raise ValueError(f"Feature transform must inherit FeatureTransform: {import_path}")
@@ -465,44 +479,6 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
 
 
     @staticmethod
-    def _validate_feature_frame(
-        frame: DataFrame,
-        config: FeatureMaterializationConfig,
-        requested_partitions: DataFrame,
-        datasets: dict[str, Dataset],
-    ) -> None:
-        """Validate one prepared feature DataFrame before replacing its partitions."""
-        feature_keys = tuple(config.feature_keys)
-        expected_schema = (
-            "timestamp TIMESTAMP, "
-            f"{', '.join(f'{key} STRING' for key in feature_keys)}, "
-            f"{_FEATURE_VALUE_COLUMN} {config.dtype.upper()}"
-        )
-        expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[config.frequency]
-        partitioned = frame.withColumn("output_partition", FeatureMaterializer._partition_key(config))
-        partition_interval = FeatureMaterializer(config)._partition_interval(expected_partition_spec)
-        MaterializationValidator(config.validations).validate(
-            FeatureValidationInput(
-                frame=frame,
-                partitioned_frame=partitioned,
-                requested_partitions=requested_partitions,
-                partition_column="output_partition",
-                partition_interval=partition_interval,
-                exact_columns=frozenset({"timestamp", *feature_keys, _FEATURE_VALUE_COLUMN}),
-                non_null_columns=("timestamp", *feature_keys, _FEATURE_VALUE_COLUMN),
-                unique_key_columns=("timestamp", *feature_keys),
-                feature_value_column=_FEATURE_VALUE_COLUMN,
-                feature_keys=feature_keys,
-                datasets=datasets,
-                actual_schema=expected_schema,
-                expected_schema=expected_schema,
-                actual_partition_spec=expected_partition_spec,
-                expected_partition_spec=expected_partition_spec,
-            )
-        )
-
-
-    @staticmethod
     def _feature_table_identifier(config: FeatureMaterializationConfig) -> str:
         """Return an Iceberg identifier unique to the feature name and version."""
         return FeatureMaterializer._iceberg_table_identifier(config.name, config.version)
@@ -511,8 +487,8 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
     @staticmethod
     def _feature_storage_path(warehouse_dir: str | Path, config: FeatureMaterializationConfig) -> Path:
         """Return the versioned feature directory under the configured data root."""
-        table_name = FeatureMaterializer.config_model._iceberg_table_name_for(config.name, config.version)
-        return Path(warehouse_dir).resolve() / FeatureMaterializer.iceberg_namespace / table_name
+        table_name = FeatureMaterializer.config_model()._iceberg_table_name_for(config.name, config.version)
+        return Path(warehouse_dir).resolve() / FeatureMaterializer.iceberg_namespace() / table_name
 
 
     def _additional_table_properties(self) -> dict[str, str]:
@@ -548,13 +524,13 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
             reference = DatasetReference(
                 dependency.name, dependency.version, dependency.num_lookback_partitions
             )
-            datasets[dependency.argument_name] = Dataset(metadata=reference, frame=parent_frame)
+            datasets[dependency.argument_name] = Dataset(metadata=reference, data_frame=parent_frame)
         return datasets
 
-    def _filter_partitions(self, frame: DataFrame, requested: DataFrame, partition_spec: str) -> DataFrame:
+    def _filter_partitions(self, data_frame: DataFrame, requested: DataFrame, partition_spec: str) -> DataFrame:
         """Retain transform output belonging to the requested logical partitions."""
         return (
-            frame.withColumn(
+            data_frame.withColumn(
                 "output_partition",
                 F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp")),
             )
@@ -568,9 +544,24 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         serialized_values = [F.coalesce(F.col(column).cast("string"), F.lit("")) for column in value_columns]
         return F.sha2(F.concat_ws("\u0001", *serialized_values), 256)
 
-    def _prepare_frame(self, frame: DataFrame) -> DataFrame:
+    @property
+    def _partition_timestamps(self) -> tuple[datetime, ...]:
+        """Return the feature's normalized requested partition timestamps."""
+        return self.config.partition_timestamps
+
+    @property
+    def _partition_type(self) -> PartitionType:
+        """Return the declared feature output partition cadence."""
+        return self.config.partition_type
+
+    @property
+    def _minimum_rows_reason(self) -> str:
+        """Explain the feature partition completeness requirement."""
+        return "Feature partitions must contain at least one row."
+
+    def _prepare_frame(self, data_frame: DataFrame) -> DataFrame:
         """Cast transform values to the feature's persisted schema."""
-        return frame.select(
+        return data_frame.select(
             F.col("timestamp").try_cast("timestamp").alias("timestamp"),
             *(F.col(key).cast("string").alias(key) for key in self._feature_key_columns),
             F.col(_FEATURE_VALUE_COLUMN).try_cast(self.config.dtype).alias(_FEATURE_VALUE_COLUMN),
@@ -582,37 +573,36 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         transform = self._instantiate_feature_transform(datasets)
         return transform
 
-    def validate(self, frame: DataFrame, spark: SparkSession, transform: FeatureTransform) -> None:
-        """Validate typed feature values, partitions, input keys, and transform layout."""
-        partition_spec = transform.iceberg_partition_spec
-        requested_partitions = self._requested_partitions(spark, partition_spec)
-        input_datasets = self._load_planned_datasets(spark)
-        expected_schema = (
-            "timestamp TIMESTAMP, "
-            f"{', '.join(f'{key} STRING' for key in self._feature_key_columns)}, "
-            f"{_FEATURE_VALUE_COLUMN} {self.config.dtype.upper()}"
-        )
-        expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[self.config.frequency]
-        partitioned = frame.withColumn("output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp")))
-        self._validator.validate(
-            FeatureValidationInput(
-                frame=frame,
-                partitioned_frame=partitioned,
-                requested_partitions=requested_partitions,
-                partition_column="output_partition",
-                partition_interval=self._partition_interval(partition_spec),
-                exact_columns=frozenset({"timestamp", *self._feature_key_columns, _FEATURE_VALUE_COLUMN}),
-                non_null_columns=("timestamp", *self._feature_key_columns, _FEATURE_VALUE_COLUMN),
-                unique_key_columns=("timestamp", *self._feature_key_columns),
-                feature_value_column=_FEATURE_VALUE_COLUMN,
+    @property
+    def validation_configs(self) -> tuple[ValidationConfig, ...]:
+        """Declare the complete feature output validation policy."""
+        return (
+            ExactColumnsValidationConfig(
+                reason="Feature output must use the canonical feature schema.",
+                columns=("timestamp", *self._feature_key_columns, _FEATURE_VALUE_COLUMN),
+            ),
+            NonNullValuesValidationConfig(
+                reason="Feature keys and values must be present and castable.",
+                columns=("timestamp", *self._feature_key_columns, _FEATURE_VALUE_COLUMN),
+            ),
+            FiniteNumericValuesValidationConfig(
+                reason="Feature values must be finite.",
+                columns=(_FEATURE_VALUE_COLUMN,),
+            ),
+            UniqueKeyValidationConfig(
+                reason="Each feature key may have one value per timestamp.",
+                columns=("timestamp", *self._feature_key_columns),
+            ),
+            FeatureKeysFromInputValidationConfig(
+                reason="Feature keys must occur in at least one input dataset.",
                 feature_keys=self._feature_key_columns,
-                datasets=input_datasets,
-                actual_schema=transform.iceberg_schema,
-                expected_schema=expected_schema,
-                actual_partition_spec=transform.iceberg_partition_spec,
-                expected_partition_spec=expected_partition_spec,
-            )
+                dataset_table_identifiers=tuple(
+                    self._dataset_table_identifier(dataset)
+                    for dataset in self.config.datasets
+                ),
+            ),
         )
+
 
 
 

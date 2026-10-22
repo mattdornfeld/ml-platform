@@ -61,7 +61,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
 
     def setUp(self) -> None:
         """Create a source table with deterministic close and volume history."""
-        identifiers = [DatasetMaterializer._iceberg_table_identifier('sp500', 3), FeatureMaterializer._dependency_manifest_table_identifier]
+        identifiers = [DatasetMaterializer._iceberg_table_identifier('sp500', 3), FeatureMaterializer._dependency_manifest_table_identifier()]
         identifiers.extend(
             FeatureMaterializer._feature_table_identifier(config)
             for config in (
@@ -125,7 +125,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
         self.assertEqual(properties["feature.transform"], "ml_platform.data_sdk.LogReturnTransform")
         self.assertEqual(properties["resource.frequency"], "daily")
         self.assertEqual(
-            self.spark.table(FeatureMaterializer._dependency_manifest_table_identifier)
+            self.spark.table(FeatureMaterializer._dependency_manifest_table_identifier())
             .where("feature_name = 'test_log_return' AND feature_version = 1")
             .count(),
             1,
@@ -165,7 +165,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
         )
         log_returns = feature_config("test_log_return", "ml_platform.data_sdk.LogReturnTransform", 1)
         self.assertEqual(FeatureMaterializer._materialize_definition(self.spark, log_returns), 14)
-        unchanged_day_four = self.spark.table(FeatureMaterializer._dependency_manifest_table_identifier).where(
+        unchanged_day_four = self.spark.table(FeatureMaterializer._dependency_manifest_table_identifier()).where(
             "feature_name = 'test_log_return' AND date(output_partition) = DATE '2026-01-04'"
         ).select("input_partition", "content_hash").orderBy("input_partition").collect()
 
@@ -174,7 +174,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
         self.assertEqual(FeatureMaterializer._materialize_definition(self.spark, log_returns), 9)
         self.assertEqual(self.spark.table(FeatureMaterializer._feature_table_identifier(log_returns)).count(), 14)
         self.assertEqual(
-            self.spark.table(FeatureMaterializer._dependency_manifest_table_identifier).where(
+            self.spark.table(FeatureMaterializer._dependency_manifest_table_identifier()).where(
                 "feature_name = 'test_log_return' AND date(output_partition) = DATE '2026-01-04'"
             ).select("input_partition", "content_hash").orderBy("input_partition").collect(),
             unchanged_day_four,
@@ -220,7 +220,7 @@ class FeaturesIntegrationTest(unittest.TestCase):
         log_returns = feature_config("test_log_return", "ml_platform.data_sdk.LogReturnTransform", 1)
         FeatureMaterializer._materialize_definition(self.spark, log_returns)
         self.assertEqual(
-            self.spark.table(FeatureMaterializer._dependency_manifest_table_identifier)
+            self.spark.table(FeatureMaterializer._dependency_manifest_table_identifier())
             .where(
                 "feature_name = 'test_log_return' "
                 "AND output_partition = TIMESTAMP '2026-01-03 00:00:00'"

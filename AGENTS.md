@@ -13,3 +13,9 @@
 - Do not introduce optional properties, arguments, or return types without explicit user approval. Prefer required, statically typed interfaces.
 - For exhaustive structural pattern matching, use `case _ as unsupported_value:` followed by `assert_never(unsupported_value)` rather than a bare capture pattern or `case _:`. This preserves a clear wildcard branch and enables static exhaustiveness checking.
 - Keep classes public unless they are intentionally module-internal implementation details. Minimize each class's public method surface by making implementation methods private; retain public methods only for explicit contracts and entry points.
+- Do not use `getattr`, `setattr`, `hasattr`, `delattr`, or `object.__setattr__` without explicit user approval. Prefer declared, statically typed interfaces and immutable constructor values.
+- Encapsulate partition-cadence data on `PartitionType`; do not repeat conditional mappings such as hourly-to-hour in materializers.
+- Store normalized requested partition timestamps behind a descriptive property on the relevant materializer configuration rather than constructing them in workflow or validation methods.
+- Keep `validation_configs` declarative: it must return only that materializer's simple declared configuration list. Apply YAML validation overrides once in the base materializer to preserve DRY configuration resolution.
+- Prefer enums over string literals for domain concepts in configuration and validation models; pass the enum itself through contracts rather than a derived string value.
+- Use descriptive variable names. Prefer `data_frame: DataFrame` over generic `frame: DataFrame`.
