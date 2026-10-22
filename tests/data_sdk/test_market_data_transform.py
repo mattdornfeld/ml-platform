@@ -41,8 +41,15 @@ class YahooChartRowsTest(unittest.TestCase):
         """Incomplete upstream bars are excluded from typed output rows."""
         rows = _yahoo_chart_rows(self._payload(), "AAA")
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0][0], datetime(2026, 1, 2, 14, 30, tzinfo=UTC))
-        self.assertEqual(rows[0][1:], ("AAA", 10.0, 11.0, 9.0, 10.5, 100))
+        self.assertEqual(
+            rows[0].timestamp, datetime(2026, 1, 2, 14, 30, tzinfo=UTC)
+        )
+        self.assertEqual(rows[0].symbol, "AAA")
+        self.assertEqual(rows[0].open_price, 10.0)
+        self.assertEqual(rows[0].high_price, 11.0)
+        self.assertEqual(rows[0].low_price, 9.0)
+        self.assertEqual(rows[0].close_price, 10.5)
+        self.assertEqual(rows[0].volume, 100)
 
     def test_malformed_payloads_raise_domain_errors(self) -> None:
         """Missing chart data, provider errors, and inconsistent arrays are rejected."""

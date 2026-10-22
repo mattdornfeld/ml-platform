@@ -2,6 +2,7 @@
 
 import json
 import sys
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from urllib.error import HTTPError
@@ -36,6 +37,19 @@ OHLCV_SCHEMA = StructType(
         StructField("Volume", LongType(), nullable=False),
     ]
 )
+
+
+@dataclass(frozen=True)
+class HourlyOhlcvRow:
+    """One complete Yahoo Finance hourly OHLCV observation."""
+
+    timestamp: datetime
+    symbol: str
+    open_price: float
+    high_price: float
+    low_price: float
+    close_price: float
+    volume: int
 
 
 class MarketDataPartitionError(DataSdkError):
@@ -79,7 +93,7 @@ class MarketDataTransform(DatasetTransform):
             raise MarketDataPartitionError(
                 "Market-data materialization requires at least one requested output partition."
             )
-        rows: list[tuple[object, ...]] = []
+        rows: list[HourlyOhlcvRow] = []
         for symbol in self.symbols:
             for start_date, end_date in _contiguous_date_ranges(requested_days):
                 try:
@@ -104,9 +118,7 @@ class MarketDataTransform(DatasetTransform):
                 "Yahoo Finance returned no hourly data for any configured symbol "
                 f"({', '.join(self.symbols)})."
             )
-        return _with_market_session(
-            self.spark.createDataFrame(rows, schema=OHLCV_SCHEMA)
-        )
+        return _with_market_session(_market_data_frame(self.spark, rows))
 
 
 def _contiguous_date_ranges(partitions: list[date]) -> list[tuple[date, date]]:
@@ -128,21 +140,17 @@ def fetch_hourly_ohlcv(
     spark: SparkSession, symbol: str, *, start_date: date, end_date: date
 ) -> DataFrame:
     """Fetch one symbol's extended-hours bars into a typed Spark DataFrame."""
-    return _with_market_session(
-        spark.createDataFrame(
-            fetch_hourly_ohlcv_rows(
-                symbol,
-                start_date=start_date,
-                end_date=end_date,
-            ),
-            schema=OHLCV_SCHEMA,
-        )
+    rows = fetch_hourly_ohlcv_rows(
+        symbol,
+        start_date=start_date,
+        end_date=end_date,
     )
+    return _with_market_session(_market_data_frame(spark, rows))
 
 
 def fetch_hourly_ohlcv_rows(
     symbol: str, *, start_date: date, end_date: date
-) -> list[tuple[object, ...]]:
+) -> list[HourlyOhlcvRow]:
     """Fetch one symbol's complete extended-hours OHLCV rows from Yahoo Finance."""
     normalized = symbol.upper()
     rows = _yahoo_chart_rows(
@@ -176,8 +184,8 @@ def _request_yahoo_chart(
 
 def _yahoo_chart_rows(
     payload: dict[str, Any], symbol: str
-) -> list[tuple[object, ...]]:
-    """Validate Yahoo chart JSON and convert complete bars into typed row tuples."""
+) -> list[HourlyOhlcvRow]:
+    """Validate Yahoo chart JSON and convert complete bars into typed OHLCV rows."""
     chart = payload.get("chart")
     if not isinstance(chart, dict):
         raise YahooFinancePayloadError(
@@ -233,14 +241,14 @@ def _yahoo_chart_rows(
             f"{len(timestamps)}."
         )
     return [
-        (
-            datetime.fromtimestamp(timestamp, tz=UTC),
-            symbol,
-            float(open_),
-            float(high),
-            float(low),
-            float(close),
-            int(volume),
+        HourlyOhlcvRow(
+            timestamp=datetime.fromtimestamp(timestamp, tz=UTC),
+            symbol=symbol,
+            open_price=float(open_),
+            high_price=float(high),
+            low_price=float(low),
+            close_price=float(close),
+            volume=int(volume),
         )
         for timestamp, open_, high, low, close, volume in zip(
             timestamps,
@@ -253,6 +261,27 @@ def _yahoo_chart_rows(
         )
         if None not in (timestamp, open_, high, low, close, volume)
     ]
+
+
+def _market_data_frame(
+    spark: SparkSession, rows: list[HourlyOhlcvRow]
+) -> DataFrame:
+    """Convert explicitly typed OHLCV rows to the fixed Spark schema."""
+    return spark.createDataFrame(
+        [
+            {
+                "timestamp": row.timestamp,
+                "symbol": row.symbol,
+                "Open": row.open_price,
+                "High": row.high_price,
+                "Low": row.low_price,
+                "Close": row.close_price,
+                "Volume": row.volume,
+            }
+            for row in rows
+        ],
+        schema=OHLCV_SCHEMA,
+    )
 
 
 def _with_market_session(frame: DataFrame) -> DataFrame:
