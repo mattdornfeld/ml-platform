@@ -12,5 +12,6 @@ datasets:
     argument_name: market_data
     # Use one preceding daily market-data partition for lineage.
     num_lookback_partitions: 1
+    num_lookahead_partitions: 0
 transform: ml_platform.data_sdk.LogReturnTransform
 description: One-bar close-to-close log return.

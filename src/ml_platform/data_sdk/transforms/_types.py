@@ -131,6 +131,10 @@ class DatasetDependency(BaseConfig):
         ge=0,
         description="Number of preceding dataset partitions required for each output partition.",
     )
+    num_lookahead_partitions: int = Field(
+        ge=0,
+        description="Number of following dataset partitions required for each output partition.",
+    )
 
     @property
     def id(self) -> str:
@@ -154,6 +158,7 @@ class DatasetReference:
     name: str
     version: int
     num_lookback_partitions: int
+    num_lookahead_partitions: int
 
     @property
     def id(self) -> str:

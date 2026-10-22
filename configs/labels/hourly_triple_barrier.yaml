@@ -1,6 +1,6 @@
 # Barriers are trailing-volatility multiples calculated from hourly log returns.
 name: hourly_triple_barrier
-version: 1
+version: 2
 description: Triple-barrier long-short labels from hourly market data.
 dtype: int
 frequency: daily
@@ -11,6 +11,7 @@ datasets:
     dataset_type: market_data
     argument_name: market_data
     num_lookback_partitions: 1
+    num_lookahead_partitions: 1
 transform: ml_platform.data_sdk.TripleBarrierLabelTransform
 parameters:
   horizon_bars: 24

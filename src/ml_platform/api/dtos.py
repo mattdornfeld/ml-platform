@@ -22,7 +22,11 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
 class _ApiModel(BaseConfig):
     """HTTP DTO base retaining JSON coercion while inheriting common safeguards."""
 
-    model_config = ConfigDict(strict=False, frozen=False)
+    model_config = ConfigDict(
+        strict=False,
+        frozen=False,
+        validate_by_name=True,
+    )
 
 
 class JobType(StrEnum):
@@ -119,6 +123,7 @@ class FeatureDatasetDependency(_ApiModel):
     dataset_type: DatasetType
     argument_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     num_lookback_partitions: int = Field(ge=0)
+    num_lookahead_partitions: int = Field(ge=0)
 
 
 class FeatureCreateRequest(_ApiModel):
@@ -161,6 +166,16 @@ class FeatureCreateRequest(_ApiModel):
 
 class FeatureResponse(FeatureCreateRequest):
     """A persisted feature definition."""
+
+    created_at: datetime
+
+
+class LabelCreateRequest(FeatureCreateRequest):
+    """Payload for registering an immutable, normalized label definition."""
+
+
+class LabelResponse(LabelCreateRequest):
+    """A persisted label definition."""
 
     created_at: datetime
 
@@ -208,6 +223,12 @@ class FeaturePartitionMaterializationRequest(PartitionMaterializationRequest):
     """Feature request with upstream-aware idempotency behavior."""
 
     mode: FeatureMaterializationMode = FeatureMaterializationMode.ENSURE_CURRENT
+
+
+class LabelPartitionMaterializationRequest(
+    FeaturePartitionMaterializationRequest
+):
+    """Label request with upstream-aware idempotency behavior."""
 
 
 class JobTarget(_ApiModel):
