@@ -215,7 +215,7 @@ FEATURE_VALIDATION = {
     "invalid_dependency": {
         "summary": "Dependency versions must be positive and lookbacks non-negative",
         "value": validation_example(
-            ["body", "datasets", 0, "num_lookback_partitions"],
+            ["body", "datasets", 0, "input_window", "lookback_partitions"],
             "Input should be greater than or equal to 0",
             "greater_than_equal",
             -1,
@@ -654,15 +654,26 @@ def get_feature(
             )
         cursor.execute(
             """SELECT dependencies.dataset_name AS name, dependencies.dataset_version AS version,
-            datasets.dataset_type, dependencies.argument_name, dependencies.num_lookback_partitions,
-            dependencies.num_lookahead_partitions
+            datasets.dataset_type, dependencies.argument_name, dependencies.num_lookback_partitions
             FROM feature_dataset_dependencies AS dependencies
             JOIN datasets ON datasets.name = dependencies.dataset_name AND datasets.version = dependencies.dataset_version
             WHERE dependencies.feature_name = %s AND dependencies.feature_version = %s
             ORDER BY dependencies.dataset_name, dependencies.dataset_version""",
             (name, version),
         )
-        feature["datasets"] = list(cursor.fetchall())
+        feature["datasets"] = [
+            {
+                **{
+                    key: value
+                    for key, value in dependency.items()
+                    if key != "num_lookback_partitions"
+                },
+                "input_window": {
+                    "lookback_partitions": dependency["num_lookback_partitions"]
+                },
+            }
+            for dependency in cursor.fetchall()
+        ]
         cursor.execute(
             """SELECT DISTINCT ON (request.timestamp) request.partition_id, request.timestamp, request.status,
                 request.created_at, request.updated_at, receipt.content_hash, receipt.snapshot_id
@@ -767,16 +778,15 @@ def create_feature(
             for dependency in payload.datasets:
                 cursor.execute(
                     """INSERT INTO feature_dataset_dependencies
-                    (feature_name, feature_version, dataset_name, dataset_version, argument_name, num_lookback_partitions, num_lookahead_partitions)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (feature_name, feature_version, dataset_name, dataset_version, argument_name, num_lookback_partitions)
+                    VALUES (%s, %s, %s, %s, %s, %s)""",
                     (
                         payload.name,
                         payload.version,
                         dependency.name,
                         dependency.version,
                         dependency.argument_name,
-                        dependency.num_lookback_partitions,
-                        dependency.num_lookahead_partitions,
+                        dependency.input_window.lookback_partitions,
                     ),
                 )
         connection.commit()
@@ -1161,7 +1171,28 @@ def get_label(
             ORDER BY dependencies.dataset_name, dependencies.dataset_version""",
             (name, version),
         )
-        label["datasets"] = list(cursor.fetchall())
+        label["datasets"] = [
+            {
+                **{
+                    key: value
+                    for key, value in dependency.items()
+                    if key
+                    not in {
+                        "num_lookback_partitions",
+                        "num_lookahead_partitions",
+                    }
+                },
+                "input_window": {
+                    "lookback_partitions": dependency[
+                        "num_lookback_partitions"
+                    ],
+                    "lookahead_partitions": dependency[
+                        "num_lookahead_partitions"
+                    ],
+                },
+            }
+            for dependency in cursor.fetchall()
+        ]
         cursor.execute(
             """SELECT DISTINCT ON (request.timestamp) request.partition_id,
             request.timestamp, request.status, request.created_at, request.updated_at,
@@ -1245,8 +1276,8 @@ def create_label(
                         dependency.name,
                         dependency.version,
                         dependency.argument_name,
-                        dependency.num_lookback_partitions,
-                        dependency.num_lookahead_partitions,
+                        dependency.input_window.lookback_partitions,
+                        dependency.input_window.lookahead_partitions,
                     ),
                 )
         connection.commit()

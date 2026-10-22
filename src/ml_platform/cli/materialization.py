@@ -117,21 +117,9 @@ def _dataset_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
 
 def _feature_payload(config: dict[str, Any]) -> dict[str, Any]:
     """Validate one feature YAML mapping and convert it to the API request shape."""
-    values = FeatureConfig.model_validate_json(
+    return FeatureConfig.model_validate_json(
         json.dumps(config, default=str)
     ).model_dump(mode="json")
-    values["datasets"] = [
-        {
-            "name": dataset["name"],
-            "version": dataset["version"],
-            "dataset_type": dataset["dataset_type"],
-            "argument_name": dataset["argument_name"],
-            "num_lookback_partitions": dataset["num_lookback_partitions"],
-            "num_lookahead_partitions": dataset["num_lookahead_partitions"],
-        }
-        for dataset in values["datasets"]
-    ]
-    return values
 
 
 def _feature_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:

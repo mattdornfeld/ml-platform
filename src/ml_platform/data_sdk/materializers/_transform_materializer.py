@@ -41,7 +41,7 @@ from ml_platform.data_sdk.transforms._types import (
     Dataset,
     DatasetReference,
     DataType,
-    FeatureDatasetDependency,
+    DatasetDependency,
     FeatureKey,
     PartitionType,
 )
@@ -164,7 +164,7 @@ class TransformMaterializer[
         )
 
     @staticmethod
-    def _dataset_table_identifier(dataset: FeatureDatasetDependency) -> str:
+    def _dataset_table_identifier(dataset: DatasetDependency) -> str:
         """Return the Iceberg table identifier for one declared input dataset."""
         return IcebergTable.id_for(
             MaterializerConfig.iceberg_catalog(),
@@ -177,7 +177,7 @@ class TransformMaterializer[
     def _planned_dataset(
         spark: SparkSession,
         output_partitions: list[MaterializerPartition],
-        dataset: FeatureDatasetDependency,
+        dataset: DatasetDependency,
     ) -> DataFrame:
         """Load exactly the snapshots and partitions pinned for one input dataset."""
         planned_partitions = {
@@ -231,12 +231,7 @@ class TransformMaterializer[
                 spark, config.partitions, dataset
             )
             injected_datasets[dataset.argument_name] = Dataset(
-                metadata=DatasetReference(
-                    dataset.name,
-                    dataset.version,
-                    dataset.num_lookback_partitions,
-                    dataset.num_lookahead_partitions,
-                ),
+                metadata=DatasetReference(dataset.name, dataset.version),
                 frame=data_frame,
             )
         return injected_datasets

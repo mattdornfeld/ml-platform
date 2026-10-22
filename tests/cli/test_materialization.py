@@ -33,8 +33,8 @@ datasets:
     version: 2
     dataset_type: market_data
     argument_name: market_data
-    num_lookback_partitions: 1
-    num_lookahead_partitions: 0
+    input_window:
+      lookback_partitions: 1
 transform: ml_platform.data_sdk.LogReturnTransform
 description: Returns
 validations:
@@ -82,8 +82,7 @@ validations:
                     "version": 2,
                     "dataset_type": "market_data",
                     "argument_name": "market_data",
-                    "num_lookback_partitions": 1,
-                    "num_lookahead_partitions": 0,
+                    "input_window": {"lookback_partitions": 1},
                 }
             ],
         )

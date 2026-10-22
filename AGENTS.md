@@ -27,3 +27,4 @@
 - Do not use `typing.cast` without explicit user approval. Prefer generics, protocols, type guards, or stronger interfaces that preserve the concrete type.
 
 - Explicitly model external-data and transformation outputs with named, strongly typed classes rather than anonymous broad containers such as `tuple[object, ...]`.
+- Ask the user before changing a public API contract, including endpoint shapes, API DTOs, or user-facing configuration schemas.

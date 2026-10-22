@@ -28,6 +28,7 @@ from ml_platform.data_sdk.transforms._types import (
     Dataset,
     DatasetType,
     FeatureDatasetDependency,
+    FeatureInputWindow,
 )
 from ml_platform.data_sdk.utils import record
 
@@ -90,8 +91,7 @@ class PlannedInputTest(unittest.TestCase):
                 version=3,
                 dataset_type=DatasetType.MARKET_DATA,
                 argument_name="market_data",
-                num_lookback_partitions=0,
-                num_lookahead_partitions=0,
+                input_window=FeatureInputWindow(lookback_partitions=0),
             ),
         )
 
@@ -114,8 +114,7 @@ class PlannedInputTest(unittest.TestCase):
                     version=3,
                     dataset_type=DatasetType.MARKET_DATA,
                     argument_name="market_data",
-                    num_lookback_partitions=0,
-                    num_lookahead_partitions=0,
+                    input_window=FeatureInputWindow(lookback_partitions=0),
                 ),
             )
 
@@ -140,16 +139,14 @@ class PlannedInputTest(unittest.TestCase):
                         "version": 1,
                         "dataset_type": DatasetType.MARKET_DATA,
                         "argument_name": "prices",
-                        "num_lookback_partitions": 1,
-                        "num_lookahead_partitions": 0,
+                        "input_window": {"lookback_partitions": 1},
                     },
                     {
                         "name": "company_facts",
                         "version": 2,
                         "dataset_type": DatasetType.MARKET_DATA,
                         "argument_name": "fundamentals",
-                        "num_lookback_partitions": 0,
-                        "num_lookahead_partitions": 0,
+                        "input_window": {"lookback_partitions": 0},
                     },
                 ],
                 "partitions": [
@@ -226,8 +223,7 @@ class TransformMaterializerTest(unittest.TestCase):
                         "version": 3,
                         "dataset_type": DatasetType.MARKET_DATA,
                         "argument_name": "market_data",
-                        "num_lookback_partitions": 1,
-                        "num_lookahead_partitions": 0,
+                        "input_window": {"lookback_partitions": 1},
                     }
                 ],
                 "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",

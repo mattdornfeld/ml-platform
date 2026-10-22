@@ -115,7 +115,7 @@ class PartitionType(StrEnum):
 
 
 class DatasetDependency(BaseConfig):
-    """Immutable declared dataset dependency for a derived materialization."""
+    """Immutable declared dataset identity for a derived materialization."""
 
     name: str = Field(
         pattern=r"^[a-z][a-z0-9_]*$",
@@ -127,13 +127,9 @@ class DatasetDependency(BaseConfig):
     dataset_type: DatasetType = Field(
         description="Kind of upstream dataset used to resolve its Iceberg namespace."
     )
-    num_lookback_partitions: int = Field(
-        ge=0,
-        description="Number of preceding dataset partitions required for each output partition.",
-    )
-    num_lookahead_partitions: int = Field(
-        ge=0,
-        description="Number of following dataset partitions required for each output partition.",
+    argument_name: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Transform constructor argument receiving this dataset.",
     )
 
     @property
@@ -142,12 +138,37 @@ class DatasetDependency(BaseConfig):
         return f"{self.name}_v{self.version}"
 
 
-class FeatureDatasetDependency(DatasetDependency):
-    """A declared dataset mapped to one feature transform constructor argument."""
+class FeatureInputWindow(BaseConfig):
+    """Historical source partitions available to a point-in-time feature."""
 
-    argument_name: str = Field(
-        pattern=r"^[a-z][a-z0-9_]*$",
-        description="Feature transform constructor argument receiving this dataset.",
+    lookback_partitions: int = Field(
+        ge=0,
+        description="Number of preceding source partitions required by the feature.",
+    )
+
+
+class LabelInputWindow(FeatureInputWindow):
+    """Historical and realized-outcome partitions required by one label."""
+
+    lookahead_partitions: int = Field(
+        ge=0,
+        description="Number of following source partitions required by the label.",
+    )
+
+
+class FeatureDatasetDependency(DatasetDependency):
+    """A point-in-time dataset dependency for a feature transform."""
+
+    input_window: FeatureInputWindow = Field(
+        description="Historical source window available to this feature."
+    )
+
+
+class LabelDatasetDependency(DatasetDependency):
+    """A realized-outcome dataset dependency for a label transform."""
+
+    input_window: LabelInputWindow = Field(
+        description="Historical and future source windows required by this label."
     )
 
 
@@ -157,8 +178,6 @@ class DatasetReference:
 
     name: str
     version: int
-    num_lookback_partitions: int
-    num_lookahead_partitions: int
 
     @property
     def id(self) -> str:

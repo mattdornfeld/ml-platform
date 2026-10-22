@@ -393,7 +393,7 @@ class JobScheduler:
         ):
             cursor.execute(
                 """SELECT features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters,
-                json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'argument_name', dependencies.argument_name, 'num_lookback_partitions', dependencies.num_lookback_partitions, 'num_lookahead_partitions', dependencies.num_lookahead_partitions)) AS datasets,
+                json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'argument_name', dependencies.argument_name, 'input_window', jsonb_build_object('lookback_partitions', dependencies.num_lookback_partitions))) AS datasets,
                 (SELECT json_agg(json_build_object(
                     'partition_id', request.partition_id,
                     'timestamp', request.timestamp,
@@ -451,7 +451,7 @@ class JobScheduler:
         ):
             cursor.execute(
                 """SELECT labels.name, labels.version, labels.dtype, labels.frequency, labels.feature_keys, labels.validations, labels.transform, labels.description, labels.parameters,
-                json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'argument_name', dependencies.argument_name, 'num_lookback_partitions', dependencies.num_lookback_partitions, 'num_lookahead_partitions', dependencies.num_lookahead_partitions)) AS datasets,
+                json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'argument_name', dependencies.argument_name, 'input_window', jsonb_build_object('lookback_partitions', dependencies.num_lookback_partitions, 'lookahead_partitions', dependencies.num_lookahead_partitions))) AS datasets,
                 (SELECT json_agg(json_build_object(
                     'partition_id', request.partition_id,
                     'timestamp', request.timestamp,

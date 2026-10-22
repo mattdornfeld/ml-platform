@@ -17,6 +17,7 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
 from ml_platform.data_sdk.transforms._types import (
     DatasetType,
     FeatureDatasetDependency,
+    LabelDatasetDependency,
     FeatureKey,
     PartitionType,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "FeatureDatasetConfig",
     "FeatureKey",
     "LabelConfig",
+    "LabelDatasetDependency",
     "MarketDataConfig",
     "PartitionType",
     "RunFrequency",
@@ -161,7 +163,7 @@ class TransformConfig(DataConfig):
         min_length=1,
         description="Ordered entity-key columns that identify each transform row.",
     )
-    datasets: list[FeatureDatasetDependency] = Field(
+    datasets: list[FeatureDatasetDependency | LabelDatasetDependency] = Field(
         min_length=1,
         description="Versioned datasets mapped to transform constructor arguments.",
     )
@@ -222,9 +224,33 @@ class LabelConfig(TransformConfig):
         description="Cadence of the label's materialized partitions.",
     )
 
+    @model_validator(mode="after")
+    def validate_label_input_windows(self) -> "LabelConfig":
+        """Require each label input to declare its realized-outcome window."""
+        if any(
+            not isinstance(dataset, LabelDatasetDependency)
+            for dataset in self.datasets
+        ):
+            raise TransformDependencyConfigurationError(
+                "Label datasets must declare lookback and lookahead partitions."
+            )
+        return self
+
 
 class FeatureConfig(TransformConfig):
     """Configuration for a materializable feature resource."""
+
+    @model_validator(mode="after")
+    def validate_feature_input_windows(self) -> "FeatureConfig":
+        """Forbid future source partitions in point-in-time feature definitions."""
+        if any(
+            not isinstance(dataset, FeatureDatasetDependency)
+            for dataset in self.datasets
+        ):
+            raise TransformDependencyConfigurationError(
+                "Feature datasets may declare only lookback partitions."
+            )
+        return self
 
 
 class MarketDataConfig(DatasetConfig):

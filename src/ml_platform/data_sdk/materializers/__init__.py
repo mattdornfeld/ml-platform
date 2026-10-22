@@ -51,6 +51,9 @@ from ml_platform.data_sdk.materializers._transform_materializer import (
 from ml_platform.data_sdk.transforms._types import (
     DatasetDependency,
     FeatureDatasetDependency,
+    FeatureInputWindow,
+    LabelDatasetDependency,
+    LabelInputWindow,
 )
 
 __all__ = [
@@ -63,6 +66,9 @@ __all__ = [
     "ExactColumnsValidation",
     "ExactColumnsValidationConfig",
     "FeatureDatasetDependency",
+    "FeatureInputWindow",
+    "LabelDatasetDependency",
+    "LabelInputWindow",
     "FeatureKeysFromInputValidationConfig",
     "FeatureMaterializationConfig",
     "FeatureMaterializer",

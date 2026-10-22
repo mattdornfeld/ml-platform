@@ -11,8 +11,8 @@ datasets:
     dataset_type: market_data
     argument_name: market_data
     # Market data is daily-partitioned; use seven preceding daily partitions.
-    num_lookback_partitions: 7
-    num_lookahead_partitions: 0
+    input_window:
+      lookback_partitions: 7
 transform: ml_platform.data_sdk.TrailingVolatilityTransform
 description: Seven-day trailing sample volatility of hourly log returns.
 parameters:
