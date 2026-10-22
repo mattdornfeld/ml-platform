@@ -1,6 +1,7 @@
 """Spark/Iceberg integration coverage for the shared materializer lifecycle."""
 
 import json
+import os
 from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +19,10 @@ from ml_platform.data_sdk.materializers import (
 from ml_platform.data_sdk.transforms._types import Dataset, DatasetReference
 
 
+@unittest.skipUnless(
+    os.environ.get("SPARK_ICEBERG_JARS"),
+    "Spark/Iceberg integration tests require SPARK_ICEBERG_JARS.",
+)
 class MaterializerLifecycleIntegrationTest(unittest.TestCase):
     """Verify runtime workers write and report actual Iceberg revisions."""
 

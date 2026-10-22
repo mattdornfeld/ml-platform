@@ -1,6 +1,7 @@
 """Spark and Iceberg coverage for market-data ingestion."""
 
 from datetime import date, datetime, timezone
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -35,6 +36,10 @@ def yahoo_payload() -> dict[str, object]:
     }
 
 
+@unittest.skipUnless(
+    os.environ.get("SPARK_ICEBERG_JARS"),
+    "Spark/Iceberg integration tests require SPARK_ICEBERG_JARS.",
+)
 class MarketDataIntegrationTest(unittest.TestCase):
     """Verify Spark frames are committed as readable Iceberg Parquet data."""
 

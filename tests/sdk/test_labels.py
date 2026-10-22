@@ -104,6 +104,10 @@ class TripleBarrierTransformTest(unittest.TestCase):
         self.assertIn(rows[0].label_value, {-1, 0, 1})
 
 
+@unittest.skipUnless(
+    os.environ.get("SPARK_ICEBERG_JARS"),
+    "Spark/Iceberg integration tests require SPARK_ICEBERG_JARS.",
+)
 class LabelsIntegrationTest(unittest.TestCase):
     """Verify labels are derived and persisted from a synthetic market table."""
 

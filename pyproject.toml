@@ -36,4 +36,25 @@ where = ["src"]
 [dependency-groups]
 dev = [
     "httpx2>=0.28",
+    "mypy>=2.4.0",
+    "pandas-stubs>=3.0.5.260914",
+    "pytest>=9.1.1",
+    "types-requests>=2.33.0.20261006",
 ]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = ["src"]
+explicit_package_bases = true
+plugins = ["pydantic.mypy"]
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["exchange_calendars", "pyarrow", "pyarrow.*", "torchvision"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]

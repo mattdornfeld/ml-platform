@@ -224,7 +224,9 @@ class JobScheduler:
                     ) AS has_older_conflict""",
                     (job_id,),
                 )
-                return not cursor.fetchone()["has_older_conflict"]
+                result = cursor.fetchone()
+                assert result is not None
+                return not result["has_older_conflict"]
 
     def _remove_admission_gate(self, application_name: str) -> None:
         """Release an API-eligible SparkApplication into Kueue resource admission."""
@@ -245,7 +247,11 @@ class JobScheduler:
             if error.status == 404:
                 return
             raise
-        state = application.get("status", {}).get("applicationState", {}).get("state")
+        if not isinstance(application, dict):
+            return
+        status = application.get("status")
+        application_state = status.get("applicationState") if isinstance(status, dict) else None
+        state = application_state.get("state") if isinstance(application_state, dict) else None
         if state in {"FAILED", "SUBMISSION_FAILED", "UNKNOWN"}:
             self._finish(job_id, "failed", job_type)
         elif state == "COMPLETED":
@@ -261,7 +267,8 @@ class JobScheduler:
                         f"SELECT EXISTS (SELECT 1 FROM {table} WHERE job_id = %s AND status <> 'created')",
                         (job_id,),
                     )
-                    if cursor.fetchone()[0]:
+                    result = cursor.fetchone()
+                    if result is not None and result[0]:
                         outcome = "failed"
                 if outcome == "failed":
                     cursor.execute(f"UPDATE {table} SET status = 'failed', updated_at = now() WHERE job_id = %s AND status = 'pending'", (job_id,))
