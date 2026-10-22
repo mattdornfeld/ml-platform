@@ -110,41 +110,6 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
             F.col("label_value").try_cast(self.config.dtype).alias("label_value"),
         )
 
-    def validate(self, frame: DataFrame, spark: SparkSession, transform: LabelTransform) -> None:
-        """Validate typed labels, requested partitions, and transform layout."""
-        partition_spec = transform.iceberg_partition_spec
-        expected_schema = (
-            "timestamp TIMESTAMP, "
-            f"{', '.join(f'{key} STRING' for key in self._feature_key_columns)}, "
-            f"label_value {self.config.dtype.upper()}"
-        )
-        expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[self.config.frequency]
-        partitioned = frame.withColumn(
-            "output_partition",
-            F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp")),
-        )
-        requested_partitions = spark.createDataFrame(
-            [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
-            "output_partition timestamp",
-        ).distinct()
-        self._validator.validate(
-            _LabelValidationInput(
-                frame=frame,
-                partitioned_frame=partitioned,
-                requested_partitions=requested_partitions,
-                partition_column="output_partition",
-                partition_interval=self._partition_interval(partition_spec),
-                exact_columns=frozenset({"timestamp", *self._feature_key_columns, "label_value"}),
-                non_null_columns=("timestamp", *self._feature_key_columns, "label_value"),
-                unique_key_columns=("timestamp", *self._feature_key_columns),
-                actual_schema=transform.iceberg_schema,
-                expected_schema=expected_schema,
-                actual_partition_spec=transform.iceberg_partition_spec,
-                expected_partition_spec=expected_partition_spec,
-            )
-        )
-
-
     def _row_digest(self) -> F.Column:
         """Hash the canonical persisted fields for one label row."""
         columns = ("timestamp", *self._feature_key_columns, "label_value")
@@ -244,6 +209,42 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
             self._load_transform(self.config.transform), self.config.parameters, self.datasets
         )
         return transform
+
+    def validate(self, frame: DataFrame, spark: SparkSession, transform: LabelTransform) -> None:
+        """Validate typed labels, requested partitions, and transform layout."""
+        partition_spec = transform.iceberg_partition_spec
+        expected_schema = (
+            "timestamp TIMESTAMP, "
+            f"{', '.join(f'{key} STRING' for key in self._feature_key_columns)}, "
+            f"label_value {self.config.dtype.upper()}"
+        )
+        expected_partition_spec = {"hourly": "hours(timestamp)", "daily": "days(timestamp)"}[self.config.frequency]
+        partitioned = frame.withColumn(
+            "output_partition",
+            F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp")),
+        )
+        requested_partitions = spark.createDataFrame(
+            [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
+            "output_partition timestamp",
+        ).distinct()
+        self._validator.validate(
+            _LabelValidationInput(
+                frame=frame,
+                partitioned_frame=partitioned,
+                requested_partitions=requested_partitions,
+                partition_column="output_partition",
+                partition_interval=self._partition_interval(partition_spec),
+                exact_columns=frozenset({"timestamp", *self._feature_key_columns, "label_value"}),
+                non_null_columns=("timestamp", *self._feature_key_columns, "label_value"),
+                unique_key_columns=("timestamp", *self._feature_key_columns),
+                actual_schema=transform.iceberg_schema,
+                expected_schema=expected_schema,
+                actual_partition_spec=transform.iceberg_partition_spec,
+                expected_partition_spec=expected_partition_spec,
+            )
+        )
+
+
 
     def materialize(self, spark: SparkSession, transform: LabelTransform) -> DataFrame:
         """Return the configured transform's checkpointed label DataFrame."""

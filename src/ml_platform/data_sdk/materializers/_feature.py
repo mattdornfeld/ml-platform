@@ -576,6 +576,12 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
             F.col(_FEATURE_VALUE_COLUMN).try_cast(self.config.dtype).alias(_FEATURE_VALUE_COLUMN),
         )
 
+    def _create_transform(self, spark: SparkSession) -> FeatureTransform:
+        """Build the feature transform from the pinned dataset revisions."""
+        datasets = self._load_planned_datasets(spark)
+        transform = self._instantiate_feature_transform(datasets)
+        return transform
+
     def validate(self, frame: DataFrame, spark: SparkSession, transform: FeatureTransform) -> None:
         """Validate typed feature values, partitions, input keys, and transform layout."""
         partition_spec = transform.iceberg_partition_spec
@@ -609,11 +615,6 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         )
 
 
-    def _create_transform(self, spark: SparkSession) -> FeatureTransform:
-        """Build the feature transform from the pinned dataset revisions."""
-        datasets = self._load_planned_datasets(spark)
-        transform = self._instantiate_feature_transform(datasets)
-        return transform
 
     def materialize(self, spark: SparkSession, transform: FeatureTransform) -> DataFrame:
         """Produce only the requested feature partitions."""

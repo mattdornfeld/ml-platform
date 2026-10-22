@@ -109,29 +109,6 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
             ],
         )
 
-    def validate(self, frame: DataFrame, spark: SparkSession, transform: DatasetTransform) -> None:
-        """Require complete, unique market rows in only the requested partitions."""
-        partition_spec = transform.iceberg_partition_spec
-        requested_partitions = spark.createDataFrame(
-            [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
-            "output_partition timestamp",
-        ).distinct()
-        partitioned = frame.withColumn(
-            "output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp"))
-        )
-        self._validator.validate(
-            _DatasetValidationInput(
-                frame=frame,
-                partitioned_frame=partitioned,
-                requested_partitions=requested_partitions,
-                partition_column="output_partition",
-                partition_interval=self._partition_interval(partition_spec),
-                exact_columns=frozenset(_CONTENT_HASH_COLUMNS),
-                non_null_columns=_CONTENT_HASH_COLUMNS,
-                unique_key_columns=_MERGE_KEYS,
-            )
-        )
-
     def _write_frame(self, frame: DataFrame) -> None:
         """Cluster source rows by day before the base class merges them."""
         source = (
@@ -161,6 +138,30 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
                 )
             case unsupported_type:
                 raise NotImplementedError(f"Unsupported dataset type: {unsupported_type}.")
+
+    def validate(self, frame: DataFrame, spark: SparkSession, transform: DatasetTransform) -> None:
+        """Require complete, unique market rows in only the requested partitions."""
+        partition_spec = transform.iceberg_partition_spec
+        requested_partitions = spark.createDataFrame(
+            [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
+            "output_partition timestamp",
+        ).distinct()
+        partitioned = frame.withColumn(
+            "output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp"))
+        )
+        self._validator.validate(
+            _DatasetValidationInput(
+                frame=frame,
+                partitioned_frame=partitioned,
+                requested_partitions=requested_partitions,
+                partition_column="output_partition",
+                partition_interval=self._partition_interval(partition_spec),
+                exact_columns=frozenset(_CONTENT_HASH_COLUMNS),
+                non_null_columns=_CONTENT_HASH_COLUMNS,
+                unique_key_columns=_MERGE_KEYS,
+            )
+        )
+
 
     def materialize(self, spark: SparkSession, transform: DatasetTransform) -> DataFrame:
         """Construct the dataset DataFrame for the requested partitions."""

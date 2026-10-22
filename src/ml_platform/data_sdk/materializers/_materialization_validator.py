@@ -164,24 +164,6 @@ class MaterializationValidator:
         """Freeze the validation policy supplied by the materializer configuration."""
         object.__setattr__(self, "_validations", tuple(validations))
 
-    def validate(self, validation_input: _ValidationInput) -> None:
-        """Apply mandatory and declared invariants for one resource output frame."""
-        match validation_input:
-            case _CompletionValidationInput():
-                self._validate_completion(validation_input)
-            case _DatasetValidationInput():
-                self._validate_partitioned_output(validation_input)
-            case _FeatureValidationInput():
-                self._validate_partitioned_output(validation_input)
-                self._validate_layout(validation_input)
-                self._validate_finite_feature_value(validation_input)
-                self._validate_feature_keys_from_inputs(validation_input)
-            case _LabelValidationInput():
-                self._validate_partitioned_output(validation_input)
-                self._validate_layout(validation_input)
-            case unsupported_input:
-                assert_never(unsupported_input)
-
     def _validate_completion(self, validation_input: _CompletionValidationInput) -> None:
         """Require committed rows for every partition selected by an all-partitions row rule."""
         requires_rows = any(
@@ -348,3 +330,21 @@ class MaterializationValidator:
         session_close = calendar.session_close(session).to_pydatetime()
         partition_end = partition_start + partition_interval
         return partition_start < session_close and partition_end > session_open
+
+    def validate(self, validation_input: _ValidationInput) -> None:
+        """Apply mandatory and declared invariants for one resource output frame."""
+        match validation_input:
+            case _CompletionValidationInput():
+                self._validate_completion(validation_input)
+            case _DatasetValidationInput():
+                self._validate_partitioned_output(validation_input)
+            case _FeatureValidationInput():
+                self._validate_partitioned_output(validation_input)
+                self._validate_layout(validation_input)
+                self._validate_finite_feature_value(validation_input)
+                self._validate_feature_keys_from_inputs(validation_input)
+            case _LabelValidationInput():
+                self._validate_partitioned_output(validation_input)
+                self._validate_layout(validation_input)
+            case unsupported_input:
+                assert_never(unsupported_input)

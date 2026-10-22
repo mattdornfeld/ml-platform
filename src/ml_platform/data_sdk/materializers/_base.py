@@ -172,16 +172,6 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         cls(config)()
 
     @classmethod
-    def main(cls) -> None:
-        """Run one serialized materialization job from the standard CLI contract."""
-        parser = argparse.ArgumentParser(description=f"Materialize one {cls.__name__} job.")
-        parser.add_argument("--config-json", required=True, help="Serialized materializer configuration.")
-        args = parser.parse_args()
-        config = cls._config_from_json(args.config_json)
-        cls._run_config(config)
-        print("Materialization completed.")
-
-    @classmethod
     def _iceberg_table_identifier(cls, name: str, version: int) -> str:
         """Resolve an immutable resource version to its Iceberg identifier."""
         namespace = cls.iceberg_namespace
@@ -299,10 +289,6 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
     def _validator(self) -> MaterializationValidator:
         """Return the validation contract bound to this materialization job."""
         return MaterializationValidator(self.config.validations)
-
-    @abstractmethod
-    def validate(self, frame: DataFrame, spark: SparkSession, transform: DataTransform) -> None:
-        """Allow resource materializers to apply the shared validation policy before writing."""
 
     def _write_frame(self, frame: DataFrame) -> None:
         """Merge keyed rows or replace touched Iceberg partitions atomically."""
@@ -477,8 +463,24 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
         return schema, partition_spec
 
     @abstractmethod
+    def validate(self, frame: DataFrame, spark: SparkSession, transform: DataTransform) -> None:
+        """Allow resource materializers to apply the shared validation policy before writing."""
+
+
+    @abstractmethod
     def materialize(self, spark: SparkSession, transform: DataTransform) -> DataFrame:
         """Construct the resource DataFrame without writing or reporting it."""
+
+    @classmethod
+    def main(cls) -> None:
+        """Run one serialized materialization job from the standard CLI contract."""
+        parser = argparse.ArgumentParser(description=f"Materialize one {cls.__name__} job.")
+        parser.add_argument("--config-json", required=True, help="Serialized materializer configuration.")
+        args = parser.parse_args()
+        config = cls._config_from_json(args.config_json)
+        cls._run_config(config)
+        print("Materialization completed.")
+
 
     def __call__(self) -> None:
         """Execute the configured materialization and always close its Spark session."""
