@@ -14,6 +14,7 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
     MaterializationValidator,
     MinimumRowsValidationConfig,
     TemporalFilterConfig,
+    XnysRegularSessionTemporalFilterConfig,
     Validation,
     ValidationConfig,
 )
@@ -32,6 +33,6 @@ __all__ = [
     "AllPartitionsTemporalFilterConfig", "FeatureKeysFromInputValidationConfig",
     "FiniteFeatureValueValidationConfig", "MaterializationValidator", "MaterializerConfig",
     "MaterializerPartition", "MinimumRowsValidationConfig", "TemporalFilterConfig", "Validation",
-    "ValidationConfig",
+    "ValidationConfig", "XnysRegularSessionTemporalFilterConfig",
     "PartionDependency", "WriteMode",
 ]

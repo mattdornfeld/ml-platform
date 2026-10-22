@@ -1,5 +1,6 @@
 """Spark worker for one API-submitted feature materialization job."""
 from dataclasses import dataclass
+from datetime import timedelta
 from importlib import import_module
 from inspect import Parameter, signature
 import json
@@ -482,7 +483,13 @@ class FeatureMaterializer(Materializer[FeatureMaterializationConfig]):
         validator.unique_key(frame, ("timestamp", *feature_keys))
 
         partitioned = frame.withColumn("output_partition", FeatureMaterializer._partition_key(config))
-        validator.partition_coverage(partitioned, requested_partitions, partition_column="output_partition")
+        partition_interval = timedelta(days=1) if config.frequency == "daily" else timedelta(hours=1)
+        validator.partition_coverage(
+            partitioned,
+            requested_partitions,
+            partition_column="output_partition",
+            partition_interval=partition_interval,
+        )
         validator.feature_keys_from_inputs(partitioned, feature_keys=feature_keys, datasets=datasets)
 
 

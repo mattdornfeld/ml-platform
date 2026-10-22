@@ -16,6 +16,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "kubernetes>=32.0",
     "simple-classproperty>=4.0.2",
+    "exchange-calendars>=4.13,<5",
 ]
 
 [project.scripts]

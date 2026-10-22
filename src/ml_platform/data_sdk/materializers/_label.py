@@ -136,7 +136,7 @@ class LabelMaterializer(Materializer[LabelMaterializationConfig]):
             [(self._partition_timestamp(partition.timestamp, partition_spec),) for partition in self.config.partitions],
             "output_partition timestamp",
         ).distinct()
-        self._validator.partition_coverage(partitioned, requested, partition_column="output_partition")
+        self._validator.partition_coverage(partitioned, requested, partition_column="output_partition", partition_interval=self._partition_interval(partition_spec))
 
     def _row_digest(self) -> F.Column:
         """Hash the canonical persisted fields for one label row."""

@@ -231,12 +231,12 @@ validations:
   - type: minimum_rows
     minimum_rows: 1
     temporal_filter:
-      type: all_partitions
+      type: xnys_regular_session
   - type: finite_feature_value
   - type: feature_keys_from_input
 ```
 
-`MaterializationValidator` is the shared pre-write contract for every materializer. It always validates required or exact columns, non-null persisted values, unique logical keys, unexpected output partitions, and static transform layout declarations. Each declared validation independently contributes its check. `minimum_rows` applies to each requested partition selected by its `temporal_filter`, which defaults to `all_partitions`; partitions outside that filter may complete empty. `finite_feature_value` rejects `NaN`, positive infinity, and negative infinity after the dtype cast. `feature_keys_from_input` rejects feature-key values that do not occur in the injected input datasets.
+`MaterializationValidator` is the shared pre-write contract for every materializer. It always validates required or exact columns, non-null persisted values, unique logical keys, unexpected output partitions, and static transform layout declarations. Each declared validation independently contributes its check. `minimum_rows` applies to each requested partition selected by its `temporal_filter`, which defaults to `all_partitions`; partitions outside that filter may complete empty. The implemented `xnys_regular_session` filter selects daily or hourly partitions that overlap a real XNYS regular session, including its holiday, daylight-saving, and early-close schedule. `finite_feature_value` rejects `NaN`, positive infinity, and negative infinity after the dtype cast. `feature_keys_from_input` rejects feature-key values that do not occur in the injected input datasets.
 
 ### Commit and completion
 

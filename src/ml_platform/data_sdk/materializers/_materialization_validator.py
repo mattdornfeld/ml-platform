@@ -2,7 +2,12 @@
 
 from abc import ABC
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
+
+import exchange_calendars as xcals
+from exchange_calendars import ExchangeCalendar
+import pandas as pd
 
 from pydantic import Field
 from pyspark.sql import DataFrame
@@ -27,7 +32,19 @@ class AllPartitionsTemporalFilterConfig(TemporalFilterConfig):
     )
 
 
-TemporalFilter = Annotated[AllPartitionsTemporalFilterConfig, Field(discriminator="type")]
+class XnysRegularSessionTemporalFilterConfig(TemporalFilterConfig):
+    """Select partitions that overlap an actual XNYS regular trading session."""
+
+    type: Literal["xnys_regular_session"] = Field(
+        default="xnys_regular_session",
+        description="Select partitions overlapping the XNYS regular trading session.",
+    )
+
+
+TemporalFilter = Annotated[
+    AllPartitionsTemporalFilterConfig | XnysRegularSessionTemporalFilterConfig,
+    Field(discriminator="type"),
+]
 
 
 class ValidationConfig(BaseConfig, ABC):
@@ -94,11 +111,49 @@ class MaterializationValidator:
         return [validation for validation in self.validations if isinstance(validation, validation_type)]
 
     @staticmethod
-    def _filtered_partitions(requested: DataFrame, filter_config: TemporalFilter, partition_column: str) -> DataFrame:
+    def _filtered_partitions(
+        requested: DataFrame,
+        filter_config: TemporalFilter,
+        partition_column: str,
+        partition_interval: timedelta,
+    ) -> DataFrame:
         """Return requested partitions selected by a statically declared temporal filter."""
         match filter_config:
             case AllPartitionsTemporalFilterConfig():
                 return requested.select(partition_column).distinct()
+            case XnysRegularSessionTemporalFilterConfig():
+                calendar = xcals.get_calendar("XNYS")
+                selected_timestamps = [
+                    row[partition_column]
+                    for row in requested.select(partition_column).distinct().collect()
+                    if MaterializationValidator._overlaps_xnys_regular_session(
+                        row[partition_column], partition_interval, calendar
+                    )
+                ]
+                return requested.sparkSession.createDataFrame(
+                    [(timestamp,) for timestamp in selected_timestamps],
+                    requested.schema,
+                )
+
+    @staticmethod
+    def _overlaps_xnys_regular_session(
+        partition_timestamp: datetime,
+        partition_interval: timedelta,
+        calendar: ExchangeCalendar,
+    ) -> bool:
+        """Return whether one UTC output-partition interval intersects an XNYS session."""
+        partition_start = (
+            partition_timestamp.replace(tzinfo=timezone.utc)
+            if partition_timestamp.tzinfo is None
+            else partition_timestamp.astimezone(timezone.utc)
+        )
+        session = pd.Timestamp(partition_start.date())
+        if not calendar.is_session(session):
+            return False
+        session_open = calendar.session_open(session).to_pydatetime()
+        session_close = calendar.session_close(session).to_pydatetime()
+        partition_end = partition_start + partition_interval
+        return partition_start < session_close and partition_end > session_open
 
     def requires_rows_for_all_partitions(self) -> bool:
         """Return whether every requested partition must contain rows after writing."""
@@ -140,7 +195,14 @@ class MaterializationValidator:
         if duplicates.limit(1).count():
             raise ValueError(f"{self.context} emitted duplicate ({', '.join(columns)}) rows.")
 
-    def partition_coverage(self, frame: DataFrame, requested: DataFrame, *, partition_column: str) -> None:
+    def partition_coverage(
+        self,
+        frame: DataFrame,
+        requested: DataFrame,
+        *,
+        partition_column: str,
+        partition_interval: timedelta,
+    ) -> None:
         """Reject unexpected output and apply each configured partition-level check."""
         requested_keys = requested.select(partition_column).distinct()
         emitted_keys = frame.select(partition_column).distinct()
@@ -151,7 +213,12 @@ class MaterializationValidator:
         counts = frame.groupBy(partition_column).count()
         for validation in self._configured(MinimumRowsValidationConfig):
             assert isinstance(validation, MinimumRowsValidationConfig)
-            selected = self._filtered_partitions(requested_keys, validation.temporal_filter, partition_column)
+            selected = self._filtered_partitions(
+                requested_keys,
+                validation.temporal_filter,
+                partition_column,
+                partition_interval,
+            )
             selected_counts = selected.join(counts, partition_column, "left").fillna({"count": 0})
             if selected_counts.where(F.col("count") < validation.minimum_rows).limit(1).count():
                 raise ValueError(

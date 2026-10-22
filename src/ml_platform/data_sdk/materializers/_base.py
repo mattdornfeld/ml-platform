@@ -3,7 +3,7 @@
 from abc import ABC, ABCMeta, abstractmethod
 import argparse
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from hashlib import sha256
 import json
@@ -326,6 +326,10 @@ class Materializer(ABC, Generic[Config], metaclass=AbstractClasspropertyMeta):
             .whenNotMatched().insertAll()
             .merge()
         )
+
+    def _partition_interval(self, partition_spec: str) -> timedelta:
+        """Return the fixed duration represented by one output partition."""
+        return timedelta(days=1) if self._partition_unit(partition_spec) == "day" else timedelta(hours=1)
 
     @staticmethod
     def _partition_unit(partition_spec: str) -> str:

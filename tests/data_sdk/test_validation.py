@@ -1,6 +1,6 @@
 """Spark validation behavior shared by materializer types."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import sys
 import unittest
@@ -13,6 +13,7 @@ from ml_platform.data_sdk.materializers import (
     MinimumRowsValidationConfig,
     FiniteFeatureValueValidationConfig,
     FeatureKeysFromInputValidationConfig,
+    XnysRegularSessionTemporalFilterConfig,
     MaterializationValidator,
 )
 from ml_platform.data_sdk.materializers._dataset import DatasetMaterializer
@@ -66,17 +67,43 @@ class MaterializerValidationTest(unittest.TestCase):
              ("2026-01-02", "AAA"), ("2026-01-02", "BBB")],
             "day string, symbol string",
         )
-        validator.partition_coverage(valid, requested, partition_column="day")
+        validator.partition_coverage(valid, requested, partition_column="day", partition_interval=timedelta(days=1))
         with self.assertRaisesRegex(ValueError, "fewer than 3 rows"):
             MaterializationValidator(
                 [MinimumRowsValidationConfig(minimum_rows=3)], "Feature transform"
-            ).partition_coverage(valid, requested, partition_column="day")
+            ).partition_coverage(valid, requested, partition_column="day", partition_interval=timedelta(days=1))
         missing = valid.where("day = '2026-01-01'")
         with self.assertRaisesRegex(ValueError, "fewer than 2 rows"):
-            validator.partition_coverage(missing, requested, partition_column="day")
+            validator.partition_coverage(missing, requested, partition_column="day", partition_interval=timedelta(days=1))
         extra = valid.unionByName(self.spark.createDataFrame([("2026-01-03", "AAA")], valid.schema))
         with self.assertRaisesRegex(ValueError, "requested partitions"):
-            validator.partition_coverage(extra, requested, partition_column="day")
+            validator.partition_coverage(extra, requested, partition_column="day", partition_interval=timedelta(days=1))
+
+    def test_xnys_regular_session_filter_selects_sessions_and_skips_closed_periods(self) -> None:
+        """XNYS recognizes holidays, regular session hours, and post-close hours."""
+        import exchange_calendars as xcals
+
+        calendar = xcals.get_calendar("XNYS")
+        self.assertFalse(
+            MaterializationValidator._overlaps_xnys_regular_session(
+                datetime(2026, 1, 1, tzinfo=timezone.utc), timedelta(days=1), calendar
+            )
+        )
+        self.assertTrue(
+            MaterializationValidator._overlaps_xnys_regular_session(
+                datetime(2026, 1, 2, tzinfo=timezone.utc), timedelta(days=1), calendar
+            )
+        )
+        self.assertTrue(
+            MaterializationValidator._overlaps_xnys_regular_session(
+                datetime(2026, 1, 2, 14, tzinfo=timezone.utc), timedelta(hours=1), calendar
+            )
+        )
+        self.assertFalse(
+            MaterializationValidator._overlaps_xnys_regular_session(
+                datetime(2026, 1, 2, 21, tzinfo=timezone.utc), timedelta(hours=1), calendar
+            )
+        )
 
     def test_dataset_rejects_duplicate_and_unrequested_rows(self) -> None:
         """Market rows may leave requested days empty but cannot mutate other days."""

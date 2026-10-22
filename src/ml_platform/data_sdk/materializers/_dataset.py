@@ -129,7 +129,7 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
         partitioned = frame.withColumn(
             "output_partition", F.date_trunc(self._partition_unit(partition_spec), F.col("timestamp"))
         )
-        self._validator.partition_coverage(partitioned, requested_partitions, partition_column="output_partition")
+        self._validator.partition_coverage(partitioned, requested_partitions, partition_column="output_partition", partition_interval=self._partition_interval(partition_spec))
 
     def _write_frame(self, frame: DataFrame) -> None:
         """Cluster source rows by day before the base class merges them."""
