@@ -51,7 +51,8 @@ class FeatureMaterializer(
     @property
     def validation_configs(self) -> tuple[ValidationConfig, ...]:
         """Add feature-specific input-key lineage validation."""
-        return super().validation_configs + (
+        return (
+            *super().validation_configs,
             FeatureKeysFromInputValidationConfig(
                 reason="Feature keys must occur in at least one input dataset.",
                 feature_keys=self._feature_key_columns,

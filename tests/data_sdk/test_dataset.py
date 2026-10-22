@@ -14,7 +14,9 @@ from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
 class DatasetWorkerTest(unittest.TestCase):
     """Verify the dataset worker dispatches a transform and declares its table."""
 
-    def config(self, dataset_type: str = "market_data") -> DatasetMaterializationConfig:
+    def config(
+        self, dataset_type: str = "market_data"
+    ) -> DatasetMaterializationConfig:
         """Build one strict dataset job configuration."""
         return DatasetMaterializationConfig.model_validate_json(
             json.dumps(
@@ -39,17 +41,24 @@ class DatasetWorkerTest(unittest.TestCase):
             )
         )
 
-    @patch("ml_platform.data_sdk.dataset_transforms._market_data.MarketDataTransform")
-    def test_market_data_dispatches_to_transform(self, transform: MagicMock) -> None:
+    @patch(
+        "ml_platform.data_sdk.dataset_transforms._market_data.MarketDataTransform"
+    )
+    def test_market_data_dispatches_to_transform(
+        self, transform: MagicMock
+    ) -> None:
         """The declared dataset type constructs MarketDataTransform with job partitions."""
         worker = DatasetMaterializer(self.config())
         worker._transform(MagicMock())
         self.assertEqual(transform.call_args.kwargs["symbols"], ["AAPL"])
         self.assertEqual(
-            transform.call_args.kwargs["partitions"][0].date().isoformat(), "2026-01-01"
+            transform.call_args.kwargs["partitions"][0].date().isoformat(),
+            "2026-01-01",
         )
 
-    def test_unsupported_dataset_type_is_rejected_by_configuration(self) -> None:
+    def test_unsupported_dataset_type_is_rejected_by_configuration(
+        self,
+    ) -> None:
         """Unknown dataset types cannot enter the materializer contract."""
         with self.assertRaises(ValueError):
             self.config("unsupported")

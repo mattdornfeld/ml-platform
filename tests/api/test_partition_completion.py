@@ -35,7 +35,9 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
 
     def setUp(self) -> None:
         with psycopg.connect(self.database_url) as connection:
-            connection.execute("TRUNCATE datasets, features, labels, jobs CASCADE")
+            connection.execute(
+                "TRUNCATE datasets, features, labels, jobs CASCADE"
+            )
             connection.execute(
                 "INSERT INTO datasets (name, version, dataset_type, config) VALUES ('prices', 1, 'market_data', '{}'::jsonb)"
             )
@@ -72,7 +74,8 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
                 "partition_id": self.partition_ids[index],
                 "resource_type": "dataset",
                 "row_count": index + 1,
-                "schema": schema or {"timestamp": "timestamp", "symbol": "string"},
+                "schema": schema
+                or {"timestamp": "timestamp", "symbol": "string"},
                 "content_hash": content_hash or f"hash-{index}",
                 "snapshot_id": 42,
                 "callback_token": token or f"token-{index}",
@@ -80,7 +83,9 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
         )
 
     def _complete(self, receipts: list[PartitionCompletionRequest]):
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+        with psycopg.connect(
+            self.database_url, row_factory=dict_row
+        ) as connection:
             return complete_partitions(receipts, connection)
 
     def _state(self) -> tuple[int, list[str], str]:
@@ -99,35 +104,50 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
             ).fetchone()[0]
         return count, statuses, job_status
 
-    def test_batch_commits_all_receipts_and_identical_retry_succeeds(self) -> None:
+    def test_batch_commits_all_receipts_and_identical_retry_succeeds(
+        self,
+    ) -> None:
         receipts = [self._receipt(0), self._receipt(1)]
         created = self._complete(receipts)
         retried = self._complete(receipts)
 
-        self.assertEqual([item.partition_id for item in created], self.partition_ids)
+        self.assertEqual(
+            [item.partition_id for item in created], self.partition_ids
+        )
         self.assertEqual([item.row_count for item in retried], [1, 2])
-        self.assertEqual(self._state(), (2, ["created", "created"], "succeeded"))
+        self.assertEqual(
+            self._state(), (2, ["created", "created"], "succeeded")
+        )
 
     def test_invalid_token_rolls_back_every_item(self) -> None:
         with self.assertRaises(HTTPException) as raised:
             self._complete([self._receipt(0), self._receipt(1, token="wrong")])
         self.assertEqual(raised.exception.status_code, 403)
-        self.assertEqual(self._state(), (0, ["pending", "pending"], "submitted"))
+        self.assertEqual(
+            self._state(), (0, ["pending", "pending"], "submitted")
+        )
 
     def test_mixed_schema_batch_rolls_back_every_item(self) -> None:
         with self.assertRaises(HTTPException) as raised:
             self._complete(
-                [self._receipt(0), self._receipt(1, schema={"timestamp": "string"})]
+                [
+                    self._receipt(0),
+                    self._receipt(1, schema={"timestamp": "string"}),
+                ]
             )
         self.assertEqual(raised.exception.status_code, 409)
-        self.assertEqual(self._state(), (0, ["pending", "pending"], "submitted"))
+        self.assertEqual(
+            self._state(), (0, ["pending", "pending"], "submitted")
+        )
 
     def test_database_error_after_first_insert_rolls_back_batch(self) -> None:
         """A late SQL failure cannot leave a partial completion receipt."""
         overflowing = self._receipt(1).model_copy(update={"row_count": 2**63})
         with self.assertRaises(psycopg.errors.NumericValueOutOfRange):
             self._complete([self._receipt(0), overflowing])
-        self.assertEqual(self._state(), (0, ["pending", "pending"], "submitted"))
+        self.assertEqual(
+            self._state(), (0, ["pending", "pending"], "submitted")
+        )
 
     def test_conflicting_retry_is_rejected(self) -> None:
         self._complete([self._receipt(0)])
@@ -136,21 +156,27 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
                 [self._receipt(0, content_hash="different"), self._receipt(1)]
             )
         self.assertEqual(raised.exception.status_code, 409)
-        self.assertEqual(self._state(), (1, ["created", "pending"], "submitted"))
+        self.assertEqual(
+            self._state(), (1, ["created", "pending"], "submitted")
+        )
 
     def test_existing_table_schema_conflict_is_rejected(self) -> None:
         self._complete([self._receipt(0)])
         with self.assertRaises(HTTPException) as raised:
             self._complete([self._receipt(1, schema={"timestamp": "string"})])
         self.assertEqual(raised.exception.status_code, 409)
-        self.assertEqual(self._state(), (1, ["created", "pending"], "submitted"))
+        self.assertEqual(
+            self._state(), (1, ["created", "pending"], "submitted")
+        )
 
     def test_duplicate_partition_id_is_rejected(self) -> None:
         receipt = self._receipt(0)
         with self.assertRaises(HTTPException) as raised:
             self._complete([receipt, receipt])
         self.assertEqual(raised.exception.status_code, 409)
-        self.assertEqual(self._state(), (0, ["pending", "pending"], "submitted"))
+        self.assertEqual(
+            self._state(), (0, ["pending", "pending"], "submitted")
+        )
 
     def _derived_request(self, resource_type: str) -> tuple[UUID, UUID]:
         """Create one feature or label request pinned to a completed dataset revision."""
@@ -203,7 +229,9 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
 
     def test_feature_receipt_preserves_pinned_dependency(self) -> None:
         partition_id, job_id = self._derived_request("feature")
-        receipt = self._derived_receipt("feature", partition_id, self.partition_ids[0])
+        receipt = self._derived_receipt(
+            "feature", partition_id, self.partition_ids[0]
+        )
         self._complete([receipt])
         self._complete([receipt])
         with psycopg.connect(self.database_url) as connection:
@@ -218,13 +246,19 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
         self.assertEqual(parent_id, self.partition_ids[0])
         self.assertEqual(status, "succeeded")
 
-    def test_label_receipt_rejects_wrong_plan_then_preserves_correct_plan(self) -> None:
+    def test_label_receipt_rejects_wrong_plan_then_preserves_correct_plan(
+        self,
+    ) -> None:
         partition_id, job_id = self._derived_request("label")
-        wrong = self._derived_receipt("label", partition_id, self.partition_ids[1])
+        wrong = self._derived_receipt(
+            "label", partition_id, self.partition_ids[1]
+        )
         with self.assertRaises(HTTPException) as raised:
             self._complete([wrong])
         self.assertEqual(raised.exception.status_code, 409)
-        correct = self._derived_receipt("label", partition_id, self.partition_ids[0])
+        correct = self._derived_receipt(
+            "label", partition_id, self.partition_ids[0]
+        )
         self._complete([correct])
         with psycopg.connect(self.database_url) as connection:
             parent_id = connection.execute(

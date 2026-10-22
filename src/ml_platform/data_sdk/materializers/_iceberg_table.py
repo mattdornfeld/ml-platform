@@ -8,9 +8,12 @@ from pathlib import Path
 from typing import assert_never
 
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
+from pyspark.sql import functions as spark_functions
+from pyspark.sql.column import Column
 
-from ml_platform.data_sdk.materializers.exceptions import MissingIcebergSnapshotError
+from ml_platform.data_sdk.materializers.exceptions import (
+    MissingIcebergSnapshotError,
+)
 from ml_platform.data_sdk.transforms._types import PartitionType
 
 
@@ -33,7 +36,9 @@ class IcebergTable:
     @property
     def id(self) -> str:
         """Return the fully-qualified immutable Iceberg table identifier."""
-        return self.id_for(self.catalog, self.namespace, self.name, self.version)
+        return self.id_for(
+            self.catalog, self.namespace, self.name, self.version
+        )
 
     @property
     def partition_spec(self) -> str:
@@ -54,8 +59,14 @@ class IcebergTable:
             ("resource.version", str(self.version)),
             ("resource.frequency", self.partition_type.value),
             ("resource.description", self.description),
-            ("resource.dependencies", json.dumps(self.dependencies, sort_keys=True)),
-            ("resource.validations", json.dumps(self.validations, sort_keys=True)),
+            (
+                "resource.dependencies",
+                json.dumps(self.dependencies, sort_keys=True),
+            ),
+            (
+                "resource.validations",
+                json.dumps(self.validations, sort_keys=True),
+            ),
             *self.additional_properties,
         )
 
@@ -63,11 +74,14 @@ class IcebergTable:
     def _schema_ddl(self) -> str:
         """Translate this table's typed schema into Spark SQL column declarations."""
         return ", ".join(
-            f"{name} {data_type.upper()}" for name, data_type in self.schema.items()
+            f"{name} {data_type.upper()}"
+            for name, data_type in self.schema.items()
         )
 
     @classmethod
-    def id_for(cls, catalog: str, namespace: str, name: str, version: int) -> str:
+    def id_for(
+        cls, catalog: str, namespace: str, name: str, version: int
+    ) -> str:
         """Build an immutable table identifier from its resource identity."""
         return f"{catalog}.{namespace}.`{name}-v{version}`"
 
@@ -84,17 +98,19 @@ class IcebergTable:
         """Quote a Spark SQL literal used in table-property statements."""
         return "'" + value.replace("'", "''") + "'"
 
-    def _partition_transform(self) -> F.Column:
+    def _partition_transform(self) -> Column:
         """Return the PySpark transform matching this table's partition cadence."""
         match self.partition_type:
             case PartitionType.DAILY:
-                return F.days("timestamp")
+                return spark_functions.days("timestamp")
             case PartitionType.HOURLY:
-                return F.hours("timestamp")
+                return spark_functions.hours("timestamp")
             case _ as unsupported_partition_type:
                 assert_never(unsupported_partition_type)
 
-    def partition_keys(self, timestamps: tuple[datetime, ...]) -> tuple[str, ...]:
+    def partition_keys(
+        self, timestamps: tuple[datetime, ...]
+    ) -> tuple[str, ...]:
         """Normalize requested timestamps to stable persisted partition keys."""
         return tuple(
             self.partition_type.normalize_timestamp(timestamp).strftime(
@@ -123,7 +139,9 @@ class IcebergTable:
             )
         }.intersection(existing_properties)
         if obsolete_keys:
-            keys = ", ".join(self._sql_literal(key) for key in sorted(obsolete_keys))
+            keys = ", ".join(
+                self._sql_literal(key) for key in sorted(obsolete_keys)
+            )
             spark.sql(f"ALTER TABLE {self.id} UNSET TBLPROPERTIES ({keys})")
         assignments = ", ".join(
             f"{self._sql_literal(key)} = {self._sql_literal(value)}"
@@ -136,7 +154,9 @@ class IcebergTable:
         if spark.catalog.tableExists(self.id):
             self._reconcile_properties(spark)
             return
-        spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {self.catalog}.{self.namespace}")
+        spark.sql(
+            f"CREATE NAMESPACE IF NOT EXISTS {self.catalog}.{self.namespace}"
+        )
         writer = (
             spark.createDataFrame([], self._schema_ddl)
             .writeTo(self.id)
@@ -154,7 +174,7 @@ class IcebergTable:
         """Return the latest committed snapshot for this table."""
         snapshot = (
             spark.table(f"{self.id}.snapshots")
-            .orderBy(F.col("committed_at").desc())
+            .orderBy(spark_functions.col("committed_at").desc())
             .select("snapshot_id")
             .first()
         )
@@ -168,22 +188,35 @@ class IcebergTable:
         self,
         spark: SparkSession,
         timestamps: tuple[datetime, ...],
-        row_digest: F.Column,
+        row_digest: Column,
     ) -> dict[str, str]:
         """Hash requested committed partitions using the materializer's row digest."""
         target_keys = self.partition_keys(timestamps)
-        partition_key = F.date_format(
-            F.date_trunc(self.partition_type.partition_unit, F.col("timestamp")),
+        partition_key = spark_functions.date_format(
+            spark_functions.date_trunc(
+                self.partition_type.partition_unit,
+                spark_functions.col("timestamp"),
+            ),
             "yyyy-MM-dd'T'HH:mm:ss",
         )
         rows = (
             spark.table(self.id)
             .withColumn("partition_key", partition_key)
-            .where(F.col("partition_key").isin(sorted(set(target_keys))))
+            .where(
+                spark_functions.col("partition_key").isin(
+                    sorted(set(target_keys))
+                )
+            )
             .groupBy("partition_key")
             .agg(
-                F.sha2(
-                    F.concat_ws("", F.sort_array(F.collect_list(row_digest))), 256
+                spark_functions.sha2(
+                    spark_functions.concat_ws(
+                        "",
+                        spark_functions.sort_array(
+                            spark_functions.collect_list(row_digest)
+                        ),
+                    ),
+                    256,
                 ).alias("content_hash")
             )
             .collect()
@@ -195,14 +228,21 @@ class IcebergTable:
     ) -> dict[str, int]:
         """Count rows in requested committed partitions."""
         target_keys = self.partition_keys(timestamps)
-        partition_key = F.date_format(
-            F.date_trunc(self.partition_type.partition_unit, F.col("timestamp")),
+        partition_key = spark_functions.date_format(
+            spark_functions.date_trunc(
+                self.partition_type.partition_unit,
+                spark_functions.col("timestamp"),
+            ),
             "yyyy-MM-dd'T'HH:mm:ss",
         )
         rows = (
             spark.table(self.id)
             .withColumn("partition_key", partition_key)
-            .where(F.col("partition_key").isin(sorted(set(target_keys))))
+            .where(
+                spark_functions.col("partition_key").isin(
+                    sorted(set(target_keys))
+                )
+            )
             .groupBy("partition_key")
             .count()
             .collect()

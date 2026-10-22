@@ -2,13 +2,15 @@
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
 from inspect import Parameter, signature
-from typing import Callable, TypeGuard, get_type_hints
+from typing import TypeGuard, get_type_hints
 
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
+from pyspark.sql import functions as spark_functions
+from pyspark.sql.column import Column
 
 from ml_platform.data_sdk.configs import TransformConfig
 from ml_platform.data_sdk.materializers._base import (
@@ -41,6 +43,7 @@ from ml_platform.data_sdk.transforms._types import (
     DataType,
     FeatureDatasetDependency,
     FeatureKey,
+    PartitionType,
 )
 
 
@@ -76,7 +79,9 @@ class TransformMaterializer[
     @property
     def _feature_key_columns(self) -> tuple[str, ...]:
         """Return the immutable configured entity columns for one transform row."""
-        return tuple(feature_key.value for feature_key in self.config.feature_keys)
+        return tuple(
+            feature_key.value for feature_key in self.config.feature_keys
+        )
 
     @property
     def iceberg_table(self) -> IcebergTable:
@@ -89,13 +94,14 @@ class TransformMaterializer[
             resource_type=self._table_definition.resource_type,
             schema={
                 "timestamp": "timestamp",
-                **{key: "string" for key in self._feature_key_columns},
+                **dict.fromkeys(self._feature_key_columns, "string"),
                 self._table_definition.value_column: self.config.dtype,
             },
             partition_type=self.config.partition_type,
             description=self.config.description,
             dependencies=tuple(
-                dataset.model_dump(mode="json") for dataset in self.config.datasets
+                dataset.model_dump(mode="json")
+                for dataset in self.config.datasets
             ),
             validations=tuple(
                 validation.model_dump(mode="json")
@@ -103,19 +109,29 @@ class TransformMaterializer[
             ),
             additional_properties=(
                 ("transform.dtype", self.config.dtype),
-                ("transform.feature_keys", json.dumps(self.config.feature_keys)),
+                (
+                    "transform.feature_keys",
+                    json.dumps(self.config.feature_keys),
+                ),
                 ("transform.implementation", self.config.transform),
             ),
         )
 
-    def _row_digest(self) -> F.Column:
+    def _row_digest(self) -> Column:
         """Hash the canonical persisted columns for partition completion receipts."""
         columns = (
             "timestamp",
             *self._feature_key_columns,
             self._table_definition.value_column,
         )
-        return F.sha2(F.to_json(F.struct(*(F.col(column) for column in columns))), 256)
+        return spark_functions.sha2(
+            spark_functions.to_json(
+                spark_functions.struct(
+                    *(spark_functions.col(column) for column in columns)
+                )
+            ),
+            256,
+        )
 
     @property
     def validation_configs(self) -> tuple[ValidationConfig, ...]:
@@ -165,7 +181,11 @@ class TransformMaterializer[
     ) -> DataFrame:
         """Load exactly the snapshots and partitions pinned for one input dataset."""
         planned_partitions = {
-            (dependency.partition_id, dependency.timestamp, dependency.snapshot_id)
+            (
+                dependency.partition_id,
+                dependency.timestamp,
+                dependency.snapshot_id,
+            )
             for output_partition in output_partitions
             for dependency in output_partition.partition_dependencies
             if (dependency.dataset_name, dependency.dataset_version)
@@ -175,11 +195,18 @@ class TransformMaterializer[
             raise DatasetPartitionPlanError(
                 f"Materialization has no immutable partition plan for dataset {dataset.id}."
             )
-        table_identifier = TransformMaterializer._dataset_table_identifier(dataset)
+        table_identifier = TransformMaterializer._dataset_table_identifier(
+            dataset
+        )
         partition_data_frames = [
             spark.read.option("versionAsOf", snapshot_id)
             .table(table_identifier)
-            .where(F.to_date("timestamp") == F.to_date(F.lit(partition_timestamp)))
+            .where(
+                spark_functions.to_date("timestamp")
+                == spark_functions.to_date(
+                    spark_functions.lit(partition_timestamp)
+                )
+            )
             for _, partition_timestamp, snapshot_id in sorted(
                 planned_partitions,
                 key=lambda partition: (partition[1], partition[0]),
@@ -200,7 +227,9 @@ class TransformMaterializer[
                     "Declared datasets resolve to duplicate transform constructor argument "
                     f"{dataset.argument_name!r} for dataset {dataset.id}."
                 )
-            data_frame = self._planned_dataset(spark, config.partitions, dataset)
+            data_frame = self._planned_dataset(
+                spark, config.partitions, dataset
+            )
             injected_datasets[dataset.argument_name] = Dataset(
                 metadata=DatasetReference(
                     dataset.name,
@@ -217,7 +246,9 @@ class TransformMaterializer[
         transform_base: type[ConcreteTransform],
     ) -> TypeGuard[type[ConcreteTransform]]:
         """Return whether an imported object implements the requested transform contract."""
-        return isinstance(candidate, type) and issubclass(candidate, transform_base)
+        return isinstance(candidate, type) and issubclass(
+            candidate, transform_base
+        )
 
     @staticmethod
     def _load_transform[ConcreteTransform: DataTransform](
@@ -232,7 +263,9 @@ class TransformMaterializer[
             raise TransformImportError(
                 f"Cannot import configured transform {import_path!r}: {error}."
             ) from error
-        if not TransformMaterializer._is_transform_class(transform, transform_base):
+        if not TransformMaterializer._is_transform_class(
+            transform, transform_base
+        ):
             raise TransformTypeError(
                 f"Configured transform {import_path!r} must inherit {transform_base.__name__}."
             )
@@ -258,7 +291,9 @@ class TransformMaterializer[
             "data_type": DataType(config.dtype),
         }
         dataset_parameters = {
-            name for name in constructor_parameters if annotations.get(name) is Dataset
+            name
+            for name in constructor_parameters
+            if annotations.get(name) is Dataset
         }
         if dataset_parameters != set(datasets):
             raise TransformDatasetInjectionError(
@@ -269,7 +304,8 @@ class TransformMaterializer[
         parameter_definitions = {
             name: parameter
             for name, parameter in constructor_parameters.items()
-            if name not in dataset_parameters and name not in injected_parameters
+            if name not in dataset_parameters
+            and name not in injected_parameters
         }
         required_parameters = {
             name
@@ -277,7 +313,9 @@ class TransformMaterializer[
             if parameter.default is Parameter.empty
         }
         missing_parameters = required_parameters.difference(config.parameters)
-        unexpected_parameters = set(config.parameters).difference(parameter_definitions)
+        unexpected_parameters = set(config.parameters).difference(
+            parameter_definitions
+        )
         if missing_parameters or unexpected_parameters:
             discrepancies = []
             if missing_parameters:
@@ -293,7 +331,10 @@ class TransformMaterializer[
             )
         for name, value in config.parameters.items():
             expected_type = annotations.get(name)
-            if isinstance(expected_type, type) and type(value) is not expected_type:
+            if (
+                isinstance(expected_type, type)
+                and type(value) is not expected_type
+            ):
                 raise TransformParameterError(
                     "Transform parameter type differs from the constructor contract "
                     f"(type for {name}: expected {expected_type.__name__}, "
@@ -315,3 +356,8 @@ class TransformMaterializer[
             self.config.transform, self._transform_type
         )
         return self._inject_transform(transform_class, datasets)
+
+    @property
+    def _partition_type(self) -> PartitionType:
+        """Return the configured output cadence for this transform resource."""
+        return self.config.partition_type

@@ -1,7 +1,7 @@
 """Validation tests for materialization API routes."""
 
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -35,9 +35,12 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                 "keys": ["symbol"],
                 "partition_type": "daily",
                 "symbols": ["AAPL"],
-                "time_range": {"start_date": "2026-01-01", "end_date": "2026-01-02"},
+                "time_range": {
+                    "start_date": "2026-01-01",
+                    "end_date": "2026-01-02",
+                },
             },
-            "created_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
         }
         cursor = MagicMock()
         cursor.fetchone.side_effect = [
@@ -57,10 +60,15 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         self.assertEqual(response.id, "sp500_v1")
         connection.commit.assert_called_once()
         self.assertTrue(
-            any("submitted" in str(call) for call in cursor.execute.call_args_list)
+            any(
+                "submitted" in str(call)
+                for call in cursor.execute.call_args_list
+            )
         )
 
-    def test_dataset_validation_policy_includes_empty_partition_setting(self) -> None:
+    def test_dataset_validation_policy_includes_empty_partition_setting(
+        self,
+    ) -> None:
         """Dataset registration exposes empty-partition handling as a typed validation policy."""
         request = DatasetCreateRequest.model_validate(
             {
@@ -117,21 +125,25 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         spec = self.client.get("/openapi.json").json()
         self.assertIn("/partitions/complete", spec["paths"])
         self.assertEqual(
-            spec["paths"]["/partitions/complete"]["post"]["requestBody"]["content"][
-                "application/json"
-            ]["schema"]["type"],
+            spec["paths"]["/partitions/complete"]["post"]["requestBody"][
+                "content"
+            ]["application/json"]["schema"]["type"],
             "array",
         )
         self.assertNotIn(
-            "/dataset-partition-update-requests/{partition_id}/complete", spec["paths"]
+            "/dataset-partition-update-requests/{partition_id}/complete",
+            spec["paths"],
         )
         self.assertNotIn(
-            "/feature-partition-update-requests/{partition_id}/complete", spec["paths"]
+            "/feature-partition-update-requests/{partition_id}/complete",
+            spec["paths"],
         )
 
-    def test_feature_partition_request_accepts_hour_aligned_utc_timestamp(self) -> None:
+    def test_feature_partition_request_accepts_hour_aligned_utc_timestamp(
+        self,
+    ) -> None:
         """Hour-aligned UTC timestamps create a feature materialization job."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         job = {
             "id": "00000000-0000-0000-0000-000000000001",
             "type": "feature_materialization",
@@ -142,7 +154,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         partition = {
             "partition_id": "00000000-0000-0000-0000-000000000002",
             "job_id": job["id"],
-            "timestamp": datetime(2026, 10, 20, 18, tzinfo=timezone.utc),
+            "timestamp": datetime(2026, 10, 20, 18, tzinfo=UTC),
             "status": "pending",
             "created_at": now,
             "updated_at": now,
@@ -175,11 +187,11 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         self,
     ) -> None:
         """The default feature mode joins a matching materialized revision."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         completed = {
             "partition_id": "00000000-0000-0000-0000-000000000002",
             "job_id": "00000000-0000-0000-0000-000000000001",
-            "timestamp": datetime(2026, 10, 20, 18, tzinfo=timezone.utc),
+            "timestamp": datetime(2026, 10, 20, 18, tzinfo=UTC),
             "status": "created",
             "created_at": now,
             "updated_at": now,
@@ -192,7 +204,9 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         app.dependency_overrides[get_connection] = lambda: connection
         with (
             patch.object(
-                api_main, "_plan_feature_inputs", return_value=["input-revision"]
+                api_main,
+                "_plan_feature_inputs",
+                return_value=["input-revision"],
             ),
             patch.object(
                 api_main, "_completed_feature_request", return_value=completed
@@ -208,7 +222,8 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertIsNone(response.json()["job"])
         self.assertEqual(
-            response.json()["partitions"][0]["partition_id"], completed["partition_id"]
+            response.json()["partitions"][0]["partition_id"],
+            completed["partition_id"],
         )
         self.assertFalse(
             any(
@@ -219,7 +234,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
 
     def test_get_job_returns_persisted_job(self) -> None:
         """The job endpoint returns the database-backed aggregate status."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         row = {
             "id": "00000000-0000-0000-0000-000000000001",
             "type": "dataset_materialization",
@@ -236,7 +251,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                     "resource_type": "dataset",
                     "name": "sp500",
                     "version": 3,
-                    "timestamp": datetime(2026, 10, 20, 18, tzinfo=timezone.utc),
+                    "timestamp": datetime(2026, 10, 20, 18, tzinfo=UTC),
                     "status": "created",
                 }
             ],
@@ -247,20 +262,26 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
 
         with (
             patch.dict(
-                "os.environ", {"HEADLAMP_URL": "http://headlamp.test"}, clear=False
+                "os.environ",
+                {"HEADLAMP_URL": "http://headlamp.test"},
+                clear=False,
             ),
-            patch("ml_platform.api.main.kubernetes_client.CoreV1Api") as core_api,
+            patch(
+                "ml_platform.api.main.kubernetes_client.CoreV1Api"
+            ) as core_api,
             patch("ml_platform.api.main.kubernetes_client.CustomObjectsApi"),
         ):
             core_api.return_value.list_namespaced_pod.return_value.items = [
                 SimpleNamespace(
                     metadata=SimpleNamespace(
-                        name="dataset-job-driver", labels={"spark-role": "driver"}
+                        name="dataset-job-driver",
+                        labels={"spark-role": "driver"},
                     )
                 ),
                 SimpleNamespace(
                     metadata=SimpleNamespace(
-                        name="dataset-job-exec-1", labels={"spark-role": "executor"}
+                        name="dataset-job-exec-1",
+                        labels={"spark-role": "executor"},
                     )
                 ),
             ]
@@ -288,7 +309,9 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
             response.kubernetes_resources[0].resource_id,
             response.spark_application_name,
         )
-        self.assertEqual(response.kubernetes_resources[1].resource_type, "Driver Pod")
+        self.assertEqual(
+            response.kubernetes_resources[1].resource_type, "Driver Pod"
+        )
         self.assertEqual(
             response.kubernetes_resources[1].resource_id, "dataset-job-driver"
         )
@@ -296,8 +319,12 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
             response.kubernetes_resources[1].url,
             "http://headlamp.test/c/main/pods/ml-platform/dataset-job-driver",
         )
-        self.assertEqual(response.kubernetes_resources[2].resource_type, "Executor Pod")
-        self.assertIn("partition_update_requests", str(cursor.execute.call_args_list))
+        self.assertEqual(
+            response.kubernetes_resources[2].resource_type, "Executor Pod"
+        )
+        self.assertIn(
+            "partition_update_requests", str(cursor.execute.call_args_list)
+        )
 
 
 class MaterializationBehaviorTest(unittest.TestCase):
@@ -316,11 +343,11 @@ class MaterializationBehaviorTest(unittest.TestCase):
         from ml_platform.api.dtos import PartitionMaterializationRequest
         from ml_platform.api.main import materialize_dataset_partitions
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         completed = {
             "partition_id": "00000000-0000-0000-0000-000000000002",
             "job_id": "00000000-0000-0000-0000-000000000001",
-            "timestamp": datetime(2026, 10, 20, 18, tzinfo=timezone.utc),
+            "timestamp": datetime(2026, 10, 20, 18, tzinfo=UTC),
             "status": "created",
             "created_at": now,
             "updated_at": now,
@@ -329,7 +356,9 @@ class MaterializationBehaviorTest(unittest.TestCase):
         response = materialize_dataset_partitions(
             "sp500",
             1,
-            PartitionMaterializationRequest(timestamps=[completed["timestamp"]]),
+            PartitionMaterializationRequest(
+                timestamps=[completed["timestamp"]]
+            ),
             connection,
         )
         self.assertIsNone(response.job)
@@ -348,11 +377,11 @@ class MaterializationBehaviorTest(unittest.TestCase):
         from ml_platform.api.dtos import FeaturePartitionMaterializationRequest
         from ml_platform.api.main import materialize_feature_partitions
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         completed = {
             "partition_id": "00000000-0000-0000-0000-000000000002",
             "job_id": "00000000-0000-0000-0000-000000000001",
-            "timestamp": datetime(2026, 10, 20, 18, tzinfo=timezone.utc),
+            "timestamp": datetime(2026, 10, 20, 18, tzinfo=UTC),
             "status": "created",
             "created_at": now,
             "updated_at": now,
@@ -370,9 +399,13 @@ class MaterializationBehaviorTest(unittest.TestCase):
             "job_id": job["id"],
             "status": "pending",
         }
-        connection, _ = self._connection([{"exists": True}, None, None, job, created])
+        connection, _ = self._connection(
+            [{"exists": True}, None, None, job, created]
+        )
         with (
-            patch.object(api_main, "_plan_feature_inputs", return_value=["input"]),
+            patch.object(
+                api_main, "_plan_feature_inputs", return_value=["input"]
+            ),
             patch.object(
                 api_main, "_completed_feature_request", return_value=completed
             ),
@@ -389,7 +422,9 @@ class MaterializationBehaviorTest(unittest.TestCase):
         self.assertEqual(str(response.job.id), job["id"])
         self.assertEqual(response.partitions[0].status, "pending")
 
-    def test_feature_completion_rejects_unplanned_parent_revisions(self) -> None:
+    def test_feature_completion_rejects_unplanned_parent_revisions(
+        self,
+    ) -> None:
         """A worker cannot report a receipt for a different input plan."""
         from fastapi import HTTPException
 
@@ -411,31 +446,35 @@ class MaterializationBehaviorTest(unittest.TestCase):
                 },
             ]
         )
-        with patch.object(api_main, "_completion_plan_ids", return_value={"planned"}):
-            with self.assertRaises(HTTPException) as raised:
-                complete_partitions(
-                    [
-                        PartitionCompletionRequest.model_validate(
-                            {
-                                "partition_id": partition_id,
-                                "resource_type": "feature",
-                                "row_count": 1,
-                                "schema": {
-                                    "timestamp": "timestamp",
-                                    "symbol": "string",
-                                    "feature_value": "double",
-                                },
-                                "content_hash": "hash",
-                                "snapshot_id": 1,
-                                "callback_token": "token",
-                                "dataset_partition_ids": [
-                                    "00000000-0000-0000-0000-000000000003"
-                                ],
-                            }
-                        )
-                    ],
-                    connection,
-                )
+        with (
+            patch.object(
+                api_main, "_completion_plan_ids", return_value={"planned"}
+            ),
+            self.assertRaises(HTTPException) as raised,
+        ):
+            complete_partitions(
+                [
+                    PartitionCompletionRequest.model_validate(
+                        {
+                            "partition_id": partition_id,
+                            "resource_type": "feature",
+                            "row_count": 1,
+                            "schema": {
+                                "timestamp": "timestamp",
+                                "symbol": "string",
+                                "feature_value": "double",
+                            },
+                            "content_hash": "hash",
+                            "snapshot_id": 1,
+                            "callback_token": "token",
+                            "dataset_partition_ids": [
+                                "00000000-0000-0000-0000-000000000003"
+                            ],
+                        }
+                    )
+                ],
+                connection,
+            )
         self.assertEqual(raised.exception.status_code, 409)
         self.assertFalse(
             any(
@@ -459,7 +498,7 @@ class DashboardReadApiTest(unittest.TestCase):
                 "version": 3,
                 "dataset_type": "market_data",
                 "config": {},
-                "created_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
                 "partition_count": 2,
                 "created_partition_count": 1,
                 "pending_partition_count": 1,
@@ -475,7 +514,8 @@ class DashboardReadApiTest(unittest.TestCase):
         self.assertEqual(result[0]["name"], "sp500")
         self.assertEqual(result[0]["created_partition_count"], 1)
         self.assertIn(
-            "FILTER (WHERE request.status = 'created')", str(cursor.execute.call_args)
+            "FILTER (WHERE request.status = 'created')",
+            str(cursor.execute.call_args),
         )
 
     def test_static_dashboard_is_served(self) -> None:
@@ -524,7 +564,7 @@ class ResourceDeletionTest(unittest.TestCase):
                 "sp500",
                 3,
                 PartitionMaterializationRequest(
-                    timestamps=[datetime(2026, 10, 20, tzinfo=timezone.utc)]
+                    timestamps=[datetime(2026, 10, 20, tzinfo=UTC)]
                 ),
                 connection,
             )
@@ -547,10 +587,12 @@ class MinioLocationTest(unittest.TestCase):
 
     def test_table_and_partition_links_use_the_minio_browser(self) -> None:
         resource = {
-            "partitions": [{"timestamp": datetime(2026, 10, 20, tzinfo=timezone.utc)}]
+            "partitions": [{"timestamp": datetime(2026, 10, 20, tzinfo=UTC)}]
         }
         with patch.dict(
-            "os.environ", {"MINIO_CONSOLE_URL": "http://minio.test:9003"}, clear=False
+            "os.environ",
+            {"MINIO_CONSOLE_URL": "http://minio.test:9003"},
+            clear=False,
         ):
             api_main._attach_minio_locations(
                 resource, "features/trailing_volatility_1d-v1"

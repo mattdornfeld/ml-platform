@@ -37,7 +37,9 @@ class DatasetConfigTest(unittest.TestCase):
 
         self.assertIs(config.partition_type, PartitionType.DAILY)
 
-    def test_partition_validations_default_to_all_requested_partitions(self) -> None:
+    def test_partition_validations_default_to_all_requested_partitions(
+        self,
+    ) -> None:
         """Partition-level validations default to every requested partition."""
         config = DatasetConfig(
             name="market_data",
@@ -52,4 +54,6 @@ class DatasetConfigTest(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(config.validations[0].temporal_filter.type, "all_partitions")
+        self.assertEqual(
+            config.validations[0].temporal_filter.type, "all_partitions"
+        )

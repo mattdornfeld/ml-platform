@@ -1,7 +1,7 @@
 """Trailing log-return volatility feature transformation."""
 
 from pyspark.sql import DataFrame, Window
-from pyspark.sql import functions as F
+from pyspark.sql import functions as spark_functions
 
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._types import Dataset
@@ -20,10 +20,17 @@ class TrailingVolatilityTransform(FeatureTransform):
         window = Window.partitionBy("symbol").orderBy("timestamp")
         history = window.rowsBetween(-self.lookback_bars, -1)
         returns = self.market_data.frame.withColumn(
-            "previous_close", F.lag("Close").over(window)
-        ).withColumn("log_return", F.log(F.try_divide("Close", "previous_close")))
+            "previous_close", spark_functions.lag("Close").over(window)
+        ).withColumn(
+            "log_return",
+            spark_functions.log(
+                spark_functions.try_divide("Close", "previous_close")
+            ),
+        )
         return returns.select(
             "timestamp",
             "symbol",
-            F.stddev_samp("log_return").over(history).alias("feature_value"),
-        ).where(F.col("feature_value").isNotNull())
+            spark_functions.stddev_samp("log_return")
+            .over(history)
+            .alias("feature_value"),
+        ).where(spark_functions.col("feature_value").isNotNull())

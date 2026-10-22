@@ -4,10 +4,14 @@ from dataclasses import dataclass
 
 from pydantic import Field, field_validator
 from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
+from pyspark.sql import functions as spark_functions
+from pyspark.sql.column import Column
 
 from ml_platform.data_sdk._exceptions import MarketSymbolConfigurationError
-from ml_platform.data_sdk.materializers._base import Materializer, MaterializerConfig
+from ml_platform.data_sdk.materializers._base import (
+    Materializer,
+    MaterializerConfig,
+)
 from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
 from ml_platform.data_sdk.materializers._materialization_validator import (
     ExactColumnsValidationConfig,
@@ -18,7 +22,9 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
     ValidationConfig,
     XnysRegularSessionTemporalFilterConfig,
 )
-from ml_platform.data_sdk.materializers.exceptions import UnsupportedDatasetTypeError
+from ml_platform.data_sdk.materializers.exceptions import (
+    UnsupportedDatasetTypeError,
+)
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._types import (
     DatasetType,
@@ -27,7 +33,12 @@ from ml_platform.data_sdk.transforms._types import (
 )
 
 _OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
-_CONTENT_HASH_COLUMNS = ("timestamp", "symbol", "market_session", *_OHLCV_COLUMNS)
+_CONTENT_HASH_COLUMNS = (
+    "timestamp",
+    "symbol",
+    "market_session",
+    *_OHLCV_COLUMNS,
+)
 
 
 class DatasetMaterializationConfig(MaterializerConfig):
@@ -51,7 +62,9 @@ class DatasetMaterializationConfig(MaterializerConfig):
     @field_validator("symbols")
     @classmethod
     def _normalize_symbols(cls, symbols: list[str]) -> list[str]:
-        normalized = [symbol.strip().upper() for symbol in symbols if symbol.strip()]
+        normalized = [
+            symbol.strip().upper() for symbol in symbols if symbol.strip()
+        ]
         if not normalized:
             raise MarketSymbolConfigurationError(
                 "Market-data materialization requires at least one non-empty ticker symbol."
@@ -62,6 +75,11 @@ class DatasetMaterializationConfig(MaterializerConfig):
 @dataclass(frozen=True)
 class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
     """Construct, validate, persist, and report one market-data materialization job."""
+
+    @property
+    def _partition_type(self) -> PartitionType:
+        """Return the market-data output cadence."""
+        return self.config.partition_type
 
     @property
     def iceberg_table(self) -> IcebergTable:
@@ -102,10 +120,17 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
         """Return the stable Spark application name for market-data jobs."""
         return "ml-platform-dataset-materializer"
 
-    def _row_digest(self) -> F.Column:
+    def _row_digest(self) -> Column:
         """Hash every persisted market-data value for partition completion receipts."""
-        return F.sha2(
-            F.to_json(F.struct(*(F.col(column) for column in _CONTENT_HASH_COLUMNS))),
+        return spark_functions.sha2(
+            spark_functions.to_json(
+                spark_functions.struct(
+                    *(
+                        spark_functions.col(column)
+                        for column in _CONTENT_HASH_COLUMNS
+                    )
+                )
+            ),
             256,
         )
 
@@ -121,7 +146,8 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
                     spark=spark,
                     symbols=self.config.symbols,
                     partitions=[
-                        partition.timestamp for partition in self.config.partitions
+                        partition.timestamp
+                        for partition in self.config.partitions
                     ],
                     keys=self.config.keys,
                     partition_type=self.config.partition_type,

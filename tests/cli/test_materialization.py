@@ -66,7 +66,9 @@ validations:
         )
 
     @patch("ml_platform.cli.materialization._api_request")
-    def test_feature_sync_resolves_dataset_identity(self, request: object) -> None:
+    def test_feature_sync_resolves_dataset_identity(
+        self, request: object
+    ) -> None:
         request.side_effect = [[], {}]
         result = sync_resources("http://api", "feature", self.root)
         self.assertEqual(result, {"created": ["returns v1"], "deleted": []})

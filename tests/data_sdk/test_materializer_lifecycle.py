@@ -82,9 +82,7 @@ class IcebergTableTest(unittest.TestCase):
         writer = MagicMock()
         writer.tableProperty.side_effect = lambda *_: writer
         writer.partitionedBy.return_value = writer
-        spark.createDataFrame.return_value.writeTo.return_value.using.return_value = (
-            writer
-        )
+        spark.createDataFrame.return_value.writeTo.return_value.using.return_value = writer
         with patch.object(
             IcebergTable, "_partition_transform", return_value=MagicMock()
         ):
@@ -99,14 +97,18 @@ class IcebergTableTest(unittest.TestCase):
         """An overwrite table owns dynamic partition replacement."""
         data_frame = MagicMock()
         self.table().write(data_frame)
-        data_frame.writeTo.assert_called_once_with("ml_platform.features.`returns-v1`")
+        data_frame.writeTo.assert_called_once_with(
+            "ml_platform.features.`returns-v1`"
+        )
         data_frame.writeTo.return_value.overwritePartitions.assert_called_once_with()
 
 
 class MaterializerLifecycleTest(unittest.TestCase):
     """Verify the base worker delegates persistence to its declared Iceberg table."""
 
-    def test_main_validates_then_creates_and_writes_declared_table(self) -> None:
+    def test_main_validates_then_creates_and_writes_declared_table(
+        self,
+    ) -> None:
         """Worker lifecycle owns transforms and callbacks while the table owns storage."""
         config = dataset_config()
         spark = MagicMock()
@@ -118,15 +120,23 @@ class MaterializerLifecycleTest(unittest.TestCase):
             patch.object(
                 DatasetMaterializer, "_create_spark_session", return_value=spark
             ),
-            patch.object(DatasetMaterializer, "_transform", return_value=transform),
             patch.object(
-                DatasetMaterializer, "_requested_partitions", return_value=MagicMock()
+                DatasetMaterializer, "_transform", return_value=transform
             ),
             patch.object(
-                DatasetMaterializer, "_filter_partitions", return_value=data_frame
+                DatasetMaterializer,
+                "_requested_partitions",
+                return_value=MagicMock(),
+            ),
+            patch.object(
+                DatasetMaterializer,
+                "_filter_partitions",
+                return_value=data_frame,
             ),
             patch.object(DatasetMaterializer, "validate") as validate,
-            patch.object(DatasetMaterializer, "_complete_partitions") as complete,
+            patch.object(
+                DatasetMaterializer, "_complete_partitions"
+            ) as complete,
             patch.object(
                 DatasetMaterializer,
                 "iceberg_table",
@@ -134,7 +144,9 @@ class MaterializerLifecycleTest(unittest.TestCase):
                 return_value=table,
             ),
             patch.object(
-                sys, "argv", ["dataset", "--config-json", config.model_dump_json()]
+                sys,
+                "argv",
+                ["dataset", "--config-json", config.model_dump_json()],
             ),
             patch("builtins.print"),
         ):

@@ -5,7 +5,13 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._materialization_validator import (
@@ -68,7 +74,9 @@ class MarketDataDatasetConfig(_ApiModel):
     """Definition fields for a market-data dataset, excluding its derived ID."""
 
     description: str = Field(default="Market data.", min_length=1)
-    validations: list[DiscriminatedValidationConfig] = Field(default_factory=list)
+    validations: list[DiscriminatedValidationConfig] = Field(
+        default_factory=list
+    )
     keys: list[FeatureKey] = Field(min_length=1)
     partition_type: Literal["hourly", "daily"]
     symbols: list[str] = Field(min_length=1)
@@ -127,12 +135,16 @@ class FeatureCreateRequest(_ApiModel):
     transform: str = Field(min_length=1)
     description: str = Field(min_length=1)
     parameters: dict[str, Any] = Field(default_factory=dict)
-    validations: list[DiscriminatedValidationConfig] = Field(default_factory=list)
+    validations: list[DiscriminatedValidationConfig] = Field(
+        default_factory=list
+    )
 
     @model_validator(mode="after")
     def validate_dataset_arguments(self) -> "FeatureCreateRequest":
         """Keep every dataset identity and transform argument unambiguous."""
-        identities = {(dataset.name, dataset.version) for dataset in self.datasets}
+        identities = {
+            (dataset.name, dataset.version) for dataset in self.datasets
+        }
         arguments = {dataset.argument_name for dataset in self.datasets}
         if len(identities) != len(self.datasets):
             raise ValueError(
@@ -180,7 +192,9 @@ class PartitionMaterializationRequest(_ApiModel):
             raise ValueError("Partition timestamps must be unique.")
         for timestamp in timestamps:
             if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-                raise ValueError("Partition timestamps must include a UTC offset.")
+                raise ValueError(
+                    "Partition timestamps must include a UTC offset."
+                )
             if timestamp.utcoffset() != timedelta(0):
                 raise ValueError("Partition timestamps must be in UTC.")
             if any((timestamp.minute, timestamp.second, timestamp.microsecond)):
@@ -234,7 +248,9 @@ class JobResponse(_ApiModel):
     partitions: list[JobPartition] = Field(default_factory=list)
     spark_application_name: str | None = None
     headlamp_url: str | None = None
-    kubernetes_resources: list[KubernetesResourceLink] = Field(default_factory=list)
+    kubernetes_resources: list[KubernetesResourceLink] = Field(
+        default_factory=list
+    )
 
 
 class PartitionUpdateRequestResponse(_ApiModel):
@@ -272,9 +288,14 @@ class PartitionCompletionRequest(_ApiModel):
 
     @field_validator("schema_")
     @classmethod
-    def require_named_schema_fields(cls, schema: dict[str, str]) -> dict[str, str]:
+    def require_named_schema_fields(
+        cls, schema: dict[str, str]
+    ) -> dict[str, str]:
         """Reject empty column names or type declarations in committed schemas."""
-        if any(not name.strip() or not dtype.strip() for name, dtype in schema.items()):
+        if any(
+            not name.strip() or not dtype.strip()
+            for name, dtype in schema.items()
+        ):
             raise ValueError(
                 "Completion schema requires non-empty column names and types."
             )
@@ -283,12 +304,21 @@ class PartitionCompletionRequest(_ApiModel):
     @model_validator(mode="after")
     def validate_dependencies(self) -> "PartitionCompletionRequest":
         """Derived resources must report their exact pinned dataset revisions."""
-        if self.resource_type == "dataset" and self.dataset_partition_ids is not None:
-            raise ValueError("Dataset receipts must not include dataset_partition_ids.")
+        if (
+            self.resource_type == "dataset"
+            and self.dataset_partition_ids is not None
+        ):
+            raise ValueError(
+                "Dataset receipts must not include dataset_partition_ids."
+            )
         if self.resource_type != "dataset":
             if not self.dataset_partition_ids:
-                raise ValueError("Derived receipts require dataset_partition_ids.")
-            if len(set(self.dataset_partition_ids)) != len(self.dataset_partition_ids):
+                raise ValueError(
+                    "Derived receipts require dataset_partition_ids."
+                )
+            if len(set(self.dataset_partition_ids)) != len(
+                self.dataset_partition_ids
+            ):
                 raise ValueError("dataset_partition_ids must be unique.")
         return self
 

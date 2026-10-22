@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import cached_property
 from typing import Annotated, Literal, assert_never
 
@@ -11,7 +11,7 @@ import pandas as pd
 from exchange_calendars import ExchangeCalendar
 from pydantic import Field
 from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
+from pyspark.sql import functions as spark_functions
 
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers.exceptions import (
@@ -64,7 +64,9 @@ TemporalFilter = Annotated[
 class ValidationConfig(BaseConfig, ABC):
     """Base type for one declared materialization validation."""
 
-    type: str = Field(description="Discriminator for the validation implementation.")
+    type: str = Field(
+        description="Discriminator for the validation implementation."
+    )
     reason: str = Field(
         min_length=1,
         description="Why this validation is required for the materialized data.",
@@ -87,7 +89,8 @@ class MinimumRowsValidationConfig(PartitionValidationConfig):
         default="minimum_rows", description="Require a minimum row count."
     )
     minimum_rows: int = Field(
-        ge=1, description="Minimum output rows required in each selected partition."
+        ge=1,
+        description="Minimum output rows required in each selected partition.",
     )
     timestamps: tuple[datetime, ...] = Field(
         default=(),
@@ -100,7 +103,9 @@ class MinimumRowsValidationConfig(PartitionValidationConfig):
         description="Explicit cadence of the checked partitions.",
     )
     timestamp_column: str = Field(
-        default="timestamp", exclude=True, description="Output timestamp column name."
+        default="timestamp",
+        exclude=True,
+        description="Output timestamp column name.",
     )
     partition_column: str = Field(
         default="output_partition",
@@ -135,7 +140,8 @@ class FeatureKeysFromInputValidationConfig(ValidationConfig):
         default=(), description="Output entity-key columns to validate."
     )
     dataset_table_identifiers: tuple[str, ...] = Field(
-        default=(), description="Iceberg input tables that define valid entity keys."
+        default=(),
+        description="Iceberg input tables that define valid entity keys.",
     )
 
 
@@ -153,7 +159,8 @@ class UniqueKeyValidationConfig(ValidationConfig):
 
     type: Literal["unique_key"] = "unique_key"
     columns: tuple[str, ...] = Field(
-        default=(), description="Columns that together identify a unique output row."
+        default=(),
+        description="Columns that together identify a unique output row.",
     )
 
 
@@ -172,7 +179,9 @@ class RequestedPartitionsValidationConfig(ValidationConfig):
         description="Explicit cadence of the checked partitions.",
     )
     timestamp_column: str = Field(
-        default="timestamp", exclude=True, description="Output timestamp column name."
+        default="timestamp",
+        exclude=True,
+        description="Output timestamp column name.",
     )
     partition_column: str = Field(
         default="output_partition",
@@ -217,7 +226,9 @@ class ExactColumnsValidation(DataFrameValidation):
         if missing_columns := self.expected_columns - actual_columns:
             details.append(f"missing: {', '.join(sorted(missing_columns))}")
         if unexpected_columns := actual_columns - self.expected_columns:
-            details.append(f"unexpected: {', '.join(sorted(unexpected_columns))}")
+            details.append(
+                f"unexpected: {', '.join(sorted(unexpected_columns))}"
+            )
         raise ExactColumnsValidationError(
             "Output columns differ from the declared schema "
             f"(expected: {', '.join(sorted(self.expected_columns))}; {'; '.join(details)})."
@@ -232,9 +243,11 @@ class NonNullColumnsValidation(DataFrameValidation):
 
     def validate(self, data_frame: DataFrame) -> None:
         """Reject null values after materializer type coercion."""
-        null_predicate = F.col(self.columns[0]).isNull()
+        null_predicate = spark_functions.col(self.columns[0]).isNull()
         for column in self.columns[1:]:
-            null_predicate = null_predicate | F.col(column).isNull()
+            null_predicate = (
+                null_predicate | spark_functions.col(column).isNull()
+            )
         if data_frame.where(null_predicate).limit(1).count():
             raise NonNullValuesValidationError(
                 f"Output contains null or uncastable values in required columns: {', '.join(self.columns)}."
@@ -249,7 +262,11 @@ class UniqueKeyValidation(DataFrameValidation):
 
     def validate(self, data_frame: DataFrame) -> None:
         """Reject duplicate logical output rows."""
-        duplicates = data_frame.groupBy(*self.columns).count().where(F.col("count") > 1)
+        duplicates = (
+            data_frame.groupBy(*self.columns)
+            .count()
+            .where(spark_functions.col("count") > 1)
+        )
         if duplicates.limit(1).count():
             raise UniqueKeyValidationError(
                 f"Output contains duplicate rows for logical key: {', '.join(self.columns)}."
@@ -268,8 +285,9 @@ class RequestedPartitionsValidation(DataFrameValidation):
     def validate(self, data_frame: DataFrame) -> None:
         """Reject output emitted outside the requested partition set."""
         output_partitions = data_frame.select(
-            F.date_trunc(
-                self.partition_type.partition_unit, F.col(self.timestamp_column)
+            spark_functions.date_trunc(
+                self.partition_type.partition_unit,
+                spark_functions.col(self.timestamp_column),
             ).alias(self.partition_column)
         ).distinct()
         requested_partitions = self.requested_partitions.select(
@@ -302,8 +320,9 @@ class MinimumRowsValidation(DataFrameValidation):
         """Count rows in selected requested partitions and reject short output."""
         partitioned_frame = data_frame.withColumn(
             self.partition_column,
-            F.date_trunc(
-                self.partition_type.partition_unit, F.col(self.timestamp_column)
+            spark_functions.date_trunc(
+                self.partition_type.partition_unit,
+                spark_functions.col(self.timestamp_column),
             ),
         )
         counts = partitioned_frame.groupBy(self.partition_column).count()
@@ -314,13 +333,21 @@ class MinimumRowsValidation(DataFrameValidation):
         selected_counts = selected_partitions.join(
             counts, self.partition_column, "left"
         ).fillna({"count": 0})
-        if selected_counts.where(F.col("count") < self.minimum_rows).limit(1).count():
+        if (
+            selected_counts.where(
+                spark_functions.col("count") < self.minimum_rows
+            )
+            .limit(1)
+            .count()
+        ):
             raise MinimumRowsValidationError(
                 f"Output has fewer than {self.minimum_rows} rows in at least one selected "
                 f"{self.partition_type.value} partition."
             )
 
-    def _selected_partitions(self, requested_partitions: DataFrame) -> DataFrame:
+    def _selected_partitions(
+        self, requested_partitions: DataFrame
+    ) -> DataFrame:
         """Apply this validation's temporal filter to requested partition timestamps."""
         match self.temporal_filter:
             case AllPartitionsTemporalFilterConfig():
@@ -351,9 +378,9 @@ class MinimumRowsValidation(DataFrameValidation):
     ) -> bool:
         """Return whether one UTC partition interval intersects XNYS regular hours."""
         partition_start = (
-            partition_timestamp.replace(tzinfo=timezone.utc)
+            partition_timestamp.replace(tzinfo=UTC)
             if partition_timestamp.tzinfo is None
-            else partition_timestamp.astimezone(timezone.utc)
+            else partition_timestamp.astimezone(UTC)
         )
         session = pd.Timestamp(partition_start.date())
         if not calendar.is_session(session):
@@ -361,7 +388,9 @@ class MinimumRowsValidation(DataFrameValidation):
         session_open = calendar.session_open(session).to_pydatetime()
         session_close = calendar.session_close(session).to_pydatetime()
         partition_end = partition_start + partition_interval
-        return partition_start < session_close and partition_end > session_open
+        return bool(
+            partition_start < session_close and partition_end > session_open
+        )
 
 
 @dataclass(frozen=True)
@@ -372,19 +401,19 @@ class FiniteValuesValidation(DataFrameValidation):
 
     def validate(self, data_frame: DataFrame) -> None:
         """Reject NaN and positive or negative infinity numeric values."""
-        first_value = F.col(self.columns[0]).try_cast("double")
+        first_value = spark_functions.col(self.columns[0]).try_cast("double")
         invalid_predicate = (
             first_value.isNull()
-            | F.isnan(first_value)
+            | spark_functions.isnan(first_value)
             | (first_value == float("inf"))
             | (first_value == float("-inf"))
         )
         for column in self.columns[1:]:
-            value = F.col(column).try_cast("double")
+            value = spark_functions.col(column).try_cast("double")
             invalid_predicate = (
                 invalid_predicate
                 | value.isNull()
-                | F.isnan(value)
+                | spark_functions.isnan(value)
                 | (value == float("inf"))
                 | (value == float("-inf"))
             )
@@ -405,7 +434,9 @@ class InputFeatureKeysValidation(DataFrameValidation):
         """Reject feature keys not represented by an injected input dataset."""
         input_key_frames: list[DataFrame] = []
         for input_frame in self.input_frames:
-            missing_keys = set(self.feature_keys).difference(input_frame.columns)
+            missing_keys = set(self.feature_keys).difference(
+                input_frame.columns
+            )
             if missing_keys:
                 raise InputFeatureKeysValidationError(
                     "Input dataset is missing required feature-key columns: "
@@ -413,7 +444,10 @@ class InputFeatureKeysValidation(DataFrameValidation):
                 )
             input_key_frames.append(
                 input_frame.select(
-                    *(F.col(key).cast("string").alias(key) for key in self.feature_keys)
+                    *(
+                        spark_functions.col(key).cast("string").alias(key)
+                        for key in self.feature_keys
+                    )
                 ).distinct()
             )
         if not input_key_frames:
@@ -479,7 +513,9 @@ class ValidationConfigs:
     def resolved_validation_configs(self) -> tuple[ValidationConfig, ...]:
         default_configs_by_type = self._to_dict(self.default_validation_configs)
         overrides_by_type = self._to_dict(self.override_validation_configs)
-        unsupported_types = set(overrides_by_type).difference(default_configs_by_type)
+        unsupported_types = set(overrides_by_type).difference(
+            default_configs_by_type
+        )
         if unsupported_types:
             raise UnsupportedValidationOverrideError(
                 "Validation overrides are not part of the materializer default policy: "
@@ -518,17 +554,23 @@ class MaterializationValidator:
             try:
                 match config:
                     case ExactColumnsValidationConfig():
-                        ExactColumnsValidation(frozenset(config.columns)).validate(
+                        ExactColumnsValidation(
+                            frozenset(config.columns)
+                        ).validate(data_frame)
+                    case NonNullValuesValidationConfig():
+                        NonNullColumnsValidation(config.columns).validate(
                             data_frame
                         )
-                    case NonNullValuesValidationConfig():
-                        NonNullColumnsValidation(config.columns).validate(data_frame)
                     case FiniteNumericValuesValidationConfig():
-                        FiniteValuesValidation(config.columns).validate(data_frame)
+                        FiniteValuesValidation(config.columns).validate(
+                            data_frame
+                        )
                     case UniqueKeyValidationConfig():
                         UniqueKeyValidation(config.columns).validate(data_frame)
                     case RequestedPartitionsValidationConfig():
-                        requested = self._requested_partitions(data_frame, config)
+                        requested = self._requested_partitions(
+                            data_frame, config
+                        )
                         RequestedPartitionsValidation(
                             requested,
                             config.timestamp_column,

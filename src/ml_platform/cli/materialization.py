@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -17,10 +18,15 @@ DEFAULT_CONFIG_DIR = Path("configs")
 
 
 def _api_request(
-    base_url: str, method: str, path: str, payload: dict[str, Any] | None = None
+    base_url: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
 ) -> Any:
     """Make one JSON request to the control-plane API."""
-    body = None if payload is None else json.dumps(payload, default=str).encode()
+    body = (
+        None if payload is None else json.dumps(payload, default=str).encode()
+    )
     request = Request(
         f"{base_url.rstrip('/')}{path}",
         data=body,
@@ -30,7 +36,12 @@ def _api_request(
     try:
         with urlopen(request, timeout=30) as response:
             content = response.read()
-            return json.loads(content) if content else {}
+            decoded = json.loads(content) if content else {}
+            if not isinstance(decoded, dict):
+                raise RuntimeError(
+                    f"API {method} {path} did not return a JSON object."
+                )
+            return {str(key): value for key, value in decoded.items()}
     except HTTPError as error:
         detail = error.read().decode()
         raise RuntimeError(
@@ -59,7 +70,9 @@ def _describe_job(
     """Fetch a job once, or poll it until the control plane reaches a terminal state."""
     while True:
         result = _api_request(base_url, "GET", f"/jobs/{job_id}")
-        print(json.dumps(result, default=str))
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Job {job_id} response must be a JSON object.")
+        sys.stdout.write(json.dumps(result, default=str) + "\n")
         if poll_seconds is None or result["status"] in {
             "succeeded",
             "failed",
@@ -71,7 +84,9 @@ def _describe_job(
 
 def _dataset_payload(config: dict[str, Any]) -> dict[str, Any]:
     """Validate one dataset YAML mapping and convert it to the API request shape."""
-    definition = MarketDataConfig.model_validate_json(json.dumps(config, default=str))
+    definition = MarketDataConfig.model_validate_json(
+        json.dumps(config, default=str)
+    )
     values = definition.model_dump(mode="json")
     values.pop("num_lookback_partitions")
     return {
@@ -137,7 +152,9 @@ def sync_resources(
         if resource == "dataset"
         else _feature_configs(config_dir)
     )
-    existing = _api_request(base_url, "GET", f"/{resource}s?include_deleted=true")
+    existing = _api_request(
+        base_url, "GET", f"/{resource}s?include_deleted=true"
+    )
     active = {
         (row["name"], int(row["version"])): row
         for row in existing
@@ -162,7 +179,9 @@ def sync_resources(
             updated.append(f"{identity[0]} v{identity[1]}")
     for name, version in active:
         if (name, version) not in desired:
-            _api_request(base_url, "DELETE", f"/{resource}s/{name}/versions/{version}")
+            _api_request(
+                base_url, "DELETE", f"/{resource}s/{name}/versions/{version}"
+            )
             deleted.append(f"{name} v{version}")
     result = {"created": created, "deleted": deleted}
     if updated:
@@ -175,7 +194,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--api-url",
-        default=os.environ.get("MATERIALIZATION_API_URL", "http://127.0.0.1:8000"),
+        default=os.environ.get(
+            "MATERIALIZATION_API_URL", "http://127.0.0.1:8000"
+        ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
     create = commands.add_parser("create")
@@ -187,7 +208,9 @@ def main() -> None:
             resource_parser.add_argument("--name", required=True)
             resource_parser.add_argument("--version", type=int, required=True)
     materialize = commands.add_parser("materialize")
-    materialize_resources = materialize.add_subparsers(dest="resource", required=True)
+    materialize_resources = materialize.add_subparsers(
+        dest="resource", required=True
+    )
     for resource in ("dataset", "feature"):
         resource_parser = materialize_resources.add_parser(resource)
         resource_parser.add_argument("--name", required=True)
@@ -230,7 +253,10 @@ def main() -> None:
         result = _api_request(args.api_url, "POST", "/datasets", payload)
     elif args.command == "create" and args.resource == "feature":
         result = _api_request(
-            args.api_url, "POST", "/features", _feature_payload(_load_yaml(args.config))
+            args.api_url,
+            "POST",
+            "/features",
+            _feature_payload(_load_yaml(args.config)),
         )
     elif args.command == "materialize":
         result = _api_request(
@@ -240,12 +266,18 @@ def main() -> None:
             _timestamps(args.timestamp),
         )
     elif args.command in {"datasets", "features"}:
-        result = sync_resources(args.api_url, args.sync_resource, args.config_dir)
+        result = sync_resources(
+            args.api_url, args.sync_resource, args.config_dir
+        )
     else:
         _describe_job(args.api_url, args.job_id)
         return
-    print(json.dumps(result, default=str))
-    if args.command == "materialize" and args.monitor and result["job"] is not None:
+    sys.stdout.write(json.dumps(result, default=str) + "\n")
+    if (
+        args.command == "materialize"
+        and args.monitor
+        and result["job"] is not None
+    ):
         _describe_job(args.api_url, result["job"]["id"], args.poll_seconds)
 
 

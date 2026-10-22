@@ -1,7 +1,7 @@
 """One-bar close-to-close log-return feature transformation."""
 
 from pyspark.sql import DataFrame, Window
-from pyspark.sql import functions as F
+from pyspark.sql import functions as spark_functions
 
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._types import Dataset
@@ -19,12 +19,14 @@ class LogReturnTransform(FeatureTransform):
         window = Window.partitionBy("symbol").orderBy("timestamp")
         return (
             self.market_data.frame.withColumn(
-                "previous_close", F.lag("Close").over(window)
+                "previous_close", spark_functions.lag("Close").over(window)
             )
             .select(
                 "timestamp",
                 "symbol",
-                F.log(F.try_divide("Close", "previous_close")).alias("feature_value"),
+                spark_functions.log(
+                    spark_functions.try_divide("Close", "previous_close")
+                ).alias("feature_value"),
             )
-            .where(F.col("feature_value").isNotNull())
+            .where(spark_functions.col("feature_value").isNotNull())
         )
