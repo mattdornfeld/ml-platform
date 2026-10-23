@@ -317,3 +317,142 @@ def test_scheduler_repository_builds_feature_and_label_job_inputs(
         ("feature_materialization", "cancelled"),
         ("label_materialization", "failed"),
     ]
+
+
+def _seed_created_hourly_dataset_partitions(database_url: str) -> None:
+    """Insert three contiguous hourly source partitions for dependency planning."""
+    timestamps = (
+        datetime(2026, 1, 1, 0, tzinfo=UTC),
+        datetime(2026, 1, 1, 1, tzinfo=UTC),
+        datetime(2026, 1, 1, 2, tzinfo=UTC),
+    )
+    with psycopg.connect(database_url) as connection:
+        for timestamp in timestamps:
+            partition_id = uuid4()
+            job_id = uuid4()
+            connection.execute(
+                "INSERT INTO jobs (id, type, status) VALUES (%s, 'dataset_materialization', 'succeeded')",
+                (job_id,),
+            )
+            connection.execute(
+                """INSERT INTO partition_update_requests
+                (partition_id, job_id, dataset_name, dataset_version, timestamp, status, callback_token)
+                VALUES (%s, %s, 'prices', 1, %s, 'created', %s)""",
+                (
+                    partition_id,
+                    job_id,
+                    timestamp,
+                    f"parent-token-{partition_id}",
+                ),
+            )
+            connection.execute(
+                """INSERT INTO dataset_partitions
+                (partition_id, content_hash, row_count, schema, snapshot_id)
+                VALUES (%s, 'parent-hash', 1, '{\"timestamp\": \"timestamp\"}'::jsonb, 1)""",
+                (partition_id,),
+            )
+
+
+def test_resource_partition_requests_require_the_registered_cadence(
+    api_client: TestClient,
+) -> None:
+    """Reject daily requests outside midnight while accepting hourly partitions."""
+    assert (
+        api_client.post("/datasets", json=_dataset_payload()).status_code == 201
+    )
+    daily_response = api_client.post(
+        "/datasets/prices/versions/1/partitions",
+        json={"timestamps": ["2026-01-01T18:00:00Z"]},
+    )
+    assert daily_response.status_code == 422
+    assert "daily partitions" in daily_response.json()["detail"]
+
+    assert (
+        api_client.post("/features", json=_feature_payload()).status_code == 201
+    )
+    assert api_client.post("/labels", json=_label_payload()).status_code == 201
+    feature_response = api_client.post(
+        "/features/daily_return/versions/1/partitions",
+        json={"timestamps": ["2026-01-01T18:00:00Z"]},
+    )
+    label_response = api_client.post(
+        "/labels/direction/versions/1/partitions",
+        json={"timestamps": ["2026-01-01T18:00:00Z"]},
+    )
+    assert feature_response.status_code == 422
+    assert label_response.status_code == 422
+
+
+def test_hourly_dependencies_use_hourly_input_windows(
+    api_client: TestClient, clean_postgres: str
+) -> None:
+    """Plan feature and label inputs by each upstream dataset's cadence."""
+    dataset_payload = {
+        "name": "prices",
+        "version": 1,
+        "dataset_type": "market_data",
+        "config": {
+            "description": "Hourly market prices.",
+            "keys": ["symbol"],
+            "partition_type": "hourly",
+            "symbols": ["AAPL"],
+        },
+    }
+    assert api_client.post("/datasets", json=dataset_payload).status_code == 201
+    _seed_created_hourly_dataset_partitions(clean_postgres)
+
+    feature_payload = {
+        "name": "daily_return",
+        "version": 1,
+        "dtype": "double",
+        "frequency": "hourly",
+        "keys": ["symbol"],
+        "datasets": [
+            {
+                "name": "prices",
+                "version": 1,
+                "dataset_type": "market_data",
+                "input_window": {"lookback_partitions": 2},
+            }
+        ],
+        "transform": "ml_platform.data_sdk.feature_transforms.ReturnTransform",
+        "description": "Hourly return.",
+        "parameters": {},
+        "validations": [],
+    }
+    assert api_client.post("/features", json=feature_payload).status_code == 201
+
+    label_payload = {
+        "name": "direction",
+        "version": 1,
+        "dtype": "double",
+        "frequency": "hourly",
+        "keys": ["symbol"],
+        "datasets": [
+            {
+                "name": "prices",
+                "version": 1,
+                "dataset_type": "market_data",
+                "input_window": {
+                    "lookback_partitions": 1,
+                    "lookahead_partitions": 1,
+                },
+            }
+        ],
+        "transform": "ml_platform.data_sdk.label_transforms.DirectionTransform",
+        "description": "Hourly direction.",
+        "parameters": {},
+        "validations": [],
+    }
+    assert api_client.post("/labels", json=label_payload).status_code == 201
+
+    feature_response = api_client.post(
+        "/features/daily_return/versions/1/partitions",
+        json={"timestamps": ["2026-01-01T02:00:00Z"]},
+    )
+    label_response = api_client.post(
+        "/labels/direction/versions/1/partitions",
+        json={"timestamps": ["2026-01-01T01:00:00Z"]},
+    )
+    assert feature_response.status_code == 202
+    assert label_response.status_code == 202

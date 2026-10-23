@@ -141,6 +141,10 @@ class PartitionType(StrEnum):
             else normalized
         )
 
+    def is_partition_timestamp(self, timestamp: datetime) -> bool:
+        """Return whether a timestamp is exactly this cadence's UTC boundary."""
+        return self.normalize_timestamp(timestamp) == timestamp
+
 
 class TemporalFilterConfig(BaseModel):
     """Base type for selecting requested partitions during validation."""

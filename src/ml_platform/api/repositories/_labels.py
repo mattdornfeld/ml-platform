@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import case, func, select, update
@@ -26,6 +26,7 @@ from ml_platform.api.domain import (
     TransformSummary,
 )
 from ml_platform.api.domain._lifecycle import ResourceLifecycle
+from ml_platform.api.repositories._datasets import DatasetRepository
 from ml_platform.api.repositories._jobs import JobRepository
 from ml_platform.api.repositories._models import (
     Dataset,
@@ -38,6 +39,9 @@ from ml_platform.api.repositories._models import (
     LabelPartitionDatasetDependency,
     LabelPartitionPlan,
     LabelPartitionRequest,
+)
+from ml_platform.api.repositories._partition_validation import (
+    validate_partition_timestamps,
 )
 from ml_platform.api.repositories.exceptions import (
     DeletedLabelInputDatasetError,
@@ -59,6 +63,7 @@ from ml_platform.common.types import (
     JobId,
     PartitionId,
     PartitionTimestamp,
+    PartitionType,
     ResourceName,
     ResourceVersion,
     SnapshotId,
@@ -369,8 +374,13 @@ class LabelRepository:
         timestamp: PartitionTimestamp,
     ) -> list[UUID]:
         """Resolve every completed dataset revision needed by one label partition."""
-        dependencies = self.session.scalars(
-            select(LabelDatasetDependency)
+        dependencies = self.session.execute(
+            select(LabelDatasetDependency, Dataset)
+            .join(
+                Dataset,
+                (Dataset.name == LabelDatasetDependency.dataset_name)
+                & (Dataset.version == LabelDatasetDependency.dataset_version),
+            )
             .where(
                 LabelDatasetDependency.label_name == name,
                 LabelDatasetDependency.label_version == version,
@@ -379,17 +389,20 @@ class LabelRepository:
                 LabelDatasetDependency.dataset_name,
                 LabelDatasetDependency.dataset_version,
             )
-        )
+        ).tuples()
         planned_partition_ids: list[UUID] = []
-        for dependency in dependencies:
-            first_timestamp = timestamp - timedelta(
-                days=dependency.num_lookback_partitions
+        for dependency, dataset in dependencies:
+            partition_interval = DatasetRepository.partition_type(
+                dataset
+            ).partition_interval
+            first_timestamp = timestamp - (
+                partition_interval * dependency.num_lookback_partitions
             )
-            last_timestamp = timestamp + timedelta(
-                days=dependency.num_lookahead_partitions
+            last_timestamp = timestamp + (
+                partition_interval * dependency.num_lookahead_partitions
             )
             expected_timestamps = {
-                first_timestamp + timedelta(days=offset)
+                first_timestamp + (partition_interval * offset)
                 for offset in range(
                     dependency.num_lookback_partitions
                     + dependency.num_lookahead_partitions
@@ -496,7 +509,7 @@ class LabelRepository:
 
     def _validate_materialization(
         self, name: ResourceName, version: ResourceVersion
-    ) -> None:
+    ) -> Label:
         """Ensure the target and every declared input dataset are active."""
         resource = self.session.get(Label, (name, version))
         if resource is None or resource.deleted_at is not None:
@@ -517,6 +530,7 @@ class LabelRepository:
         )
         if deleted_input is not None:
             raise DeletedLabelInputDatasetError
+        return resource
 
     def materialize(
         self,
@@ -525,7 +539,14 @@ class LabelRepository:
         payload: LabelPartitionMaterializationRequest,
     ) -> MaterializationRequest:
         """Create only stale or missing label partitions with pinned inputs."""
-        self._validate_materialization(name, version)
+        label = self._validate_materialization(name, version)
+        validate_partition_timestamps(
+            name=name,
+            version=version,
+            resource_type=ResourceType.LABEL,
+            partition_type=PartitionType(label.frequency),
+            timestamps=payload.timestamps,
+        )
 
         for timestamp in sorted(payload.timestamps):
             self.session.execute(

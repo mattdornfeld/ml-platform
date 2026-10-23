@@ -27,6 +27,7 @@ from ml_platform.api.domain import (
     PartitionCounts,
     PartitionStatus,
     ResourcePartition,
+    ResourceType,
 )
 from ml_platform.api.repositories._models import (
     Dataset,
@@ -34,17 +35,24 @@ from ml_platform.api.repositories._models import (
     DatasetPartitionRequest,
     Job,
 )
+from ml_platform.api.repositories._partition_validation import (
+    validate_partition_timestamps,
+)
 from ml_platform.api.repositories.exceptions import (
     DatasetVersionExistsError,
     UnsupportedDatasetStatusError,
 )
-from ml_platform.common.api.dtos import DatasetStatus
+from ml_platform.common.api.dtos import (
+    DatasetStatus,
+    MarketDataDatasetConfig,
+)
 from ml_platform.common.types import (
     CreatedAt,
     Description,
     JobId,
     PartitionId,
     PartitionTimestamp,
+    PartitionType,
     ResourceName,
     ResourceVersion,
     SnapshotId,
@@ -57,6 +65,13 @@ class DatasetRepository:
     """Persist and read immutable datasets and their partition requests."""
 
     session: Session
+
+    @staticmethod
+    def partition_type(dataset: Dataset) -> PartitionType:
+        """Return the typed partition cadence stored for one dataset."""
+        return MarketDataDatasetConfig.model_validate(
+            dataset.config
+        ).partition_type
 
     @staticmethod
     def _status(dataset: Dataset) -> DatasetStatus:
@@ -330,6 +345,13 @@ class DatasetRepository:
         dataset = self.session.get(Dataset, (name, version))
         if dataset is None or dataset.deleted_at is not None:
             return None
+        validate_partition_timestamps(
+            name=name,
+            version=version,
+            resource_type=ResourceType.DATASET,
+            partition_type=self.partition_type(dataset),
+            timestamps=timestamps,
+        )
         existing: list[MaterializationPartition] = []
         missing: list[PartitionTimestamp] = []
         for timestamp in sorted(timestamps):

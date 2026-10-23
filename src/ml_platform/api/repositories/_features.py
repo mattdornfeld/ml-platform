@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import case, func, select, update
@@ -26,6 +26,7 @@ from ml_platform.api.domain import (
     TransformSummary,
 )
 from ml_platform.api.domain._lifecycle import ResourceLifecycle
+from ml_platform.api.repositories._datasets import DatasetRepository
 from ml_platform.api.repositories._jobs import JobRepository
 from ml_platform.api.repositories._models import (
     Dataset,
@@ -38,6 +39,9 @@ from ml_platform.api.repositories._models import (
     FeaturePartitionPlan,
     FeaturePartitionRequest,
     Job,
+)
+from ml_platform.api.repositories._partition_validation import (
+    validate_partition_timestamps,
 )
 from ml_platform.api.repositories.exceptions import (
     DeletedFeatureInputDatasetError,
@@ -59,6 +63,7 @@ from ml_platform.common.types import (
     JobId,
     PartitionId,
     PartitionTimestamp,
+    PartitionType,
     ResourceName,
     ResourceVersion,
     SnapshotId,
@@ -375,8 +380,13 @@ class FeatureRepository:
         timestamp: PartitionTimestamp,
     ) -> list[UUID]:
         """Resolve every completed dataset revision needed by one partition."""
-        dependencies = self.session.scalars(
-            select(FeatureDatasetDependency)
+        dependencies = self.session.execute(
+            select(FeatureDatasetDependency, Dataset)
+            .join(
+                Dataset,
+                (Dataset.name == FeatureDatasetDependency.dataset_name)
+                & (Dataset.version == FeatureDatasetDependency.dataset_version),
+            )
             .where(
                 FeatureDatasetDependency.feature_name == name,
                 FeatureDatasetDependency.feature_version == version,
@@ -385,14 +395,17 @@ class FeatureRepository:
                 FeatureDatasetDependency.dataset_name,
                 FeatureDatasetDependency.dataset_version,
             )
-        )
+        ).tuples()
         planned_partition_ids: list[UUID] = []
-        for dependency in dependencies:
-            first_timestamp = timestamp - timedelta(
-                days=dependency.num_lookback_partitions
+        for dependency, dataset in dependencies:
+            partition_interval = DatasetRepository.partition_type(
+                dataset
+            ).partition_interval
+            first_timestamp = timestamp - (
+                partition_interval * dependency.num_lookback_partitions
             )
             expected_timestamps = {
-                first_timestamp + timedelta(days=offset)
+                first_timestamp + (partition_interval * offset)
                 for offset in range(dependency.num_lookback_partitions + 1)
             }
             revisions: dict[datetime, UUID] = dict(
@@ -493,7 +506,7 @@ class FeatureRepository:
 
     def _validate_materialization(
         self, name: ResourceName, version: ResourceVersion
-    ) -> None:
+    ) -> Feature:
         """Ensure the target and every declared input dataset are active."""
         resource = self.session.get(Feature, (name, version))
         if resource is None or resource.deleted_at is not None:
@@ -514,6 +527,7 @@ class FeatureRepository:
         )
         if deleted_input is not None:
             raise DeletedFeatureInputDatasetError
+        return resource
 
     def materialize(
         self,
@@ -522,7 +536,14 @@ class FeatureRepository:
         payload: FeaturePartitionMaterializationRequest,
     ) -> MaterializationRequest:
         """Create only stale or missing feature partitions with pinned inputs."""
-        self._validate_materialization(name, version)
+        feature = self._validate_materialization(name, version)
+        validate_partition_timestamps(
+            name=name,
+            version=version,
+            resource_type=ResourceType.FEATURE,
+            partition_type=PartitionType(feature.frequency),
+            timestamps=payload.timestamps,
+        )
 
         for timestamp in sorted(payload.timestamps):
             self.session.execute(
