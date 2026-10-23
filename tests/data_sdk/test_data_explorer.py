@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import pandas as pd
 
+import ml_platform.data_sdk.utils.data_explorer as data_explorer
 from ml_platform.data_sdk.utils.data_explorer import (
     ParquetExplorerSourceError,
-    _parquet_source,
     load_partitioned_parquet,
 )
 
@@ -34,14 +34,16 @@ class DataExplorerTest(unittest.TestCase):
         """Explorer errors clearly before creating an invalid PyArrow dataset."""
         with tempfile.TemporaryDirectory() as temporary_directory:
             with self.assertRaises(ParquetExplorerSourceError):
-                _parquet_source(Path(temporary_directory) / "missing")
+                data_explorer._parquet_source(
+                    Path(temporary_directory) / "missing"
+                )
             with self.assertRaises(ParquetExplorerSourceError):
-                _parquet_source(temporary_directory)
+                data_explorer._parquet_source(temporary_directory)
 
     @patch("ml_platform.data_sdk.utils.data_explorer._minio_filesystem")
     def test_s3_uri_uses_minio_filesystem(self, filesystem: object) -> None:
         """S3A table URIs become bucket-qualified PyArrow paths."""
-        source, resolved_filesystem = _parquet_source(
+        source, resolved_filesystem = data_explorer._parquet_source(
             "s3a://warehouse/features/foo"
         )
         self.assertEqual(source, "warehouse/features/foo")

@@ -4,6 +4,13 @@ import json
 import unittest
 from pathlib import Path
 
+from ml_platform.data_sdk import (
+    DatasetDependency,
+    DatasetTransform,
+    DataTransform,
+    FeatureTransform,
+    LabelTransform,
+)
 from ml_platform.data_sdk.configs import (
     DataConfig,
     DatasetConfig,
@@ -26,11 +33,6 @@ from ml_platform.data_sdk.materializers import (
     MinimumRowsValidationConfig,
     PartitionDependency,
 )
-from ml_platform.data_sdk.transforms._base import DataTransform
-from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
-from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
-from ml_platform.data_sdk.transforms._label_transform import LabelTransform
-from ml_platform.data_sdk.transforms._types import DatasetDependency
 
 
 class MaterializerContractTest(unittest.TestCase):

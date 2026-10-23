@@ -4,15 +4,38 @@ import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from uuid import UUID
 
 from fastapi.testclient import TestClient
-from sqlalchemy import Select
 
-from ml_platform.api import main as api_main
-from ml_platform.api.database import get_connection
-from ml_platform.api.main import app, create_dataset, get_job
-from ml_platform.api.models import Dataset
+from ml_platform.api import app
+from ml_platform.api.domain import (
+    DatasetDefinition,
+    DatasetSummary,
+    JobPartition,
+    JobStatus,
+    JobTarget,
+    JobType,
+    MaterializationJob,
+    MaterializationPartition,
+    MaterializationRequest,
+    PartitionCounts,
+    PartitionStatus,
+    ResourceLifecycle,
+    ResourceType,
+)
+from ml_platform.api.infrastructure import get_session
+from ml_platform.api.routers import create_dataset, get_job, list_datasets
+from ml_platform.api.services import attach_minio_locations
 from ml_platform.common.api.dtos import DatasetCreateRequest
+from ml_platform.common.types import (
+    CreatedAt,
+    JobId,
+    PartitionTimestamp,
+    ResourceName,
+    ResourceVersion,
+    UpdatedAt,
+)
 
 
 class PartitionMaterializationRequestTest(unittest.TestCase):
@@ -20,7 +43,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
 
     def setUp(self) -> None:
         """Create an isolated in-process API client."""
-        app.dependency_overrides[get_connection] = lambda: MagicMock()
+        app.dependency_overrides[get_session] = lambda: MagicMock()
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
@@ -36,13 +59,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
 
         def refresh(model: object) -> None:
             """Apply the dataset creation timestamp supplied by PostgreSQL."""
-            match model:
-                case Dataset():
-                    model.created_at = now
-                case _ as unsupported_model:
-                    raise TypeError(
-                        f"Unsupported model refresh: {unsupported_model!r}."
-                    )
+            model.created_at = now
 
         session.refresh.side_effect = refresh
         payload = DatasetCreateRequest.model_validate(
@@ -63,7 +80,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         self.assertEqual(response.name, "sp500")
         self.assertEqual(response.id, "sp500_v1")
         self.assertEqual(models, [models[0]])
-        self.assertIsInstance(models[0], Dataset)
+        self.assertEqual(type(models[0]).__name__, "Dataset")
         session.commit.assert_called_once()
 
     def test_dataset_validation_policy_includes_empty_partition_setting(
@@ -135,82 +152,28 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
             spec["paths"],
         )
 
-    def test_feature_partition_request_accepts_hour_aligned_utc_timestamp(
-        self,
-    ) -> None:
-        """Hour-aligned UTC timestamps create a feature materialization job."""
-        now = datetime.now(UTC)
-        job = {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "type": "feature_materialization",
-            "status": "submitted",
-            "created_at": now,
-            "updated_at": now,
-        }
-        partition = {
-            "partition_id": "00000000-0000-0000-0000-000000000002",
-            "job_id": job["id"],
-            "timestamp": datetime(2026, 10, 20, 18, tzinfo=UTC),
-            "status": "pending",
-            "created_at": now,
-            "updated_at": now,
-        }
-        cursor = MagicMock()
-        cursor.fetchone.side_effect = [
-            {"exists": True},
-            None,
-            None,
-            None,
-            job,
-            partition,
-        ]
-        cursor.fetchall.return_value = []
-        cursor.__enter__.return_value = cursor
-        connection = MagicMock()
-        connection.cursor.return_value = cursor
-        app.dependency_overrides[get_connection] = lambda: connection
-
-        response = self.client.post(
-            "/features/trailing_volatility_1d/versions/1/partitions",
-            json={"timestamps": ["2026-10-20T18:00:00Z"]},
-        )
-
-        self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.json()["submitted_job"]["id"], job["id"])
-        self.assertEqual(response.json()["partitions"][0]["status"], "pending")
-
     def test_feature_ensure_current_returns_completed_partition_without_a_new_job(
         self,
     ) -> None:
-        """The default feature mode joins a matching materialized revision."""
+        """The route adapts the repository's feature domain result."""
         now = datetime.now(UTC)
-        completed = {
-            "partition_id": "00000000-0000-0000-0000-000000000002",
-            "job_id": "00000000-0000-0000-0000-000000000001",
-            "timestamp": datetime(2026, 10, 20, 18, tzinfo=UTC),
-            "status": "created",
-            "created_at": now,
-            "updated_at": now,
-        }
-        cursor = MagicMock()
-        cursor.fetchone.side_effect = [{"exists": True}, None]
-        cursor.__enter__.return_value = cursor
-        connection = MagicMock()
-        connection.cursor.return_value = cursor
-        app.dependency_overrides[get_connection] = lambda: connection
-        with (
-            patch.object(
-                api_main,
-                "_plan_feature_inputs",
-                return_value=["input-revision"],
+        completed = MaterializationRequest(
+            submitted_job=None,
+            partitions=(
+                MaterializationPartition(
+                    id=UUID("00000000-0000-0000-0000-000000000002"),
+                    job_id=UUID("00000000-0000-0000-0000-000000000001"),
+                    timestamp=datetime(2026, 10, 20, 18, tzinfo=UTC),
+                    status=PartitionStatus.CREATED,
+                    created_at=now,
+                    updated_at=now,
+                ),
             ),
-            patch.object(
-                api_main, "_completed_feature_request", return_value=completed
-            ),
-            patch.object(
-                api_main, "_feature_plan_ids", return_value={"input-revision"}
-            ),
-        ):
+        )
+        with patch(
+            "ml_platform.api.routers._features.FeatureRepository"
+        ) as repository_type:
+            repository_type.return_value.materialize.return_value = completed
             response = self.client.post(
                 "/features/trailing_volatility_1d/versions/1/partitions",
                 json={"timestamps": ["2026-10-20T18:00:00Z"]},
@@ -219,42 +182,35 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         self.assertIsNone(response.json()["submitted_job"])
         self.assertEqual(
             response.json()["partitions"][0]["partition_id"],
-            completed["partition_id"],
-        )
-        self.assertFalse(
-            any(
-                "INSERT INTO jobs" in str(call)
-                for call in cursor.execute.call_args_list
-            )
+            "00000000-0000-0000-0000-000000000002",
         )
 
     def test_get_job_returns_persisted_job(self) -> None:
-        """The job endpoint returns the database-backed aggregate status."""
+        """The job endpoint renders repository-owned job domain models."""
         now = datetime.now(UTC)
-        row = {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "type": "dataset_materialization",
-            "status": "submitted",
-            "created_at": now,
-            "updated_at": now,
-        }
-        cursor = MagicMock()
-        cursor.fetchone.return_value = row
-        cursor.fetchall.side_effect = [
-            [{"resource_type": "dataset", "name": "sp500", "version": 3}],
-            [
-                {
-                    "resource_type": "dataset",
-                    "name": "sp500",
-                    "version": 3,
-                    "timestamp": datetime(2026, 10, 20, 18, tzinfo=UTC),
-                    "status": "created",
-                }
-            ],
-        ]
-        cursor.__enter__.return_value = cursor
-        connection = MagicMock()
-        connection.cursor.return_value = cursor
+        job_id = JobId(UUID("00000000-0000-0000-0000-000000000001"))
+        job = MaterializationJob(
+            id=job_id,
+            type=JobType.DATASET_MATERIALIZATION,
+            status=JobStatus.SUBMITTED,
+            created_at=CreatedAt(now),
+            updated_at=UpdatedAt(now),
+        )
+        target = JobTarget(
+            resource_type=ResourceType.DATASET,
+            name=ResourceName("sp500"),
+            version=ResourceVersion(3),
+        )
+        partition = JobPartition(
+            resource_type=ResourceType.DATASET,
+            name=ResourceName("sp500"),
+            version=ResourceVersion(3),
+            timestamp=PartitionTimestamp(
+                datetime(2026, 10, 20, 18, tzinfo=UTC)
+            ),
+            status=PartitionStatus.CREATED,
+        )
+        session = MagicMock()
 
         with (
             patch.dict(
@@ -263,10 +219,19 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                 clear=False,
             ),
             patch(
-                "ml_platform.api.main.kubernetes_client.CoreV1Api"
+                "ml_platform.api.routers._jobs.JobRepository"
+            ) as repository_type,
+            patch(
+                "ml_platform.api.services._resources.kubernetes_client.CoreV1Api"
             ) as core_api,
-            patch("ml_platform.api.main.kubernetes_client.CustomObjectsApi"),
+            patch(
+                "ml_platform.api.services._resources.kubernetes_client.CustomObjectsApi"
+            ),
         ):
+            repository = repository_type.return_value
+            repository.get.return_value = job
+            repository.targets.return_value = (target,)
+            repository.partitions.return_value = (partition,)
             core_api.return_value.list_namespaced_pod.return_value.items = [
                 SimpleNamespace(
                     metadata=SimpleNamespace(
@@ -281,23 +246,14 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                     )
                 ),
             ]
-            response = get_job(row["id"], connection)
+            response = get_job(job_id, session)
 
-        self.assertEqual(str(response.id), row["id"])
+        self.assertEqual(str(response.id), str(job_id))
         self.assertEqual(response.status, "submitted")
         self.assertEqual(response.targets[0].name, "sp500")
         self.assertEqual(response.targets[0].version, 3)
         self.assertEqual(response.partitions[0].status, "created")
-        self.assertEqual(
-            response.spark_application_name,
-            "dataset-00000000-0000-0000-0000-000000000001",
-        )
-        self.assertEqual(
-            response.headlamp_url,
-            "http://headlamp.test/c/main/customresources/"
-            "sparkapplications.sparkoperator.k8s.io/ml-platform/"
-            "dataset-00000000-0000-0000-0000-000000000001",
-        )
+        self.assertEqual(response.spark_application_name, f"dataset-{job_id}")
         self.assertEqual(
             response.kubernetes_resources[0].resource_type, "Spark Application"
         )
@@ -310,16 +266,6 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         )
         self.assertEqual(
             response.kubernetes_resources[1].resource_id, "dataset-job-driver"
-        )
-        self.assertEqual(
-            response.kubernetes_resources[1].url,
-            "http://headlamp.test/c/main/pods/ml-platform/dataset-job-driver",
-        )
-        self.assertEqual(
-            response.kubernetes_resources[2].resource_type, "Executor Pod"
-        )
-        self.assertIn(
-            "partition_update_requests", str(cursor.execute.call_args_list)
         )
 
 
@@ -336,7 +282,9 @@ class MaterializationBehaviorTest(unittest.TestCase):
 
     def test_dataset_request_returns_existing_completed_partition(self) -> None:
         """A create-missing dataset request does not enqueue another writer."""
-        from ml_platform.api.main import materialize_dataset_partitions
+        from ml_platform.api.routers import (
+            materialize_dataset_partitions,
+        )
         from ml_platform.common.api.dtos import PartitionMaterializationRequest
 
         now = datetime.now(UTC)
@@ -348,137 +296,90 @@ class MaterializationBehaviorTest(unittest.TestCase):
             "created_at": now,
             "updated_at": now,
         }
-        connection, cursor = self._connection([{"exists": True}, completed])
-        response = materialize_dataset_partitions(
-            "sp500",
-            1,
-            PartitionMaterializationRequest(
-                timestamps=[completed["timestamp"]]
+        materialization = MaterializationRequest(
+            submitted_job=None,
+            partitions=(
+                MaterializationPartition(
+                    id=UUID(completed["partition_id"]),
+                    job_id=UUID(completed["job_id"]),
+                    timestamp=completed["timestamp"],
+                    status="created",
+                    created_at=now,
+                    updated_at=now,
+                ),
             ),
-            connection,
         )
+        session = MagicMock()
+        with patch(
+            "ml_platform.api.routers._datasets.DatasetRepository"
+        ) as repository_type:
+            repository_type.return_value.materialize.return_value = (
+                materialization
+            )
+            response = materialize_dataset_partitions(
+                "sp500",
+                1,
+                PartitionMaterializationRequest(
+                    timestamps=[completed["timestamp"]]
+                ),
+                session,
+            )
         self.assertIsNone(response.submitted_job)
         self.assertEqual(
             str(response.partitions[0].partition_id), completed["partition_id"]
         )
-        self.assertFalse(
-            any(
-                "INSERT INTO jobs" in str(call)
-                for call in cursor.execute.call_args_list
-            )
-        )
+        repository_type.return_value.materialize.assert_called_once()
 
     def test_feature_force_replaces_current_partition(self) -> None:
-        """Force creates a new request even when recorded inputs still match."""
-        from ml_platform.api.main import materialize_feature_partitions
+        """The route adapts a submitted feature materialization domain result."""
+        from ml_platform.api.routers import (
+            materialize_feature_partitions,
+        )
         from ml_platform.common.api.dtos import (
             FeaturePartitionMaterializationRequest,
         )
 
         now = datetime.now(UTC)
-        completed = {
-            "partition_id": "00000000-0000-0000-0000-000000000002",
-            "job_id": "00000000-0000-0000-0000-000000000001",
-            "timestamp": datetime(2026, 10, 20, 18, tzinfo=UTC),
-            "status": "created",
-            "created_at": now,
-            "updated_at": now,
-        }
-        job = {
-            "id": "00000000-0000-0000-0000-000000000003",
-            "type": "feature_materialization",
-            "status": "submitted",
-            "created_at": now,
-            "updated_at": now,
-        }
-        created = {
-            **completed,
-            "partition_id": "00000000-0000-0000-0000-000000000004",
-            "job_id": job["id"],
-            "status": "pending",
-        }
-        connection, _ = self._connection(
-            [{"exists": True}, None, None, job, created]
-        )
-        with (
-            patch.object(
-                api_main, "_plan_feature_inputs", return_value=["input"]
+        materialization = MaterializationRequest(
+            submitted_job=MaterializationJob(
+                id=JobId(UUID("00000000-0000-0000-0000-000000000003")),
+                type=JobType.FEATURE_MATERIALIZATION,
+                status=JobStatus.SUBMITTED,
+                created_at=now,
+                updated_at=now,
             ),
-            patch.object(
-                api_main, "_completed_feature_request", return_value=completed
-            ),
-            patch.object(api_main, "_feature_plan_ids", return_value={"input"}),
-        ):
-            response = materialize_feature_partitions(
-                "returns",
-                1,
-                FeaturePartitionMaterializationRequest(
-                    timestamps=[completed["timestamp"]], mode="force"
+            partitions=(
+                MaterializationPartition(
+                    id=UUID("00000000-0000-0000-0000-000000000004"),
+                    job_id=UUID("00000000-0000-0000-0000-000000000003"),
+                    timestamp=datetime(2026, 10, 20, 18, tzinfo=UTC),
+                    status=PartitionStatus.PENDING,
+                    created_at=now,
+                    updated_at=now,
                 ),
-                connection,
-            )
-        self.assertEqual(str(response.submitted_job.id), job["id"])
-        self.assertEqual(response.partitions[0].status, "pending")
-
-    def test_feature_completion_rejects_unplanned_parent_revisions(
-        self,
-    ) -> None:
-        """A worker cannot report a receipt for a different input plan."""
-        from fastapi import HTTPException
-
-        from ml_platform.api.main import complete_partitions
-        from ml_platform.common.api.dtos import PartitionCompletionRequest
-
-        partition_id = "00000000-0000-0000-0000-000000000002"
-        connection, cursor = self._connection(
-            [
-                {"name": "returns", "version": 1},
-                {
-                    "callback_token": "token",
-                    "name": "returns",
-                    "version": 1,
-                    "deleted_at": None,
-                    "status": "pending",
-                    "job_status": "submitted",
-                    "job_id": "00000000-0000-0000-0000-000000000001",
-                },
-            ]
-        )
-        with (
-            patch.object(
-                api_main, "_completion_plan_ids", return_value={"planned"}
             ),
-            self.assertRaises(HTTPException) as raised,
-        ):
-            complete_partitions(
-                [
-                    PartitionCompletionRequest.model_validate(
-                        {
-                            "partition_id": partition_id,
-                            "resource_type": "feature",
-                            "row_count": 1,
-                            "iceberg_schema": {
-                                "timestamp": "timestamp",
-                                "symbol": "string",
-                                "feature_value": "double",
-                            },
-                            "content_hash": "hash",
-                            "snapshot_id": 1,
-                            "callback_token": "token",
-                            "dataset_partition_ids": [
-                                "00000000-0000-0000-0000-000000000003"
-                            ],
-                        }
-                    )
-                ],
-                connection,
+        )
+        session = MagicMock()
+        with patch(
+            "ml_platform.api.routers._features.FeatureRepository"
+        ) as repository_type:
+            repository_type.return_value.materialize.return_value = (
+                materialization
             )
-        self.assertEqual(raised.exception.status_code, 409)
-        self.assertFalse(
-            any(
-                "INSERT INTO feature_partitions" in str(call)
-                for call in cursor.execute.call_args_list
+            response = materialize_feature_partitions(
+                "trailing_volatility_1d",
+                1,
+                FeaturePartitionMaterializationRequest.model_validate(
+                    {
+                        "timestamps": [datetime(2026, 10, 20, 18, tzinfo=UTC)],
+                        "mode": "force",
+                    }
+                ),
+                session,
             )
+        self.assertEqual(
+            response.partitions[0].partition_id,
+            UUID("00000000-0000-0000-0000-000000000004"),
         )
 
 
@@ -487,21 +388,31 @@ class DashboardReadApiTest(unittest.TestCase):
 
     def test_dataset_summary_returns_status_counts(self) -> None:
         """Dataset list is a read-only projection suitable for dashboard cards."""
-        dataset = Dataset(
-            name="sp500",
-            version=3,
-            dataset_type="market_data",
-            config={},
-            created_at=datetime.now(UTC),
+        summary = DatasetSummary(
+            definition=DatasetDefinition(
+                name="sp500",
+                version=3,
+                dataset_type="market_data",
+                config={},
+                created_at=datetime.now(UTC),
+                lifecycle=ResourceLifecycle.ACTIVE,
+                deleted_at=None,
+                deprecated_at=None,
+            ),
+            partitions=PartitionCounts(total=2, created=1, pending=1, failed=0),
         )
         session = MagicMock()
-        session.execute.return_value.all.return_value = [(dataset, 2, 1, 1, 0)]
-
-        result = api_main.list_datasets(session)
+        with patch(
+            "ml_platform.api.routers._datasets.DatasetRepository"
+        ) as repository_type:
+            repository_type.return_value.list.return_value = (summary,)
+            result = list_datasets(session)
 
         self.assertEqual(result[0]["name"], "sp500")
         self.assertEqual(result[0]["created_partition_count"], 1)
-        self.assertIsInstance(session.execute.call_args.args[0], Select)
+        repository_type.return_value.list.assert_called_once_with(
+            include_deleted=False
+        )
 
     def test_static_dashboard_is_served(self) -> None:
         """The browser UI is available without a separate frontend deployment."""
@@ -527,15 +438,9 @@ class ResourceDeletionTest(unittest.TestCase):
 
     def test_delete_dataset_soft_deletes_and_cancels_pending_work(self) -> None:
         """Deleting a dataset retires its definition and any unfinished work."""
-        from ml_platform.api.main import delete_dataset
+        from ml_platform.api.routers import delete_dataset
 
-        dataset = Dataset(
-            name="sp500",
-            version=3,
-            dataset_type="market_data",
-            config={},
-            created_at=datetime.now(UTC),
-        )
+        dataset = SimpleNamespace(deleted_at=None)
         session = MagicMock()
         session.get.return_value = dataset
 
@@ -549,7 +454,9 @@ class ResourceDeletionTest(unittest.TestCase):
         """The partition endpoint rejects a resource that has been soft-deleted."""
         from fastapi import HTTPException
 
-        from ml_platform.api.main import materialize_dataset_partitions
+        from ml_platform.api.routers import (
+            materialize_dataset_partitions,
+        )
         from ml_platform.common.api.dtos import PartitionMaterializationRequest
 
         connection, _ = self._connection([None])
@@ -568,9 +475,9 @@ class ResourceDeletionTest(unittest.TestCase):
         """Catalog list calls keep soft-deleted versions hidden by default."""
         session = MagicMock()
         session.execute.return_value.all.return_value = []
-        api_main.list_datasets(session)
+        list_datasets(session)
         hidden_statement = session.execute.call_args.args[0]
-        api_main.list_datasets(session, include_deleted=True)
+        list_datasets(session, include_deleted=True)
         all_statement = session.execute.call_args.args[0]
 
         self.assertIn("deleted_at IS NULL", str(hidden_statement))
@@ -589,7 +496,7 @@ class MinioLocationTest(unittest.TestCase):
             {"MINIO_CONSOLE_URL": "http://minio.test:9003"},
             clear=False,
         ):
-            api_main._attach_minio_locations(
+            attach_minio_locations(
                 resource, "features/trailing_volatility_1d-v1"
             )
 

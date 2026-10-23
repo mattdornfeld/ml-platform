@@ -5,18 +5,17 @@ import unittest
 from uuid import UUID, uuid4
 
 import psycopg
+import pytest
 from fastapi import HTTPException
-from psycopg.rows import dict_row
+from sqlalchemy.exc import DataError
+from sqlalchemy.orm import Session
 
-from ml_platform.api.main import complete_partitions
-from ml_platform.api.migrations import migrate_database
+from ml_platform.api.infrastructure import engine_for, upgrade_database
+from ml_platform.api.routers import complete_partitions
 from ml_platform.common.api.dtos import PartitionCompletionRequest
 
 
-@unittest.skipUnless(
-    os.environ.get("ML_PLATFORM_TEST_DATABASE_URL"),
-    "Requires a disposable PostgreSQL test database.",
-)
+@pytest.mark.usefixtures("postgres_database")
 class PartitionCompletionDatabaseTest(unittest.TestCase):
     """Verify all-or-nothing writes against real PostgreSQL constraints."""
 
@@ -26,7 +25,7 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
         previous = os.environ.get("DATABASE_URL")
         os.environ["DATABASE_URL"] = cls.database_url
         try:
-            migrate_database()
+            upgrade_database()
         finally:
             if previous is None:
                 os.environ.pop("DATABASE_URL", None)
@@ -83,10 +82,8 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
         )
 
     def _complete(self, receipts: list[PartitionCompletionRequest]):
-        with psycopg.connect(
-            self.database_url, row_factory=dict_row
-        ) as connection:
-            return complete_partitions(receipts, connection)
+        with Session(engine_for(self.database_url)) as session:
+            return complete_partitions(receipts, session)
 
     def _state(self) -> tuple[int, list[str], str]:
         with psycopg.connect(self.database_url) as connection:
@@ -143,7 +140,7 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
     def test_database_error_after_first_insert_rolls_back_batch(self) -> None:
         """A late SQL failure cannot leave a partial completion receipt."""
         overflowing = self._receipt(1).model_copy(update={"row_count": 2**63})
-        with self.assertRaises(psycopg.errors.NumericValueOutOfRange):
+        with self.assertRaises(DataError):
             self._complete([self._receipt(0), overflowing])
         self.assertEqual(
             self._state(), (0, ["pending", "pending"], "submitted")

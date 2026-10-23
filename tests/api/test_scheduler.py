@@ -5,13 +5,13 @@ import unittest
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
-from ml_platform.api.scheduler import ADMISSION_GATE, JobScheduler
+from ml_platform.api.services import ADMISSION_GATE, JobScheduler
 
 
 class SchedulerTest(unittest.TestCase):
     """Cover manifest construction and terminal-state mapping without Kubernetes."""
 
-    @patch("ml_platform.api.scheduler.client.CustomObjectsApi")
+    @patch("ml_platform.api.services._scheduler.client.CustomObjectsApi")
     def test_dataset_application_is_created_admission_gated(
         self, custom_objects: MagicMock
     ) -> None:
@@ -64,7 +64,7 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual(config["warehouse_dir"], "s3a://warehouse")
         self.assertEqual(config["partitions"], [])
 
-    @patch("ml_platform.api.scheduler.client.CustomObjectsApi")
+    @patch("ml_platform.api.services._scheduler.client.CustomObjectsApi")
     def test_terminal_spark_states_finish_the_api_job(
         self, custom_objects: MagicMock
     ) -> None:

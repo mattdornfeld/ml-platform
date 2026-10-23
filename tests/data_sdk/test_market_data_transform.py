@@ -3,11 +3,8 @@
 import unittest
 from datetime import UTC, date, datetime
 
-from ml_platform.data_sdk.dataset_transforms._market_data import (
-    YahooFinancePayloadError,
-    _contiguous_date_ranges,
-    _yahoo_chart_rows,
-)
+import ml_platform.data_sdk.dataset_transforms as dataset_transforms
+from ml_platform.data_sdk.exceptions import YahooFinancePayloadError
 
 
 class YahooChartRowsTest(unittest.TestCase):
@@ -39,7 +36,9 @@ class YahooChartRowsTest(unittest.TestCase):
 
     def test_rows_convert_complete_bars_to_utc_tuples(self) -> None:
         """Incomplete upstream bars are excluded from typed output rows."""
-        rows = _yahoo_chart_rows(self._payload(), "AAA")
+        rows = dataset_transforms._market_data._yahoo_chart_rows(
+            self._payload(), "AAA"
+        )
         self.assertEqual(len(rows), 1)
         self.assertEqual(
             rows[0].timestamp, datetime(2026, 1, 2, 14, 30, tzinfo=UTC)
@@ -73,12 +72,17 @@ class YahooChartRowsTest(unittest.TestCase):
                 self.subTest(payload=payload),
                 self.assertRaises(YahooFinancePayloadError),
             ):
-                _yahoo_chart_rows(payload, "AAA")
+                dataset_transforms._market_data._yahoo_chart_rows(
+                    payload, "AAA"
+                )
 
     def test_no_provider_results_returns_no_rows(self) -> None:
         """An empty Yahoo result is distinct from a malformed response."""
         self.assertEqual(
-            _yahoo_chart_rows({"chart": {"result": []}}, "AAA"), []
+            dataset_transforms._market_data._yahoo_chart_rows(
+                {"chart": {"result": []}}, "AAA"
+            ),
+            [],
         )
 
 
@@ -90,7 +94,7 @@ class MarketDataRangeTest(unittest.TestCase):
     ) -> None:
         """Adjacent dates share one half-open Yahoo request range."""
         self.assertEqual(
-            _contiguous_date_ranges(
+            dataset_transforms._market_data._contiguous_date_ranges(
                 [date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 4)]
             ),
             [
@@ -98,4 +102,6 @@ class MarketDataRangeTest(unittest.TestCase):
                 (date(2026, 1, 4), date(2026, 1, 5)),
             ],
         )
-        self.assertEqual(_contiguous_date_ranges([]), [])
+        self.assertEqual(
+            dataset_transforms._market_data._contiguous_date_ranges([]), []
+        )

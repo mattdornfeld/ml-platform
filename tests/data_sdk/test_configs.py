@@ -4,6 +4,13 @@ import unittest
 
 from pydantic import ValidationError
 
+from ml_platform.data_sdk import (
+    DatasetType,
+    FeatureDatasetDependency,
+    FeatureInputWindow,
+    LabelDatasetDependency,
+    LabelInputWindow,
+)
 from ml_platform.data_sdk.configs import (
     DatasetConfig,
     DataType,
@@ -14,13 +21,6 @@ from ml_platform.data_sdk.configs import (
     RunFrequency,
 )
 from ml_platform.data_sdk.materializers import MinimumRowsValidationConfig
-from ml_platform.data_sdk.transforms._types import (
-    DatasetType,
-    FeatureDatasetDependency,
-    FeatureInputWindow,
-    LabelDatasetDependency,
-    LabelInputWindow,
-)
 
 
 class DatasetConfigTest(unittest.TestCase):

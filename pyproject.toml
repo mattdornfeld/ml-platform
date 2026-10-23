@@ -18,12 +18,13 @@ dependencies = [
     "simple-classproperty>=4.0.2",
     "exchange-calendars>=4.13,<5",
     "sqlalchemy>=2.0,<2.1",
+    "alembic>=1.16,<2",
 ]
 
 [project.scripts]
 ml-platform-train = "ml_platform.model_sdk.train:main"
 ml-platform-parquet-explorer = "ml_platform.data_sdk.utils.data_explorer:main"
-ml-platform-api = "ml_platform.api.main:main"
+ml-platform-api = "ml_platform.api.app:main"
 ml-platform-materialize-dataset = "ml_platform.data_sdk.materializers._dataset:main"
 ml-platform = "ml_platform.cli.materialization:main"
 
@@ -45,10 +46,16 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-ruff>=0.5",
     "ruff>=0.17.2",
+    "testcontainers[postgres]>=4.13,<5",
     "types-requests>=2.33.0.20261006",
 ]
 
+[tool.alembic]
+script_location = "%(here)s/src/ml_platform/api/infrastructure/alembic"
+prepend_sys_path = ["%(here)s", "%(here)s/src"]
+
 [tool.mypy]
+warn_unreachable = true
 python_version = "3.12"
 mypy_path = ["src"]
 explicit_package_bases = true
@@ -72,12 +79,14 @@ line-length = 80
 src = ["src", "tests"]
 
 [tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
 select = [
     "A", "ANN", "ARG", "ASYNC", "B", "BLE", "C4", "C90", "COM", "D",
     "DTZ", "E", "ERA", "EXE", "F", "FA", "FBT", "FLY",
     "FURB", "G", "I", "ICN", "INP", "ISC", "LOG", "N", "PERF", "PGH",
     "PIE", "PTH", "Q", "RET", "RSE", "RUF", "S", "SIM", "SLOT", "T10",
-    "T20", "TCH", "TID", "UP",
+    "T20", "TCH", "TID", "UP", "PLC2701",
     "W", "YTT",
 ]
 # Ruff format owns whitespace, quotes, commas, indentation, and line wrapping.

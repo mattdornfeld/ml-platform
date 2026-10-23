@@ -6,12 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
+from ml_platform.data_sdk import PartitionType
 from ml_platform.data_sdk.materializers import (
     DatasetMaterializationConfig,
     DatasetMaterializer,
     IcebergTable,
 )
-from ml_platform.data_sdk.transforms._types import PartitionType
 
 
 def dataset_config() -> DatasetMaterializationConfig:

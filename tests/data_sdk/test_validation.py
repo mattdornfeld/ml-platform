@@ -10,34 +10,28 @@ from unittest.mock import patch
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as spark_functions
 
-from ml_platform.data_sdk.configs import DataType, RunFrequency
-from ml_platform.data_sdk.dataset_transforms._market_data import (
-    MarketDataTransform,
+from ml_platform.data_sdk import (
+    DatasetType,
+    EntityKey,
+    PartitionType,
 )
+from ml_platform.data_sdk.configs import DataType, RunFrequency
+from ml_platform.data_sdk.dataset_transforms import MarketDataTransform
 from ml_platform.data_sdk.exceptions import (
     FiniteValuesValidationError,
     InputKeysValidationError,
     RequestedPartitionsValidationError,
 )
 from ml_platform.data_sdk.materializers import (
+    DatasetMaterializationConfig,
+    DatasetMaterializer,
     ExactColumnsValidationConfig,
+    FeatureMaterializationConfig,
+    FeatureMaterializer,
     MaterializationValidator,
     MaterializerPartition,
     MinimumRowsValidation,
     ValidationConfigs,
-)
-from ml_platform.data_sdk.materializers._dataset import (
-    DatasetMaterializationConfig,
-    DatasetMaterializer,
-)
-from ml_platform.data_sdk.materializers._feature import (
-    FeatureMaterializationConfig,
-    FeatureMaterializer,
-)
-from ml_platform.data_sdk.transforms._types import (
-    DatasetType,
-    EntityKey,
-    PartitionType,
 )
 
 

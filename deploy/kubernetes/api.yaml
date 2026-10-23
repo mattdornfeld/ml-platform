@@ -37,7 +37,7 @@ spec:
         image: ml-platform:latest
         imagePullPolicy: IfNotPresent
         command: [python]
-        args: [-m, uvicorn, ml_platform.api.main:app, --host, 0.0.0.0, --port, '8000']
+        args: [-m, uvicorn, ml_platform.api.app:app, --host, 0.0.0.0, --port, '8000']
         env:
         - {name: DATABASE_URL, value: postgresql://postgres@postgres:5432/ml_platform}
         - {name: DATA_WAREHOUSE_DIR, value: s3a://warehouse}

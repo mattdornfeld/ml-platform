@@ -6,30 +6,26 @@ from unittest.mock import MagicMock, patch
 
 from pyspark.sql import DataFrame
 
-from ml_platform.data_sdk.configs import DataType, RunFrequency
-from ml_platform.data_sdk.exceptions import DatasetPartitionPlanError
-from ml_platform.data_sdk.label_transforms._triple_barrier import (
-    TripleBarrierLabelTransform,
-)
-from ml_platform.data_sdk.materializers._base import (
-    MaterializerPartition,
-    PartitionDependency,
-)
-from ml_platform.data_sdk.materializers._feature import (
-    FeatureMaterializationConfig,
-    FeatureMaterializer,
-)
-from ml_platform.data_sdk.materializers._label import (
-    LabelMaterializationConfig,
-    LabelMaterializer,
-)
-from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
-from ml_platform.data_sdk.transforms._label_transform import LabelTransform
-from ml_platform.data_sdk.transforms._types import (
+from ml_platform.data_sdk import (
     Dataset,
     DatasetType,
     FeatureDatasetDependency,
     FeatureInputWindow,
+    FeatureTransform,
+    LabelTransform,
+)
+from ml_platform.data_sdk.configs import DataType, RunFrequency
+from ml_platform.data_sdk.exceptions import DatasetPartitionPlanError
+from ml_platform.data_sdk.label_transforms import (
+    TripleBarrierLabelTransform,
+)
+from ml_platform.data_sdk.materializers import (
+    FeatureMaterializationConfig,
+    FeatureMaterializer,
+    LabelMaterializationConfig,
+    LabelMaterializer,
+    MaterializerPartition,
+    PartitionDependency,
 )
 from ml_platform.data_sdk.utils import record
 
@@ -225,7 +221,7 @@ class TransformMaterializerTest(unittest.TestCase):
                         },
                     }
                 ],
-                "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
+                "transform": "ml_platform.data_sdk.label_transforms.TripleBarrierLabelTransform",
                 "parameters": {
                     "horizon_bars": 24,
                     "volatility_lookback_bars": 24,

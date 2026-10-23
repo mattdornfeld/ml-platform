@@ -5,11 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ml_platform.cli.materialization import (
-    _dataset_payload,
-    _load_yaml,
-    sync_resources,
-)
+import ml_platform.cli.materialization as materialization
+from ml_platform.cli.materialization import sync_resources
 from ml_platform.common.api.dtos import ResourceType
 
 
@@ -48,8 +45,8 @@ validations:
 
     def test_dataset_payload_conforms_to_the_public_api_contract(self) -> None:
         """Internal dataset settings never leak into the public request DTO."""
-        payload = _dataset_payload(
-            _load_yaml(self.root / "datasets" / "prices.yaml")
+        payload = materialization._dataset_payload(
+            materialization._load_yaml(self.root / "datasets" / "prices.yaml")
         )
 
         self.assertNotIn("run_frequency", payload["config"])

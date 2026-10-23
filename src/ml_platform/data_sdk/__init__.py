@@ -18,6 +18,7 @@ from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.transforms._types import (
     Dataset,
     DatasetDependency,
+    DatasetReference,
     FeatureDatasetDependency,
     FeatureInputWindow,
     LabelDatasetDependency,
@@ -47,6 +48,7 @@ __all__ = [
     "DatasetDependency",
     "DatasetMaterializationConfig",
     "DatasetMaterializer",
+    "DatasetReference",
     "DatasetTransform",
     "FeatureDatasetDependency",
     "FeatureInputWindow",
@@ -70,6 +72,7 @@ __all__ = [
 from ml_platform.data_sdk.configs import (
     BaseConfig,
     DataConfig,
+    DataType,
     DatasetConfig,
     DatasetType,
     FeatureConfig,
@@ -78,6 +81,8 @@ from ml_platform.data_sdk.configs import (
     MarketDataConfig,
     ParameterKey,
     ParameterValue,
+    PartitionType,
+    RunFrequency,
     TripleBarrierConfig,
     TransformName,
 )
@@ -85,6 +90,7 @@ from ml_platform.data_sdk.configs import (
 __all__ += [
     "BaseConfig",
     "DataConfig",
+    "DataType",
     "DatasetConfig",
     "DatasetType",
     "EntityKey",
@@ -93,6 +99,8 @@ __all__ += [
     "MarketDataConfig",
     "ParameterKey",
     "ParameterValue",
+    "PartitionType",
+    "RunFrequency",
     "TransformName",
     "TripleBarrierConfig",
 ]

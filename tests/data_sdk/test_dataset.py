@@ -4,11 +4,11 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from ml_platform.data_sdk.materializers._dataset import (
+from ml_platform.data_sdk.materializers import (
     DatasetMaterializationConfig,
     DatasetMaterializer,
+    IcebergTable,
 )
-from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
 
 
 class DatasetWorkerTest(unittest.TestCase):

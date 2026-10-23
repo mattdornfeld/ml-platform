@@ -29,3 +29,4 @@
 
 - Explicitly model external-data and transformation outputs with named, strongly typed classes rather than anonymous broad containers such as `tuple[object, ...]`.
 - Ask the user before changing a public API contract, including endpoint shapes, API DTOs, or user-facing configuration schemas.
+- Ask before introducing broad container types such as `dict[str, object]` or `dict[str, Any]`. They are exceptional escape hatches, not defaults; prefer explicitly modeled, strongly typed data structures.

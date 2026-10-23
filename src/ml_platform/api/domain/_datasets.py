@@ -1,0 +1,41 @@
+"""Dataset definition domain models."""
+
+from dataclasses import dataclass
+from datetime import datetime
+
+from ml_platform.api.domain._lifecycle import ResourceLifecycle
+from ml_platform.api.domain._partitions import PartitionCounts
+from ml_platform.common.types import CreatedAt, ResourceName, ResourceVersion
+
+
+@dataclass(frozen=True)
+class DatasetDefinition:
+    """A persisted dataset definition independent of HTTP representation."""
+
+    name: ResourceName
+    version: ResourceVersion
+    dataset_type: str
+    config: dict[str, object]
+    created_at: CreatedAt
+    lifecycle: ResourceLifecycle
+    deleted_at: datetime | None
+    deprecated_at: datetime | None
+
+
+@dataclass(frozen=True)
+class DatasetSummary:
+    """A dataset definition with its logical partition status totals."""
+
+    definition: DatasetDefinition
+    partitions: PartitionCounts
+
+
+@dataclass(frozen=True)
+class DatasetDependency:
+    """One transform's declared dependency on a dataset version."""
+
+    name: ResourceName
+    version: ResourceVersion
+    dataset_type: str
+    num_lookback_partitions: int
+    num_lookahead_partitions: int

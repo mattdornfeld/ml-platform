@@ -7,19 +7,19 @@ from datetime import UTC, datetime, timedelta
 
 from pyspark.sql import SparkSession
 
-from ml_platform.data_sdk.feature_transforms import (
-    LogReturnTransform,
-    RelativeVolumeTransform,
-    TrailingVolatilityTransform,
-)
-from ml_platform.data_sdk.label_transforms import TripleBarrierLabelTransform
-from ml_platform.data_sdk.transforms._types import (
+from ml_platform.data_sdk import (
     Dataset,
     DatasetReference,
     DataType,
     EntityKey,
     PartitionType,
 )
+from ml_platform.data_sdk.feature_transforms import (
+    LogReturnTransform,
+    RelativeVolumeTransform,
+    TrailingVolatilityTransform,
+)
+from ml_platform.data_sdk.label_transforms import TripleBarrierLabelTransform
 
 
 class BuiltInTransformTest(unittest.TestCase):
