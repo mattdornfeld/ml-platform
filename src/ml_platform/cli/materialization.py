@@ -178,21 +178,6 @@ def _label_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
     return resources
 
 
-def _resource_routes(
-    resource: str,
-) -> type[DatasetRoutes] | type[FeatureRoutes] | type[LabelRoutes]:
-    """Return the complete public route set for one resource kind."""
-    match resource:
-        case "dataset":
-            return DatasetRoutes
-        case "feature":
-            return FeatureRoutes
-        case "label":
-            return LabelRoutes
-        case _ as unsupported_resource:
-            raise ValueError(f"Unsupported resource {unsupported_resource!r}.")
-
-
 def sync_resources(
     base_url: str, resource: str, config_dir: Path = DEFAULT_CONFIG_DIR
 ) -> dict[str, list[str]]:
@@ -200,17 +185,25 @@ def sync_resources(
     match resource:
         case "dataset":
             desired = _dataset_configs(config_dir)
+            list_route = DatasetRoutes.LIST
+            create_route = DatasetRoutes.CREATE
+            delete_route = DatasetRoutes.DELETE
         case "feature":
             desired = _feature_configs(config_dir)
+            list_route = FeatureRoutes.LIST
+            create_route = FeatureRoutes.CREATE
+            delete_route = FeatureRoutes.DELETE
         case "label":
             desired = _label_configs(config_dir)
+            list_route = LabelRoutes.LIST
+            create_route = LabelRoutes.CREATE
+            delete_route = LabelRoutes.DELETE
         case _ as unsupported_resource:
             raise ValueError(f"Unsupported resource {unsupported_resource!r}.")
-    routes = _resource_routes(resource)
     existing = _api_request(
         base_url,
-        routes.LIST.method,
-        f"{routes.LIST.template}?include_deleted=true",
+        list_route.method,
+        f"{list_route.template}?include_deleted=true",
     )
     active = {
         (row["name"], int(row["version"])): row
@@ -223,7 +216,7 @@ def sync_resources(
     for identity, payload in desired.items():
         if identity not in active:
             _api_request(
-                base_url, routes.CREATE.method, routes.CREATE.template, payload
+                base_url, create_route.method, create_route.template, payload
             )
             created.append(f"{identity[0]} v{identity[1]}")
         elif resource == "dataset" and active[identity].get("config", {}).get(
@@ -242,8 +235,8 @@ def sync_resources(
         if (name, version) not in desired:
             _api_request(
                 base_url,
-                routes.DELETE.method,
-                routes.DELETE.path(name=name, version=version),
+                delete_route.method,
+                delete_route.path(name=name, version=version),
             )
             deleted.append(f"{name} v{version}")
     result = {"created": created, "deleted": deleted}
@@ -338,7 +331,17 @@ def main() -> None:
             _label_payload(_load_yaml(args.config)),
         )
     elif args.command == "materialize":
-        route = _resource_routes(args.resource).MATERIALIZE
+        match args.resource:
+            case "dataset":
+                route = DatasetRoutes.MATERIALIZE
+            case "feature":
+                route = FeatureRoutes.MATERIALIZE
+            case "label":
+                route = LabelRoutes.MATERIALIZE
+            case _ as unsupported_resource:
+                raise ValueError(
+                    f"Unsupported resource {unsupported_resource!r}."
+                )
         result = _api_request(
             args.api_url,
             route.method,
