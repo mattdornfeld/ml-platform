@@ -5,7 +5,7 @@ from datetime import datetime
 
 from ml_platform.api.domain._partitions import PartitionCounts
 from ml_platform.common.api.dtos import DatasetStatus
-from ml_platform.common.domain import DatasetDefinitionConfig
+from ml_platform.common.domain import DatasetConfigModel
 from ml_platform.common.types import (
     CreatedAt,
     DatasetType,
@@ -21,7 +21,7 @@ class DatasetDefinition:
     name: ResourceName
     version: ResourceVersion
     dataset_type: DatasetType
-    config: DatasetDefinitionConfig
+    config: DatasetConfigModel
     created_at: CreatedAt
     lifecycle: DatasetStatus
     deleted_at: datetime | None

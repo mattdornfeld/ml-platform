@@ -2,10 +2,13 @@
 
 from enum import StrEnum
 
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, computed_field, field_validator, model_validator
 
 from ml_platform.common.api.dtos._base import _ApiModel
-from ml_platform.common.domain import MarketDataDatasetConfig
+from ml_platform.common.domain import (
+    DatasetTypeConfigurationError,
+    MarketDataDatasetConfig,
+)
 from ml_platform.common.types import (
     CreatedAt,
     DatasetId,
@@ -42,6 +45,15 @@ class DatasetCreateRequest(_ApiModel):
     config: MarketDataDatasetConfig = Field(
         description="Dataset-type-specific materialization definition.",
     )
+
+    @model_validator(mode="after")
+    def validate_dataset_type(self) -> "DatasetCreateRequest":
+        """Require the envelope and nested configuration to name one type."""
+        if self.dataset_type is not self.config.dataset_type:
+            raise DatasetTypeConfigurationError(
+                "Dataset type must match the nested dataset configuration."
+            )
+        return self
 
     @computed_field(  # type: ignore[prop-decorator]
         description="Immutable ID derived from the name and version."

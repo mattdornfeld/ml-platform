@@ -12,8 +12,8 @@ from ml_platform.common.domain import (
     LabelConfig,
     LabelDatasetDependency,
     LabelInputWindow,
-    MarketDataDatasetDefinitionConfig,
-    deserialize_dataset_definition_config,
+    MarketDataConfig,
+    MarketDataDatasetConfig,
 )
 from ml_platform.common.types import (
     DatasetType,
@@ -28,25 +28,27 @@ from ml_platform.data_sdk.materializers import MinimumRowsValidationConfig
 class DatasetConfigTest(unittest.TestCase):
     """Verify common resource configuration behavior."""
 
-    def test_partition_type_defaults_to_run_frequency(self) -> None:
-        """An omitted partition type preserves the configured cadence as a typed enum."""
-        config = DatasetConfig(
+    def test_partition_type_is_explicit_dataset_metadata(self) -> None:
+        """A dataset definition declares its physical partition cadence."""
+        config = MarketDataConfig(
             name="market_data",
             version=1,
-            run_frequency=RunFrequency.HOURLY,
+            partition_type=PartitionType.HOURLY,
             keys=[EntityKey.SYMBOL],
+            symbols=["AAPL"],
         )
 
         self.assertIs(config.partition_type, PartitionType.HOURLY)
 
     def test_explicit_partition_type_is_preserved(self) -> None:
         """A resource can explicitly choose a partition cadence distinct from its run cadence."""
-        config = DatasetConfig(
+        config = MarketDataConfig(
             name="market_data",
             version=1,
             run_frequency=RunFrequency.HOURLY,
             partition_type=PartitionType.DAILY,
             keys=[EntityKey.SYMBOL],
+            symbols=["AAPL"],
         )
 
         self.assertIs(config.partition_type, PartitionType.DAILY)
@@ -54,17 +56,17 @@ class DatasetConfigTest(unittest.TestCase):
     def test_persisted_dataset_config_uses_dataset_type_discriminator(
         self,
     ) -> None:
-        """The persisted type column selects the concrete configuration model."""
-        config = deserialize_dataset_definition_config(
-            DatasetType.MARKET_DATA,
+        """The type stored in configuration selects the concrete model."""
+        config = DatasetConfig.deserialize(
             {
+                "dataset_type": "market_data",
                 "keys": ["symbol"],
                 "partition_type": "daily",
                 "symbols": ["AAPL"],
-            },
+            }
         )
 
-        self.assertIsInstance(config, MarketDataDatasetDefinitionConfig)
+        self.assertIsInstance(config, MarketDataDatasetConfig)
         self.assertIs(config.dataset_type, DatasetType.MARKET_DATA)
         self.assertIs(config.partition_type, PartitionType.DAILY)
 
@@ -72,11 +74,13 @@ class DatasetConfigTest(unittest.TestCase):
         self,
     ) -> None:
         """Partition-level validations default to every requested partition."""
-        config = DatasetConfig(
+        config = MarketDataConfig(
             name="market_data",
             version=1,
             run_frequency=RunFrequency.DAILY,
+            partition_type=PartitionType.DAILY,
             keys=[EntityKey.SYMBOL],
+            symbols=["AAPL"],
             validations=[
                 MinimumRowsValidationConfig(
                     minimum_rows=1,

@@ -11,3 +11,7 @@ class TransformDependencyConfigurationError(DomainConfigurationError):
 
 class MarketSymbolConfigurationError(DomainConfigurationError):
     """A market-data definition has no usable ticker symbols."""
+
+
+class DatasetTypeConfigurationError(DomainConfigurationError):
+    """A dataset type conflicts with its type-specific configuration."""

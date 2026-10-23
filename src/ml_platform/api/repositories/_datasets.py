@@ -44,12 +44,11 @@ from ml_platform.api.repositories.exceptions import (
 )
 from ml_platform.common.api.dtos import DatasetStatus
 from ml_platform.common.domain import (
+    DatasetConfig,
     MarketDataDatasetConfig,
-    deserialize_dataset_definition_config,
 )
 from ml_platform.common.types import (
     CreatedAt,
-    DatasetType,
     Description,
     JobId,
     PartitionId,
@@ -79,13 +78,12 @@ class DatasetRepository:
     @classmethod
     def definition(cls, dataset: Dataset) -> DatasetDefinition:
         """Map one dataset ORM row to an immutable domain definition."""
+        configuration = DatasetConfig.deserialize(dataset.config)
         return DatasetDefinition(
             name=ResourceName(dataset.name),
             version=ResourceVersion(dataset.version),
-            dataset_type=DatasetType(dataset.dataset_type),
-            config=deserialize_dataset_definition_config(
-                DatasetType(dataset.dataset_type), dataset.config
-            ),
+            dataset_type=configuration.dataset_type,
+            config=configuration,
             created_at=CreatedAt(dataset.created_at),
             lifecycle=cls._status(dataset),
             deleted_at=dataset.deleted_at,
@@ -274,7 +272,7 @@ class DatasetRepository:
         definition = self.definition(dataset)
         dataset.config = definition.config.model_copy(
             update={"description": description}
-        ).model_dump(mode="json", exclude={"dataset_type"})
+        ).model_dump(mode="json")
         self.session.commit()
         self.session.refresh(dataset)
         return self.definition(dataset)
@@ -315,14 +313,13 @@ class DatasetRepository:
         *,
         name: ResourceName,
         version: ResourceVersion,
-        dataset_type: DatasetType,
         config: MarketDataDatasetConfig,
     ) -> DatasetDefinition:
         """Persist one immutable dataset definition inside the active transaction."""
         dataset = Dataset(
             name=name,
             version=version,
-            dataset_type=dataset_type.value,
+            dataset_type=config.dataset_type.value,
             config=config.model_dump(mode="json"),
         )
         try:
