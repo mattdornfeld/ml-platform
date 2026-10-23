@@ -392,9 +392,9 @@ class LabelRepository:
         ).tuples()
         planned_partition_ids: list[UUID] = []
         for dependency, dataset in dependencies:
-            partition_interval = DatasetRepository.partition_type(
+            partition_interval = DatasetRepository.definition(
                 dataset
-            ).partition_interval
+            ).config.partition_type.partition_interval
             first_timestamp = timestamp - (
                 partition_interval * dependency.num_lookback_partitions
             )

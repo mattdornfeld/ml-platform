@@ -12,7 +12,8 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as spark_functions
 from pyspark.sql.column import Column
 
-from ml_platform.data_sdk.configs import TransformConfig
+from ml_platform.common.domain import DatasetDependency, TransformConfig
+from ml_platform.common.types import DataType, EntityKey, PartitionType
 from ml_platform.data_sdk.materializers._base import (
     Materializer,
     MaterializerConfig,
@@ -37,14 +38,7 @@ from ml_platform.data_sdk.materializers.exceptions import (
     TransformTypeError,
 )
 from ml_platform.data_sdk.transforms._base import DataTransform
-from ml_platform.data_sdk.transforms._types import (
-    Dataset,
-    DatasetDependency,
-    DatasetReference,
-    DataType,
-    EntityKey,
-    PartitionType,
-)
+from ml_platform.data_sdk.transforms._types import Dataset, DatasetReference
 
 
 class TransformMaterializationConfig(MaterializerConfig, TransformConfig[str]):

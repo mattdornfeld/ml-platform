@@ -5,7 +5,13 @@ from datetime import datetime
 
 from ml_platform.api.domain._partitions import PartitionCounts
 from ml_platform.common.api.dtos import DatasetStatus
-from ml_platform.common.types import CreatedAt, ResourceName, ResourceVersion
+from ml_platform.common.domain import MarketDataDatasetConfig
+from ml_platform.common.types import (
+    CreatedAt,
+    DatasetType,
+    ResourceName,
+    ResourceVersion,
+)
 
 
 @dataclass(frozen=True)
@@ -14,8 +20,8 @@ class DatasetDefinition:
 
     name: ResourceName
     version: ResourceVersion
-    dataset_type: str
-    config: dict[str, object]
+    dataset_type: DatasetType
+    config: MarketDataDatasetConfig
     created_at: CreatedAt
     lifecycle: DatasetStatus
     deleted_at: datetime | None

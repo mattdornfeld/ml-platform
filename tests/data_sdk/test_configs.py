@@ -4,19 +4,19 @@ import unittest
 
 from pydantic import ValidationError
 
-from ml_platform.data_sdk import (
-    DatasetType,
+from ml_platform.common.domain import (
+    DatasetConfig,
+    FeatureConfig,
     FeatureDatasetDependency,
     FeatureInputWindow,
+    LabelConfig,
     LabelDatasetDependency,
     LabelInputWindow,
 )
-from ml_platform.data_sdk.configs import (
-    DatasetConfig,
+from ml_platform.common.types import (
+    DatasetType,
     DataType,
     EntityKey,
-    FeatureConfig,
-    LabelConfig,
     PartitionType,
     RunFrequency,
 )

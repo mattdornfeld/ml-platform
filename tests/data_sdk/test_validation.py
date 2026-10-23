@@ -10,12 +10,13 @@ from unittest.mock import patch
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as spark_functions
 
-from ml_platform.data_sdk import (
+from ml_platform.common.types import (
     DatasetType,
+    DataType,
     EntityKey,
     PartitionType,
+    RunFrequency,
 )
-from ml_platform.data_sdk.configs import DataType, RunFrequency
 from ml_platform.data_sdk.dataset_transforms import MarketDataTransform
 from ml_platform.data_sdk.exceptions import (
     FiniteValuesValidationError,

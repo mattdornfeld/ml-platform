@@ -1,12 +1,6 @@
 """Public exception hierarchy for the ML Platform data SDK."""
 
-from ml_platform.data_sdk._exceptions import (
-    DataSdkError,
-    MarketSymbolConfigurationError,
-)
-from ml_platform.data_sdk.configs._configs import (
-    TransformDependencyConfigurationError,
-)
+from ml_platform.data_sdk._exceptions import DataSdkError
 from ml_platform.data_sdk.dataset_transforms._market_data import (
     MarketDataPartitionError,
     YahooFinanceDataUnavailableError,
@@ -53,7 +47,6 @@ __all__ = [
     "FiniteValuesValidationError",
     "InputKeysValidationError",
     "MarketDataPartitionError",
-    "MarketSymbolConfigurationError",
     "MaterializerError",
     "MinimumRowsValidationError",
     "MissingIcebergSnapshotError",
@@ -64,7 +57,6 @@ __all__ = [
     "RecordInitializationError",
     "RequestedPartitionsValidationError",
     "TransformDatasetInjectionError",
-    "TransformDependencyConfigurationError",
     "TransformImportError",
     "TransformLayoutValidationError",
     "TransformParameterError",

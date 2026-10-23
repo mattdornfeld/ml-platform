@@ -2,23 +2,17 @@
 
 from enum import StrEnum
 
-from pydantic import Field, computed_field, field_validator, model_validator
+from pydantic import Field, computed_field, field_validator
 
-from ml_platform.common.api.dtos._base import (
-    _ApiModel,
-    _require_unique_validation_types,
-)
+from ml_platform.common.api.dtos._base import _ApiModel
+from ml_platform.common.domain import MarketDataDatasetConfig
 from ml_platform.common.types import (
     CreatedAt,
     DatasetId,
     DatasetName,
     DatasetType,
     Description,
-    DiscriminatedValidationConfig,
-    EntityKey,
-    PartitionType,
     ResourceVersion,
-    Symbol,
 )
 
 
@@ -28,60 +22,6 @@ class DatasetStatus(StrEnum):
     ACTIVE = "active"
     DEPRECATED = "deprecated"
     DELETED = "deleted"
-
-
-class MarketDataDatasetConfig(_ApiModel):
-    """Definition fields for a market-data dataset, excluding its derived ID."""
-
-    description: Description = Field(
-        default=Description("Market data."),
-        min_length=1,
-        description="Human-readable explanation of the dataset.",
-    )
-    validations: list[DiscriminatedValidationConfig] = Field(
-        default_factory=list,
-        description="Validation policies applied when materializing the dataset.",
-    )
-    keys: list[EntityKey] = Field(
-        min_length=1,
-        description="Entity columns that identify each market-data observation.",
-    )
-    partition_type: PartitionType = Field(
-        description="Iceberg timestamp partition cadence for the dataset.",
-    )
-    symbols: list[Symbol] = Field(
-        min_length=1,
-        description="Yahoo Finance ticker symbols to retrieve.",
-    )
-
-    @field_validator("symbols")
-    @classmethod
-    def normalize_symbols(cls, symbols: list[Symbol]) -> list[Symbol]:
-        """Normalize Yahoo Finance symbols and reject blank or duplicate values."""
-        normalized_symbols = [
-            Symbol(symbol.strip().upper()) for symbol in symbols
-        ]
-        if any(not symbol for symbol in normalized_symbols):
-            raise ValueError("Market-data symbols must not be blank.")
-        if len(set(normalized_symbols)) != len(normalized_symbols):
-            raise ValueError("Market-data symbols must be unique.")
-        return normalized_symbols
-
-    @field_validator("description")
-    @classmethod
-    def reject_blank_description(cls, description: str) -> str:
-        """Require a meaningful market-data dataset description."""
-        if not description.strip():
-            raise ValueError("Description must contain non-whitespace text.")
-        return description
-
-    @model_validator(mode="after")
-    def validate_configuration(self) -> "MarketDataDatasetConfig":
-        """Keep dataset entity keys and validation overrides unambiguous."""
-        if len(set(self.keys)) != len(self.keys):
-            raise ValueError("Dataset entity keys must be unique.")
-        _require_unique_validation_types(self.validations)
-        return self
 
 
 class DatasetCreateRequest(_ApiModel):

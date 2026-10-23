@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from pydantic import Field
 
+from ml_platform.common.domain import FeatureDatasetDependency
 from ml_platform.data_sdk.materializers._materialization_validator import (
     KeysFromInputValidationConfig,
     ValidationConfig,
@@ -14,7 +15,6 @@ from ml_platform.data_sdk.materializers._transform_materializer import (
     TransformTableDefinition,
 )
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
-from ml_platform.data_sdk.transforms._types import FeatureDatasetDependency
 
 
 class FeatureMaterializationConfig(TransformMaterializationConfig):

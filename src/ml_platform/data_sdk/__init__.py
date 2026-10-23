@@ -15,15 +15,7 @@ from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
-from ml_platform.data_sdk.transforms._types import (
-    Dataset,
-    DatasetDependency,
-    DatasetReference,
-    FeatureDatasetDependency,
-    FeatureInputWindow,
-    LabelDatasetDependency,
-    LabelInputWindow,
-)
+from ml_platform.data_sdk.transforms._types import Dataset, DatasetReference
 from ml_platform.data_sdk.dataset_transforms._market_data import (
     MarketDataTransform,
 )
@@ -45,18 +37,13 @@ from ml_platform.data_sdk.exceptions import __all__ as _exception_exports
 __all__ = [
     "DataTransform",
     "Dataset",
-    "DatasetDependency",
     "DatasetMaterializationConfig",
     "DatasetMaterializer",
     "DatasetReference",
     "DatasetTransform",
-    "FeatureDatasetDependency",
-    "FeatureInputWindow",
     "FeatureMaterializationConfig",
     "FeatureMaterializer",
     "FeatureTransform",
-    "LabelDatasetDependency",
-    "LabelInputWindow",
     "LabelMaterializationConfig",
     "LabelMaterializer",
     "LabelTransform",
@@ -67,42 +54,6 @@ __all__ = [
     "RelativeVolumeTransform",
     "TrailingVolatilityTransform",
     "TripleBarrierLabelTransform",
-]
-
-from ml_platform.data_sdk.configs import (
-    BaseConfig,
-    DataConfig,
-    DataType,
-    DatasetConfig,
-    DatasetType,
-    FeatureConfig,
-    EntityKey,
-    LabelConfig,
-    MarketDataConfig,
-    ParameterKey,
-    ParameterValue,
-    PartitionType,
-    RunFrequency,
-    TripleBarrierConfig,
-    TransformName,
-)
-
-__all__ += [
-    "BaseConfig",
-    "DataConfig",
-    "DataType",
-    "DatasetConfig",
-    "DatasetType",
-    "EntityKey",
-    "FeatureConfig",
-    "LabelConfig",
-    "MarketDataConfig",
-    "ParameterKey",
-    "ParameterValue",
-    "PartitionType",
-    "RunFrequency",
-    "TransformName",
-    "TripleBarrierConfig",
 ]
 
 __all__ += _exception_exports

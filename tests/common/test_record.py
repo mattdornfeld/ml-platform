@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from dataclasses import FrozenInstanceError
 from inspect import signature
 
-from ml_platform.data_sdk.configs import PartitionType
+from ml_platform.common.types import PartitionType
 from ml_platform.data_sdk.utils import record
 
 

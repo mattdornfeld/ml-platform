@@ -1,5 +1,12 @@
 """Public materializer types for API-dispatched Spark jobs."""
 
+from ml_platform.common.domain import (
+    DatasetDependency,
+    FeatureDatasetDependency,
+    FeatureInputWindow,
+    LabelDatasetDependency,
+    LabelInputWindow,
+)
 from ml_platform.data_sdk.materializers._base import (
     Materializer,
     MaterializerConfig,
@@ -47,13 +54,6 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
 from ml_platform.data_sdk.materializers._transform_materializer import (
     TransformMaterializationConfig,
     TransformMaterializer,
-)
-from ml_platform.data_sdk.transforms._types import (
-    DatasetDependency,
-    FeatureDatasetDependency,
-    FeatureInputWindow,
-    LabelDatasetDependency,
-    LabelInputWindow,
 )
 
 __all__ = [

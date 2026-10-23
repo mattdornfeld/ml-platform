@@ -5,7 +5,6 @@ from ml_platform.common.api.dtos.datasets import (
     DatasetDescriptionUpdate,
     DatasetResponse,
     DatasetStatus,
-    MarketDataDatasetConfig,
 )
 from ml_platform.common.api.dtos.errors import (
     ErrorResponse,
@@ -45,6 +44,7 @@ from ml_platform.common.api.dtos.partitions import (
     PartitionUpdateRequestResponse,
 )
 from ml_platform.common.api.dtos.resources import ResourceType
+from ml_platform.common.domain import MarketDataDatasetConfig
 
 __all__ = [
     "DatasetCreateRequest",

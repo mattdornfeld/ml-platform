@@ -25,7 +25,7 @@ from ml_platform.common.api.routes import (
     JobRoutes,
     LabelRoutes,
 )
-from ml_platform.data_sdk.configs import (
+from ml_platform.common.domain import (
     FeatureConfig,
     LabelConfig,
     MarketDataConfig,

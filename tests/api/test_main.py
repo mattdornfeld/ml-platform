@@ -32,12 +32,16 @@ from ml_platform.common.api.dtos import (
     DatasetStatus,
     FeatureCreateRequest,
 )
+from ml_platform.common.domain import MarketDataDatasetConfig
 from ml_platform.common.types import (
     CreatedAt,
+    EntityKey,
     JobId,
     PartitionTimestamp,
+    PartitionType,
     ResourceName,
     ResourceVersion,
+    Symbol,
     UpdatedAt,
 )
 
@@ -495,7 +499,11 @@ class DashboardReadApiTest(unittest.TestCase):
                 name="sp500",
                 version=3,
                 dataset_type="market_data",
-                config={},
+                config=MarketDataDatasetConfig(
+                    keys=[EntityKey.SYMBOL],
+                    partition_type=PartitionType.DAILY,
+                    symbols=[Symbol("AAPL")],
+                ),
                 created_at=datetime.now(UTC),
                 lifecycle=DatasetStatus.ACTIVE,
                 deleted_at=None,
