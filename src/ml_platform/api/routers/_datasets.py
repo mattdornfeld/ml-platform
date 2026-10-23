@@ -46,7 +46,7 @@ def _definition_response(definition: DatasetDefinition) -> dict[str, object]:
         "name": definition.name,
         "version": definition.version,
         "dataset_type": definition.dataset_type,
-        "config": definition.config,
+        "config": definition.config.model_dump(mode="json"),
         "created_at": definition.created_at,
         "deleted_at": definition.deleted_at,
         "deprecated_at": definition.deprecated_at,
@@ -223,15 +223,14 @@ def create_dataset(
     definition = DatasetRepository(session).create(
         name=ResourceName(payload.name),
         version=ResourceVersion(payload.version),
-        dataset_type=payload.dataset_type.value,
-        config=payload.config.model_dump(mode="json"),
+        config=payload.config,
     )
     return DatasetResponse.model_validate(
         {
             "name": definition.name,
             "version": definition.version,
             "dataset_type": definition.dataset_type,
-            "config": definition.config,
+            "config": definition.config.model_dump(mode="json"),
             "created_at": definition.created_at,
         }
     )

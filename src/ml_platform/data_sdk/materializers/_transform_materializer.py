@@ -2,17 +2,24 @@
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from importlib import import_module
 from inspect import Parameter, signature
 from typing import TypeGuard, get_type_hints
 
+from pydantic import Field
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as spark_functions
 from pyspark.sql.column import Column
 
-from ml_platform.data_sdk.configs import TransformConfig
+from ml_platform.common.domain import DatasetDependency, TransformConfig
+from ml_platform.common.types import (
+    DatasetType,
+    DataType,
+    EntityKey,
+    PartitionType,
+)
 from ml_platform.data_sdk.materializers._base import (
     Materializer,
     MaterializerConfig,
@@ -37,18 +44,24 @@ from ml_platform.data_sdk.materializers.exceptions import (
     TransformTypeError,
 )
 from ml_platform.data_sdk.transforms._base import DataTransform
-from ml_platform.data_sdk.transforms._types import (
-    Dataset,
-    DatasetDependency,
-    DatasetReference,
-    DataType,
-    EntityKey,
-    PartitionType,
-)
+from ml_platform.data_sdk.transforms._types import Dataset, DatasetReference
+
+
+class MaterializerDatasetDependency(DatasetDependency):
+    """API-resolved dataset identity required by a Spark transform worker."""
+
+    dataset_type: DatasetType = Field(
+        description="Registered kind used to resolve the input Iceberg table."
+    )
 
 
 class TransformMaterializationConfig(MaterializerConfig, TransformConfig[str]):
     """Runtime transformation definition enriched with materialization-specific inputs."""
+
+    datasets: Sequence[MaterializerDatasetDependency] = Field(
+        min_length=1,
+        description="API-resolved datasets injected into transforms by dataset name.",
+    )
 
 
 @dataclass(frozen=True)
@@ -162,7 +175,9 @@ class TransformMaterializer[
         )
 
     @staticmethod
-    def _dataset_table_identifier(dataset: DatasetDependency) -> str:
+    def _dataset_table_identifier(
+        dataset: MaterializerDatasetDependency,
+    ) -> str:
         """Return the Iceberg table identifier for one declared input dataset."""
         return IcebergTable.id_for(
             MaterializerConfig.iceberg_catalog(),
@@ -175,7 +190,7 @@ class TransformMaterializer[
     def _planned_dataset(
         spark: SparkSession,
         output_partitions: list[MaterializerPartition],
-        dataset: DatasetDependency,
+        dataset: MaterializerDatasetDependency,
     ) -> DataFrame:
         """Load exactly the snapshots and partitions pinned for one input dataset."""
         planned_partitions = {

@@ -27,6 +27,7 @@ from ml_platform.api.domain import (
     PartitionCounts,
     PartitionStatus,
     ResourcePartition,
+    ResourceType,
 )
 from ml_platform.api.repositories._models import (
     Dataset,
@@ -34,11 +35,18 @@ from ml_platform.api.repositories._models import (
     DatasetPartitionRequest,
     Job,
 )
+from ml_platform.api.repositories._partition_validation import (
+    validate_partition_timestamps,
+)
 from ml_platform.api.repositories.exceptions import (
     DatasetVersionExistsError,
     UnsupportedDatasetStatusError,
 )
 from ml_platform.common.api.dtos import DatasetStatus
+from ml_platform.common.domain import (
+    DatasetConfig,
+    MarketDataDatasetConfig,
+)
 from ml_platform.common.types import (
     CreatedAt,
     Description,
@@ -68,13 +76,14 @@ class DatasetRepository:
         return DatasetStatus.ACTIVE
 
     @classmethod
-    def _definition(cls, dataset: Dataset) -> DatasetDefinition:
+    def definition(cls, dataset: Dataset) -> DatasetDefinition:
         """Map one dataset ORM row to an immutable domain definition."""
+        configuration = DatasetConfig.deserialize(dataset.config)
         return DatasetDefinition(
             name=ResourceName(dataset.name),
             version=ResourceVersion(dataset.version),
-            dataset_type=dataset.dataset_type,
-            config=dataset.config,
+            dataset_type=configuration.dataset_type,
+            config=configuration,
             created_at=CreatedAt(dataset.created_at),
             lifecycle=cls._status(dataset),
             deleted_at=dataset.deleted_at,
@@ -194,7 +203,7 @@ class DatasetRepository:
         )
         return tuple(
             DatasetSummary(
-                definition=self._definition(dataset),
+                definition=self.definition(dataset),
                 partitions=PartitionCounts(
                     total=total or 0,
                     created=created or 0,
@@ -212,7 +221,7 @@ class DatasetRepository:
     ) -> DatasetDefinition | None:
         """Return one immutable dataset definition when it exists."""
         dataset = self.session.get(Dataset, (name, version))
-        return None if dataset is None else self._definition(dataset)
+        return None if dataset is None else self.definition(dataset)
 
     def partitions(
         self, name: ResourceName, version: ResourceVersion
@@ -260,10 +269,13 @@ class DatasetRepository:
         dataset = self.session.get(Dataset, (name, version))
         if dataset is None:
             return None
-        dataset.config = {**dataset.config, "description": description}
+        definition = self.definition(dataset)
+        dataset.config = definition.config.model_copy(
+            update={"description": description}
+        ).model_dump(mode="json")
         self.session.commit()
         self.session.refresh(dataset)
-        return self._definition(dataset)
+        return self.definition(dataset)
 
     def delete(self, name: ResourceName, version: ResourceVersion) -> bool:
         """Soft-delete a dataset and cancel its unfinished materializations."""
@@ -301,15 +313,14 @@ class DatasetRepository:
         *,
         name: ResourceName,
         version: ResourceVersion,
-        dataset_type: str,
-        config: dict[str, object],
+        config: MarketDataDatasetConfig,
     ) -> DatasetDefinition:
         """Persist one immutable dataset definition inside the active transaction."""
         dataset = Dataset(
             name=name,
             version=version,
-            dataset_type=dataset_type,
-            config=config,
+            dataset_type=config.dataset_type.value,
+            config=config.model_dump(mode="json"),
         )
         try:
             self.session.add(dataset)
@@ -318,7 +329,7 @@ class DatasetRepository:
             self.session.rollback()
             raise DatasetVersionExistsError from error
         self.session.refresh(dataset)
-        return self._definition(dataset)
+        return self.definition(dataset)
 
     def materialize(
         self,
@@ -330,6 +341,13 @@ class DatasetRepository:
         dataset = self.session.get(Dataset, (name, version))
         if dataset is None or dataset.deleted_at is not None:
             return None
+        validate_partition_timestamps(
+            name=name,
+            version=version,
+            resource_type=ResourceType.DATASET,
+            partition_type=self.definition(dataset).config.partition_type,
+            timestamps=timestamps,
+        )
         existing: list[MaterializationPartition] = []
         missing: list[PartitionTimestamp] = []
         for timestamp in sorted(timestamps):

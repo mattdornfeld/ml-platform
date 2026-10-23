@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ml_platform.api._exceptions import UnsupportedScheduledJobTypeError
 from ml_platform.api.domain import JobStatus, JobType, PartitionStatus
 from ml_platform.api.infrastructure import engine_for
+from ml_platform.api.repositories._datasets import DatasetRepository
 from ml_platform.api.repositories._models import (
     Dataset,
     DatasetPartition,
@@ -271,7 +272,9 @@ class SchedulerRepository:
             "name": dataset.name,
             "version": dataset.version,
             "dataset_type": dataset.dataset_type,
-            "config": dataset.config,
+            "config": DatasetRepository.definition(dataset).config.model_dump(
+                mode="json"
+            ),
             "callbacks": self._callbacks([request for request, _ in rows], {}),
         }
 

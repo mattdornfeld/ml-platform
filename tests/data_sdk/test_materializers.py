@@ -4,20 +4,20 @@ import json
 import unittest
 from pathlib import Path
 
-from ml_platform.data_sdk import (
-    DatasetDependency,
-    DatasetTransform,
-    DataTransform,
-    FeatureTransform,
-    LabelTransform,
-)
-from ml_platform.data_sdk.configs import (
+from ml_platform.common.domain import (
     DataConfig,
     DatasetConfig,
+    DatasetDependency,
     FeatureConfig,
     LabelConfig,
     MarketDataConfig,
     TripleBarrierConfig,
+)
+from ml_platform.data_sdk import (
+    DatasetTransform,
+    DataTransform,
+    FeatureTransform,
+    LabelTransform,
 )
 from ml_platform.data_sdk.materializers import (
     DatasetMaterializationConfig,

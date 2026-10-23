@@ -6,15 +6,9 @@ from unittest.mock import MagicMock, patch
 
 from pyspark.sql import DataFrame
 
-from ml_platform.data_sdk import (
-    Dataset,
-    DatasetType,
-    FeatureDatasetDependency,
-    FeatureInputWindow,
-    FeatureTransform,
-    LabelTransform,
-)
-from ml_platform.data_sdk.configs import DataType, RunFrequency
+from ml_platform.common.domain import FeatureInputWindow
+from ml_platform.common.types import DatasetType, DataType, RunFrequency
+from ml_platform.data_sdk import Dataset, FeatureTransform, LabelTransform
 from ml_platform.data_sdk.exceptions import DatasetPartitionPlanError
 from ml_platform.data_sdk.label_transforms import (
     TripleBarrierLabelTransform,
@@ -22,6 +16,7 @@ from ml_platform.data_sdk.label_transforms import (
 from ml_platform.data_sdk.materializers import (
     FeatureMaterializationConfig,
     FeatureMaterializer,
+    FeatureMaterializerDatasetDependency,
     LabelMaterializationConfig,
     LabelMaterializer,
     MaterializerPartition,
@@ -83,7 +78,7 @@ class PlannedInputTest(unittest.TestCase):
         result = FeatureMaterializer._planned_dataset(
             spark,
             callbacks,
-            FeatureDatasetDependency(
+            FeatureMaterializerDatasetDependency(
                 name="sp500",
                 version=3,
                 dataset_type=DatasetType.MARKET_DATA,
@@ -105,7 +100,7 @@ class PlannedInputTest(unittest.TestCase):
             FeatureMaterializer._planned_dataset(
                 MagicMock(),
                 [],
-                FeatureDatasetDependency(
+                FeatureMaterializerDatasetDependency(
                     name="sp500",
                     version=3,
                     dataset_type=DatasetType.MARKET_DATA,

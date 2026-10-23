@@ -5,6 +5,36 @@ from datetime import datetime
 from fastapi import status
 
 from ml_platform.api._exceptions import _ApiError
+from ml_platform.api.domain import ResourceType
+from ml_platform.common.types import (
+    PartitionTimestamp,
+    PartitionType,
+    ResourceName,
+    ResourceVersion,
+)
+
+
+class InvalidMaterializationPartitionTimestampError(_ApiError):
+    """A requested timestamp does not match its resource's partition cadence."""
+
+    def __init__(
+        self,
+        *,
+        name: ResourceName,
+        version: ResourceVersion,
+        resource_type: ResourceType,
+        partition_type: PartitionType,
+        timestamp: PartitionTimestamp,
+    ) -> None:
+        """Build the resource-cadence validation response."""
+        super().__init__(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"{resource_type.value.capitalize()} {name}_v{version} uses "
+                f"{partition_type.value} partitions, so {timestamp.isoformat()} "
+                "is not a valid partition timestamp."
+            ),
+        )
 
 
 class FeatureDependencyDatasetUnavailableError(_ApiError):
@@ -29,17 +59,6 @@ class DatasetVersionExistsError(_ApiError):
         )
 
 
-class FeatureDependencyDatasetTypeMismatchError(_ApiError):
-    """A feature definition declares the wrong type for an input dataset."""
-
-    def __init__(self) -> None:
-        """Build the invalid-feature-dataset-type response."""
-        super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Feature dataset type must match the registered dataset version.",
-        )
-
-
 class FeatureVersionExistsError(_ApiError):
     """A feature name and version is already registered."""
 
@@ -59,17 +78,6 @@ class LabelDependencyDatasetUnavailableError(_ApiError):
         super().__init__(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Label datasets must reference active dataset versions.",
-        )
-
-
-class LabelDependencyDatasetTypeMismatchError(_ApiError):
-    """A label definition declares the wrong type for an input dataset."""
-
-    def __init__(self) -> None:
-        """Build the invalid-label-dataset-type response."""
-        super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Label dataset type must match the registered dataset version.",
         )
 
 

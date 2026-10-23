@@ -8,7 +8,6 @@ keys: [symbol]
 datasets:
   - name: sp500
     version: 3
-    dataset_type: market_data
     # Market data is daily-partitioned; use one preceding daily partition.
     input_window:
       lookback_partitions: 1

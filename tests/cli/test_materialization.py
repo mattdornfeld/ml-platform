@@ -21,6 +21,7 @@ class ResourceSyncTest(unittest.TestCase):
 version: 2
 dataset_type: market_data
 description: Test prices.
+partition_type: daily
 keys: [symbol]
 symbols: [AAPL]
 """)
@@ -32,7 +33,6 @@ keys: [symbol]
 datasets:
   - name: prices
     version: 2
-    dataset_type: market_data
     input_window:
       lookback_partitions: 1
 transform: ml_platform.data_sdk.LogReturnTransform
@@ -90,7 +90,6 @@ validations:
                 {
                     "name": "prices",
                     "version": 2,
-                    "dataset_type": "market_data",
                     "input_window": {"lookback_partitions": 1},
                 }
             ],

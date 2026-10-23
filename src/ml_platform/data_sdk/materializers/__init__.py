@@ -13,11 +13,13 @@ from ml_platform.data_sdk.materializers._dataset import (
 from ml_platform.data_sdk.materializers._feature import (
     FeatureMaterializationConfig,
     FeatureMaterializer,
+    FeatureMaterializerDatasetDependency,
 )
 from ml_platform.data_sdk.materializers._iceberg_table import IcebergTable
 from ml_platform.data_sdk.materializers._label import (
     LabelMaterializationConfig,
     LabelMaterializer,
+    LabelMaterializerDatasetDependency,
 )
 from ml_platform.data_sdk.materializers._materialization_validator import (
     AllPartitionsTemporalFilterConfig,
@@ -45,42 +47,34 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
     XnysRegularSessionTemporalFilterConfig,
 )
 from ml_platform.data_sdk.materializers._transform_materializer import (
+    MaterializerDatasetDependency,
     TransformMaterializationConfig,
     TransformMaterializer,
-)
-from ml_platform.data_sdk.transforms._types import (
-    DatasetDependency,
-    FeatureDatasetDependency,
-    FeatureInputWindow,
-    LabelDatasetDependency,
-    LabelInputWindow,
 )
 
 __all__ = [
     "AllPartitionsTemporalFilterConfig",
     "DataFrameValidation",
-    "DatasetDependency",
     "DatasetMaterializationConfig",
     "DatasetMaterializer",
     "DiscriminatedValidationConfig",
     "ExactColumnsValidation",
     "ExactColumnsValidationConfig",
-    "FeatureDatasetDependency",
-    "FeatureInputWindow",
     "FeatureMaterializationConfig",
     "FeatureMaterializer",
+    "FeatureMaterializerDatasetDependency",
     "FiniteNumericValuesValidationConfig",
     "FiniteValuesValidation",
     "IcebergTable",
     "InputKeysValidation",
     "KeysFromInputValidationConfig",
-    "LabelDatasetDependency",
-    "LabelInputWindow",
     "LabelMaterializationConfig",
     "LabelMaterializer",
+    "LabelMaterializerDatasetDependency",
     "MaterializationValidator",
     "Materializer",
     "MaterializerConfig",
+    "MaterializerDatasetDependency",
     "MaterializerPartition",
     "MinimumRowsValidation",
     "MinimumRowsValidationConfig",

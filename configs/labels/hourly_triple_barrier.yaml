@@ -8,7 +8,6 @@ keys: [symbol]
 datasets:
   - name: sp500
     version: 3
-    dataset_type: market_data
     input_window:
       lookback_partitions: 1
       lookahead_partitions: 1
