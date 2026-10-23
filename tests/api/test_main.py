@@ -176,7 +176,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.json()["job"]["id"], job["id"])
+        self.assertEqual(response.json()["submitted_job"]["id"], job["id"])
         self.assertEqual(response.json()["partitions"][0]["status"], "pending")
 
     def test_feature_ensure_current_returns_completed_partition_without_a_new_job(
@@ -216,7 +216,7 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                 json={"timestamps": ["2026-10-20T18:00:00Z"]},
             )
         self.assertEqual(response.status_code, 202)
-        self.assertIsNone(response.json()["job"])
+        self.assertIsNone(response.json()["submitted_job"])
         self.assertEqual(
             response.json()["partitions"][0]["partition_id"],
             completed["partition_id"],
@@ -357,7 +357,7 @@ class MaterializationBehaviorTest(unittest.TestCase):
             ),
             connection,
         )
-        self.assertIsNone(response.job)
+        self.assertIsNone(response.submitted_job)
         self.assertEqual(
             str(response.partitions[0].partition_id), completed["partition_id"]
         )
@@ -417,7 +417,7 @@ class MaterializationBehaviorTest(unittest.TestCase):
                 ),
                 connection,
             )
-        self.assertEqual(str(response.job.id), job["id"])
+        self.assertEqual(str(response.submitted_job.id), job["id"])
         self.assertEqual(response.partitions[0].status, "pending")
 
     def test_feature_completion_rejects_unplanned_parent_revisions(

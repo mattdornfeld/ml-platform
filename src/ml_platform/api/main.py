@@ -984,13 +984,13 @@ def materialize_dataset_partitions(
                 existing.append(active)
                 continue
             missing.append(timestamp)
-        job: dict[str, Any] | None = None
+        submitted_job: dict[str, Any] | None = None
         created: list[dict[str, Any]] = []
         if missing:
             cursor.execute("""INSERT INTO jobs (type, status) VALUES ('dataset_materialization', 'submitted')
                 RETURNING id, type, status, created_at, updated_at""")
-            job = cursor.fetchone()
-            if job is None:
+            submitted_job = cursor.fetchone()
+            if submitted_job is None:
                 raise RuntimeError("Dataset job insert did not return a row.")
             for missing_timestamp in missing:
                 cursor.execute(
@@ -999,7 +999,7 @@ def materialize_dataset_partitions(
                     VALUES (%s, %s, %s, %s, 'pending', %s)
                     RETURNING partition_id, job_id, timestamp, status, created_at, updated_at""",
                     (
-                        job["id"],
+                        submitted_job["id"],
                         name,
                         version,
                         missing_timestamp,
@@ -1014,7 +1014,7 @@ def materialize_dataset_partitions(
                 created.append(request)
     connection.commit()
     return MaterializationJobResponse.model_validate(
-        {"job": job, "partitions": [*existing, *created]}
+        {"submitted_job": submitted_job, "partitions": [*existing, *created]}
     )
 
 
@@ -1194,13 +1194,13 @@ def materialize_feature_partitions(
                 )
             planned_by_timestamp[timestamp] = plan
 
-        job: dict[str, Any] | None = None
+        submitted_job: dict[str, Any] | None = None
         created: list[dict[str, Any]] = []
         if planned_by_timestamp:
             cursor.execute("""INSERT INTO jobs (type, status) VALUES ('feature_materialization', 'submitted')
                 RETURNING id, type, status, created_at, updated_at""")
-            job = cursor.fetchone()
-            if job is None:
+            submitted_job = cursor.fetchone()
+            if submitted_job is None:
                 raise RuntimeError("Feature job insert did not return a row.")
             for planned_timestamp, plan in planned_by_timestamp.items():
                 cursor.execute(
@@ -1209,7 +1209,7 @@ def materialize_feature_partitions(
                     VALUES (%s, %s, %s, %s, 'pending', %s)
                     RETURNING partition_id, job_id, timestamp, status, created_at, updated_at""",
                     (
-                        job["id"],
+                        submitted_job["id"],
                         name,
                         version,
                         planned_timestamp,
@@ -1230,7 +1230,7 @@ def materialize_feature_partitions(
                 created.append(request)
     connection.commit()
     return MaterializationJobResponse.model_validate(
-        {"job": job, "partitions": [*existing, *created]}
+        {"submitted_job": submitted_job, "partitions": [*existing, *created]}
     )
 
 
@@ -1682,15 +1682,15 @@ def materialize_label_partitions(
                     detail="Label partition is already being materialized against a different input revision plan.",
                 )
             plans[timestamp] = plan
-        job: dict[str, Any] | None = None
+        submitted_job: dict[str, Any] | None = None
         created: list[dict[str, Any]] = []
         if plans:
             cursor.execute(
                 """INSERT INTO jobs (type, status) VALUES ('label_materialization', 'submitted')
                 RETURNING id, type, status, created_at, updated_at"""
             )
-            job = cursor.fetchone()
-            if job is None:
+            submitted_job = cursor.fetchone()
+            if submitted_job is None:
                 raise RuntimeError("Label job insert did not return a row.")
             for planned_timestamp, plan in plans.items():
                 cursor.execute(
@@ -1699,7 +1699,7 @@ def materialize_label_partitions(
                     VALUES (%s, %s, %s, %s, 'pending', %s)
                     RETURNING partition_id, job_id, timestamp, status, created_at, updated_at""",
                     (
-                        job["id"],
+                        submitted_job["id"],
                         name,
                         version,
                         planned_timestamp,
@@ -1721,7 +1721,7 @@ def materialize_label_partitions(
                 created.append(request)
     connection.commit()
     return MaterializationJobResponse.model_validate(
-        {"job": job, "partitions": [*existing, *created]}
+        {"submitted_job": submitted_job, "partitions": [*existing, *created]}
     )
 
 

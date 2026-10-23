@@ -368,9 +368,11 @@ def main() -> None:
     if (
         args.command == "materialize"
         and args.monitor
-        and result["job"] is not None
+        and result["submitted_job"] is not None
     ):
-        _describe_job(args.api_url, result["job"]["id"], args.poll_seconds)
+        _describe_job(
+            args.api_url, result["submitted_job"]["id"], args.poll_seconds
+        )
 
 
 if __name__ == "__main__":

@@ -375,9 +375,14 @@ class PartitionUpdateRequestResponse(_ApiModel):
 
 
 class MaterializationJobResponse(_ApiModel):
-    """A newly created job with all of its requested partitions."""
+    """A new job, when submitted, together with every requested partition."""
 
-    job: JobResponse | None
+    submitted_job: JobResponse | None = Field(
+        description=(
+            "Job created by this request, or null when every requested partition "
+            "already exists or is pending."
+        )
+    )
     partitions: list[PartitionUpdateRequestResponse]
 
 
