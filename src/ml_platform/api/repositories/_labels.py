@@ -45,7 +45,6 @@ from ml_platform.api.repositories._partition_validation import (
 )
 from ml_platform.api.repositories.exceptions import (
     DeletedLabelInputDatasetError,
-    LabelDependencyDatasetTypeMismatchError,
     LabelDependencyDatasetUnavailableError,
     LabelPartitionPlanConflictError,
     LabelVersionExistsError,
@@ -286,8 +285,6 @@ class LabelRepository:
             )
             if dataset is None or dataset.deleted_at is not None:
                 raise LabelDependencyDatasetUnavailableError
-            if dataset.dataset_type != dependency.dataset_type.value:
-                raise LabelDependencyDatasetTypeMismatchError
         label = Label(
             name=payload.name,
             version=payload.version,

@@ -45,7 +45,6 @@ from ml_platform.api.repositories._partition_validation import (
 )
 from ml_platform.api.repositories.exceptions import (
     DeletedFeatureInputDatasetError,
-    FeatureDependencyDatasetTypeMismatchError,
     FeatureDependencyDatasetUnavailableError,
     FeaturePartitionPlanConflictError,
     FeatureVersionExistsError,
@@ -291,8 +290,6 @@ class FeatureRepository:
             )
             if dataset is None or dataset.deleted_at is not None:
                 raise FeatureDependencyDatasetUnavailableError
-            if dataset.dataset_type != dependency.dataset_type.value:
-                raise FeatureDependencyDatasetTypeMismatchError
         feature = Feature(
             name=payload.name,
             version=payload.version,

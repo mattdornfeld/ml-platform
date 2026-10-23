@@ -97,6 +97,16 @@ class DatasetConfigTest(unittest.TestCase):
 class TransformConfigTest(unittest.TestCase):
     """Verify feature and label dependency contracts remain distinct."""
 
+    def test_dependency_type_is_resolved_by_the_control_plane(self) -> None:
+        """User-facing dependencies identify datasets without restating their type."""
+        with self.assertRaises(ValidationError):
+            FeatureDatasetDependency(
+                name="sp500",
+                version=3,
+                dataset_type=DatasetType.MARKET_DATA,
+                input_window=FeatureInputWindow(lookback_partitions=1),
+            )
+
     def test_feature_config_accepts_only_historical_dependency_windows(
         self,
     ) -> None:
@@ -111,7 +121,6 @@ class TransformConfigTest(unittest.TestCase):
                 FeatureDatasetDependency(
                     name="sp500",
                     version=3,
-                    dataset_type=DatasetType.MARKET_DATA,
                     input_window=FeatureInputWindow(lookback_partitions=1),
                 )
             ],
@@ -135,7 +144,6 @@ class TransformConfigTest(unittest.TestCase):
                 LabelDatasetDependency(
                     name="sp500",
                     version=3,
-                    dataset_type=DatasetType.MARKET_DATA,
                     input_window=LabelInputWindow(
                         lookback_partitions=1,
                         lookahead_partitions=1,
@@ -160,13 +168,11 @@ class TransformConfigTest(unittest.TestCase):
                 {
                     "name": "market_data",
                     "version": 1,
-                    "dataset_type": DatasetType.MARKET_DATA,
                     "input_window": {"lookback_partitions": 1},
                 },
                 {
                     "name": "market_data",
                     "version": 2,
-                    "dataset_type": DatasetType.MARKET_DATA,
                     "input_window": {"lookback_partitions": 1},
                 },
             ],
@@ -191,7 +197,6 @@ class TransformConfigTest(unittest.TestCase):
                 {
                     "name": "sp500",
                     "version": 3,
-                    "dataset_type": "market_data",
                     "input_window": {"lookback_partitions": 1},
                 }
             ],

@@ -8,7 +8,6 @@ keys: [symbol]
 datasets:
   - name: sp500
     version: 3
-    dataset_type: market_data
     # Use one preceding daily market-data partition for lineage.
     input_window:
       lookback_partitions: 1

@@ -1,11 +1,13 @@
 """Spark worker for one API-submitted label materialization job."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pydantic import Field
 
-from ml_platform.common.domain import LabelDatasetDependency
+from ml_platform.common.domain import LabelInputWindow
 from ml_platform.data_sdk.materializers._transform_materializer import (
+    MaterializerDatasetDependency,
     TransformMaterializationConfig,
     TransformMaterializer,
     TransformTableDefinition,
@@ -13,10 +15,18 @@ from ml_platform.data_sdk.materializers._transform_materializer import (
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 
 
+class LabelMaterializerDatasetDependency(MaterializerDatasetDependency):
+    """API-resolved label input with historical and future dependency windows."""
+
+    input_window: LabelInputWindow = Field(
+        description="Historical and future source windows available to the label."
+    )
+
+
 class LabelMaterializationConfig(TransformMaterializationConfig):
     """Complete JSON contract consumed by a label Spark materializer."""
 
-    datasets: list[LabelDatasetDependency] = Field(
+    datasets: Sequence[LabelMaterializerDatasetDependency] = Field(
         min_length=1,
         description="Versioned datasets injected into label transforms by dataset name.",
     )
@@ -24,7 +34,10 @@ class LabelMaterializationConfig(TransformMaterializationConfig):
 
 @dataclass(frozen=True)
 class LabelMaterializer(
-    TransformMaterializer[LabelMaterializationConfig, LabelTransform]
+    TransformMaterializer[
+        LabelMaterializationConfig,
+        LabelTransform,
+    ]
 ):
     """Materialize API-pinned label partitions with immutable input revisions."""
 

@@ -1,15 +1,17 @@
 """Spark worker for one API-submitted feature materialization job."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pydantic import Field
 
-from ml_platform.common.domain import FeatureDatasetDependency
+from ml_platform.common.domain import FeatureInputWindow
 from ml_platform.data_sdk.materializers._materialization_validator import (
     KeysFromInputValidationConfig,
     ValidationConfig,
 )
 from ml_platform.data_sdk.materializers._transform_materializer import (
+    MaterializerDatasetDependency,
     TransformMaterializationConfig,
     TransformMaterializer,
     TransformTableDefinition,
@@ -17,10 +19,18 @@ from ml_platform.data_sdk.materializers._transform_materializer import (
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 
 
+class FeatureMaterializerDatasetDependency(MaterializerDatasetDependency):
+    """API-resolved feature input with its historical dependency window."""
+
+    input_window: FeatureInputWindow = Field(
+        description="Historical source window available to the feature."
+    )
+
+
 class FeatureMaterializationConfig(TransformMaterializationConfig):
     """Complete JSON contract consumed by a feature Spark materializer."""
 
-    datasets: list[FeatureDatasetDependency] = Field(
+    datasets: Sequence[FeatureMaterializerDatasetDependency] = Field(
         min_length=1,
         description="Versioned datasets injected into feature transforms by dataset name.",
     )
@@ -28,7 +38,10 @@ class FeatureMaterializationConfig(TransformMaterializationConfig):
 
 @dataclass(frozen=True)
 class FeatureMaterializer(
-    TransformMaterializer[FeatureMaterializationConfig, FeatureTransform]
+    TransformMaterializer[
+        FeatureMaterializationConfig,
+        FeatureTransform,
+    ]
 ):
     """Materialize API-pinned feature partitions with immutable input revisions."""
 

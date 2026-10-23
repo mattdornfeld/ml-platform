@@ -6,7 +6,6 @@ from ml_platform.common.domain._base import DomainConfig
 from ml_platform.common.types import (
     DatasetId,
     DatasetName,
-    DatasetType,
     LookAheadPartitions,
     LookbackPartition,
     ResourceVersion,
@@ -22,9 +21,6 @@ class DatasetDependency(DomainConfig):
     )
     version: ResourceVersion = Field(
         ge=1, description="Immutable version of the upstream dataset."
-    )
-    dataset_type: DatasetType = Field(
-        description="Kind of upstream dataset used to resolve its Iceberg namespace."
     )
 
     @property

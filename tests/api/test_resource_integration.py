@@ -37,7 +37,6 @@ def _feature_payload() -> dict[str, object]:
             {
                 "name": "prices",
                 "version": 1,
-                "dataset_type": "market_data",
                 "input_window": {"lookback_partitions": 0},
             }
         ],
@@ -60,7 +59,6 @@ def _label_payload() -> dict[str, object]:
             {
                 "name": "prices",
                 "version": 1,
-                "dataset_type": "market_data",
                 "input_window": {
                     "lookback_partitions": 0,
                     "lookahead_partitions": 0,
@@ -411,7 +409,6 @@ def test_hourly_dependencies_use_hourly_input_windows(
             {
                 "name": "prices",
                 "version": 1,
-                "dataset_type": "market_data",
                 "input_window": {"lookback_partitions": 2},
             }
         ],
@@ -432,7 +429,6 @@ def test_hourly_dependencies_use_hourly_input_windows(
             {
                 "name": "prices",
                 "version": 1,
-                "dataset_type": "market_data",
                 "input_window": {
                     "lookback_partitions": 1,
                     "lookahead_partitions": 1,

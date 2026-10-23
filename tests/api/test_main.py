@@ -182,7 +182,6 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                         {
                             "name": "prices",
                             "version": 1,
-                            "dataset_type": "market_data",
                             "input_window": {"lookback_partitions": 0},
                         }
                     ],

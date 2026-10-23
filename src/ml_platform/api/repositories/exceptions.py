@@ -59,17 +59,6 @@ class DatasetVersionExistsError(_ApiError):
         )
 
 
-class FeatureDependencyDatasetTypeMismatchError(_ApiError):
-    """A feature definition declares the wrong type for an input dataset."""
-
-    def __init__(self) -> None:
-        """Build the invalid-feature-dataset-type response."""
-        super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Feature dataset type must match the registered dataset version.",
-        )
-
-
 class FeatureVersionExistsError(_ApiError):
     """A feature name and version is already registered."""
 
@@ -89,17 +78,6 @@ class LabelDependencyDatasetUnavailableError(_ApiError):
         super().__init__(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Label datasets must reference active dataset versions.",
-        )
-
-
-class LabelDependencyDatasetTypeMismatchError(_ApiError):
-    """A label definition declares the wrong type for an input dataset."""
-
-    def __init__(self) -> None:
-        """Build the invalid-label-dataset-type response."""
-        super().__init__(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Label dataset type must match the registered dataset version.",
         )
 
 
