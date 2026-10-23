@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
 from pydantic import (
@@ -14,16 +14,27 @@ from pydantic import (
     model_validator,
 )
 
-from ml_platform.data_sdk.configs import (
+from ml_platform.common.types import (
+    CallbackToken,
+    ContentHash,
+    DatasetName,
+    DatasetType,
     DataType,
+    Description,
+    DiscriminatedValidationConfig,
     EntityKey,
+    FeatureName,
+    IcebergSchema,
+    LabelName,
     ParameterKey,
     ParameterValue,
+    PartitionTimestamp,
+    PartitionType,
+    ResourceName,
+    ResourceVersion,
     RunFrequency,
+    Symbol,
     TransformName,
-)
-from ml_platform.data_sdk.materializers._materialization_validator import (
-    DiscriminatedValidationConfig,
 )
 
 
@@ -69,12 +80,6 @@ class PartitionStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-class DatasetType(StrEnum):
-    """Dataset types accepted by the control plane."""
-
-    MARKET_DATA = "market_data"
-
-
 class ResourceType(StrEnum):
     """Materializable resource kinds exposed by the control plane."""
 
@@ -86,20 +91,22 @@ class ResourceType(StrEnum):
 class MarketDataDatasetConfig(_ApiModel):
     """Definition fields for a market-data dataset, excluding its derived ID."""
 
-    description: str = Field(default="Market data.", min_length=1)
+    description: Description = Field(
+        default=Description("Market data."), min_length=1
+    )
     validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list
     )
     keys: list[EntityKey] = Field(min_length=1)
-    partition_type: Literal["hourly", "daily"]
-    symbols: list[str] = Field(min_length=1)
+    partition_type: PartitionType
+    symbols: list[Symbol] = Field(min_length=1)
 
 
 class DatasetCreateRequest(_ApiModel):
     """Payload for registering an immutable dataset definition."""
 
-    name: str = Field(min_length=1)
-    version: int = Field(gt=0)
+    name: DatasetName = Field(min_length=1)
+    version: ResourceVersion = Field(gt=0)
     dataset_type: DatasetType
     config: MarketDataDatasetConfig
 
@@ -119,7 +126,7 @@ class DatasetResponse(DatasetCreateRequest):
 class DatasetDescriptionUpdate(_ApiModel):
     """Mutable display metadata for an existing dataset definition."""
 
-    description: str = Field(min_length=1)
+    description: Description = Field(min_length=1)
 
 
 class FeatureInputWindow(_ApiModel):
@@ -137,8 +144,8 @@ class LabelInputWindow(FeatureInputWindow):
 class FeatureDatasetDependency(_ApiModel):
     """A point-in-time dataset version consumed by a feature."""
 
-    name: str = Field(min_length=1)
-    version: int = Field(gt=0)
+    name: DatasetName = Field(min_length=1)
+    version: ResourceVersion = Field(gt=0)
     dataset_type: DatasetType
     input_window: FeatureInputWindow
 
@@ -152,8 +159,8 @@ class LabelDatasetDependency(FeatureDatasetDependency):
 class FeatureCreateRequest(_ApiModel):
     """Payload for registering an immutable, normalized feature definition."""
 
-    name: str = Field(min_length=1)
-    version: int = Field(gt=0)
+    name: FeatureName = Field(min_length=1)
+    version: ResourceVersion = Field(gt=0)
     dtype: DataType
     frequency: RunFrequency
     keys: list[EntityKey] = Field(
@@ -161,7 +168,7 @@ class FeatureCreateRequest(_ApiModel):
     )
     datasets: list[FeatureDatasetDependency] = Field(min_length=1)
     transform: TransformName = Field(min_length=1)
-    description: str = Field(min_length=1)
+    description: Description = Field(min_length=1)
     parameters: dict[ParameterKey, ParameterValue] = Field(default_factory=dict)
     validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list
@@ -198,8 +205,8 @@ class FeatureResponse(FeatureCreateRequest):
 class LabelCreateRequest(_ApiModel):
     """Payload for registering an immutable, normalized label definition."""
 
-    name: str = Field(min_length=1)
-    version: int = Field(gt=0)
+    name: LabelName = Field(min_length=1)
+    version: ResourceVersion = Field(gt=0)
     dtype: DataType
     frequency: RunFrequency
     keys: list[EntityKey] = Field(
@@ -207,7 +214,7 @@ class LabelCreateRequest(_ApiModel):
     )
     datasets: list[LabelDatasetDependency] = Field(min_length=1)
     transform: TransformName = Field(min_length=1)
-    description: str = Field(min_length=1)
+    description: Description = Field(min_length=1)
     parameters: dict[ParameterKey, ParameterValue] = Field(default_factory=dict)
     validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list
@@ -252,7 +259,7 @@ class FeatureMaterializationMode(StrEnum):
 class PartitionMaterializationRequest(_ApiModel):
     """Logical UTC partitions requested for one materialization job."""
 
-    timestamps: list[datetime] = Field(
+    timestamps: list[PartitionTimestamp] = Field(
         min_length=1,
         description="UTC timestamps aligned exactly to the start of an hour.",
         examples=[["2026-10-20T18:00:00Z"]],
@@ -261,8 +268,8 @@ class PartitionMaterializationRequest(_ApiModel):
     @field_validator("timestamps")
     @classmethod
     def require_hour_aligned_utc_timestamps(
-        cls, timestamps: list[datetime]
-    ) -> list[datetime]:
+        cls, timestamps: list[PartitionTimestamp]
+    ) -> list[PartitionTimestamp]:
         """Require every requested partition timestamp to be an exact UTC hour."""
         if len(set(timestamps)) != len(timestamps):
             raise ValueError("Partition timestamps must be unique.")
@@ -296,17 +303,17 @@ class JobTarget(_ApiModel):
     """A versioned resource targeted by a materialization job."""
 
     resource_type: ResourceType
-    name: str
-    version: int
+    name: ResourceName
+    version: ResourceVersion
 
 
 class JobPartition(_ApiModel):
     """One resource partition targeted by a materialization job."""
 
     resource_type: ResourceType
-    name: str
-    version: int
-    timestamp: datetime
+    name: ResourceName
+    version: ResourceVersion
+    timestamp: PartitionTimestamp
     status: PartitionStatus
 
 
@@ -340,7 +347,7 @@ class PartitionUpdateRequestResponse(_ApiModel):
 
     partition_id: UUID
     job_id: UUID
-    timestamp: datetime = Field(
+    timestamp: PartitionTimestamp = Field(
         description="UTC timestamp aligned exactly to the start of an hour.",
         examples=["2026-10-20T18:00:00Z"],
     )
@@ -362,10 +369,10 @@ class PartitionCompletionRequest(_ApiModel):
     partition_id: UUID
     resource_type: ResourceType
     row_count: int = Field(ge=0)
-    schema_: dict[str, str] = Field(alias="schema", min_length=1)
-    content_hash: str = Field(min_length=1)
+    schema_: IcebergSchema = Field(alias="schema", min_length=1)
+    content_hash: ContentHash = Field(min_length=1)
     snapshot_id: int = Field(ge=0)
-    callback_token: str = Field(min_length=1)
+    callback_token: CallbackToken = Field(min_length=1)
     dataset_partition_ids: list[UUID] | None = None
 
     @field_validator("schema_")
@@ -411,8 +418,8 @@ class PartitionResultResponse(_ApiModel):
     partition_id: UUID
     resource_type: ResourceType
     row_count: int
-    schema_: dict[str, str] = Field(alias="schema")
-    content_hash: str
+    schema_: IcebergSchema = Field(alias="schema")
+    content_hash: ContentHash
     snapshot_id: int
     created_at: datetime
 

@@ -4,16 +4,47 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cached_property
-from typing import Annotated, Literal, assert_never
+from typing import assert_never
 
 import exchange_calendars as xcals
 import pandas as pd
 from exchange_calendars import ExchangeCalendar
-from pydantic import Field
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as spark_functions
 
-from ml_platform.common.types import BaseConfig
+from ml_platform.common.types import (
+    AllPartitionsTemporalFilterConfig,
+    DiscriminatedValidationConfig,
+    ExactColumnsValidationConfig,
+    FiniteNumericValuesValidationConfig,
+    KeysFromInputValidationConfig,
+    MinimumRowsValidationConfig,
+    NonNullValuesValidationConfig,
+    PartitionType,
+    RequestedPartitionsValidationConfig,
+    TemporalFilter,
+    TemporalFilterConfig,
+    UniqueKeyValidationConfig,
+    ValidationConfig,
+    XnysRegularSessionTemporalFilterConfig,
+)
+
+__all__ = [
+    "AllPartitionsTemporalFilterConfig",
+    "DiscriminatedValidationConfig",
+    "ExactColumnsValidationConfig",
+    "FiniteNumericValuesValidationConfig",
+    "KeysFromInputValidationConfig",
+    "MinimumRowsValidationConfig",
+    "NonNullValuesValidationConfig",
+    "RequestedPartitionsValidationConfig",
+    "TemporalFilter",
+    "TemporalFilterConfig",
+    "UniqueKeyValidationConfig",
+    "ValidationConfig",
+    "XnysRegularSessionTemporalFilterConfig",
+]
+
 from ml_platform.data_sdk.materializers.exceptions import (
     DataFrameValidationError,
     ExactColumnsValidationError,
@@ -26,180 +57,6 @@ from ml_platform.data_sdk.materializers.exceptions import (
     UniqueKeyValidationError,
     UnsupportedValidationOverrideError,
 )
-from ml_platform.data_sdk.transforms._types import PartitionType
-
-
-class TemporalFilterConfig(BaseConfig, ABC):
-    """Select requested partitions to which a partition-level validation applies."""
-
-    type: str = Field(
-        description="Discriminator for the temporal filter implementation."
-    )
-
-
-class AllPartitionsTemporalFilterConfig(TemporalFilterConfig):
-    """Apply a partition-level validation to every requested partition."""
-
-    type: Literal["all_partitions"] = Field(
-        default="all_partitions",
-        description="Apply the validation to every requested partition.",
-    )
-
-
-class XnysRegularSessionTemporalFilterConfig(TemporalFilterConfig):
-    """Select partitions that overlap an actual XNYS regular trading session."""
-
-    type: Literal["xnys_regular_session"] = Field(
-        default="xnys_regular_session",
-        description="Select partitions overlapping the XNYS regular trading session.",
-    )
-
-
-TemporalFilter = Annotated[
-    AllPartitionsTemporalFilterConfig | XnysRegularSessionTemporalFilterConfig,
-    Field(discriminator="type"),
-]
-
-
-class ValidationConfig(BaseConfig, ABC):
-    """Base type for one declared materialization validation."""
-
-    type: str = Field(
-        description="Discriminator for the validation implementation."
-    )
-    reason: str = Field(
-        min_length=1,
-        description="Why this validation is required for the materialized data.",
-    )
-
-
-class PartitionValidationConfig(ValidationConfig, ABC):
-    """Validation applied to a selected subset of requested output partitions."""
-
-    temporal_filter: TemporalFilter = Field(
-        default_factory=AllPartitionsTemporalFilterConfig,
-        description="Requested output partitions to which this validation applies.",
-    )
-
-
-class MinimumRowsValidationConfig(PartitionValidationConfig):
-    """Require a minimum number of output rows in each selected partition."""
-
-    type: Literal["minimum_rows"] = Field(
-        default="minimum_rows", description="Require a minimum row count."
-    )
-    minimum_rows: int = Field(
-        ge=1,
-        description="Minimum output rows required in each selected partition.",
-    )
-    timestamps: tuple[datetime, ...] = Field(
-        default=(),
-        exclude=True,
-        description="UTC output partition boundaries to check.",
-    )
-    partition_type: PartitionType = Field(
-        default=PartitionType.DAILY,
-        exclude=True,
-        description="Explicit cadence of the checked partitions.",
-    )
-    timestamp_column: str = Field(
-        default="timestamp",
-        exclude=True,
-        description="Output timestamp column name.",
-    )
-    partition_column: str = Field(
-        default="output_partition",
-        exclude=True,
-        description="Temporary logical partition column name.",
-    )
-
-
-class NonNullValuesValidationConfig(ValidationConfig):
-    """Require every declared persisted output column to be non-null."""
-
-    type: Literal["non_null_values"] = "non_null_values"
-    columns: tuple[str, ...] = Field(
-        default=(), description="Output columns that must be non-null."
-    )
-
-
-class FiniteNumericValuesValidationConfig(ValidationConfig):
-    """Require every declared persisted numeric output column to be finite."""
-
-    type: Literal["finite_numeric_values"] = "finite_numeric_values"
-    columns: tuple[str, ...] = Field(
-        default=(), description="Output numeric columns that must be finite."
-    )
-
-
-class KeysFromInputValidationConfig(ValidationConfig):
-    """Require entity keys to occur in at least one injected input dataset."""
-
-    type: Literal["keys_from_input"] = "keys_from_input"
-    keys: tuple[str, ...] = Field(
-        default=(), description="Output entity-key columns to validate."
-    )
-    dataset_table_identifiers: tuple[str, ...] = Field(
-        default=(),
-        description="Iceberg input tables that define valid entity keys.",
-    )
-
-
-class ExactColumnsValidationConfig(ValidationConfig):
-    """Require an exact, ordered-independent set of output columns."""
-
-    type: Literal["exact_columns"] = "exact_columns"
-    columns: tuple[str, ...] = Field(
-        default=(), description="Complete required output column set."
-    )
-
-
-class UniqueKeyValidationConfig(ValidationConfig):
-    """Require each declared output key tuple to be unique."""
-
-    type: Literal["unique_key"] = "unique_key"
-    columns: tuple[str, ...] = Field(
-        default=(),
-        description="Columns that together identify a unique output row.",
-    )
-
-
-class RequestedPartitionsValidationConfig(ValidationConfig):
-    """Restrict output rows to declared timestamp partition boundaries."""
-
-    type: Literal["requested_partitions"] = "requested_partitions"
-    timestamps: tuple[datetime, ...] = Field(
-        default=(),
-        exclude=True,
-        description="UTC output partition boundaries allowed in the data_frame.",
-    )
-    partition_type: PartitionType = Field(
-        default=PartitionType.DAILY,
-        exclude=True,
-        description="Explicit cadence of the checked partitions.",
-    )
-    timestamp_column: str = Field(
-        default="timestamp",
-        exclude=True,
-        description="Output timestamp column name.",
-    )
-    partition_column: str = Field(
-        default="output_partition",
-        exclude=True,
-        description="Temporary logical partition column name.",
-    )
-
-
-DiscriminatedValidationConfig = Annotated[
-    MinimumRowsValidationConfig
-    | NonNullValuesValidationConfig
-    | FiniteNumericValuesValidationConfig
-    | KeysFromInputValidationConfig
-    | ExactColumnsValidationConfig
-    | UniqueKeyValidationConfig
-    | RequestedPartitionsValidationConfig,
-    Field(discriminator="type"),
-]
 
 
 @dataclass(frozen=True)

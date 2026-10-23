@@ -16,7 +16,16 @@ from pyspark.sql import functions as spark_functions
 from pyspark.sql.column import Column
 
 from ml_platform.common.api.routes import PartitionRoutes
-from ml_platform.common.types import BaseConfig
+from ml_platform.common.types import (
+    BaseConfig,
+    CallbackToken,
+    DatasetName,
+    Description,
+    PartitionTimestamp,
+    PartitionType,
+    ResourceName,
+    ResourceVersion,
+)
 from ml_platform.data_sdk.materializers._constants import (
     materialization_api_url,
     spark_master,
@@ -33,7 +42,6 @@ from ml_platform.data_sdk.materializers.exceptions import (
     DuplicateValidationOverrideError,
 )
 from ml_platform.data_sdk.transforms._base import DataTransform
-from ml_platform.data_sdk.transforms._types import PartitionType
 
 
 class PartitionDependency(BaseConfig):
@@ -43,14 +51,14 @@ class PartitionDependency(BaseConfig):
         min_length=1,
         description="Control-plane identifier of the pinned parent partition.",
     )
-    dataset_name: str = Field(
+    dataset_name: DatasetName = Field(
         pattern=r"^[a-z][a-z0-9_]*$",
         description="Name of the parent dataset owning this partition.",
     )
-    dataset_version: int = Field(
+    dataset_version: ResourceVersion = Field(
         ge=1, description="Version of the parent dataset owning this partition."
     )
-    timestamp: datetime = Field(
+    timestamp: PartitionTimestamp = Field(
         description="UTC timestamp that identifies the parent logical partition."
     )
     snapshot_id: int = Field(
@@ -66,10 +74,10 @@ class MaterializerPartition(BaseConfig):
         min_length=1,
         description="Control-plane identifier for the requested output partition.",
     )
-    timestamp: datetime = Field(
+    timestamp: PartitionTimestamp = Field(
         description="UTC timestamp that identifies the requested logical output partition."
     )
-    callback_token: str = Field(
+    callback_token: CallbackToken = Field(
         min_length=1,
         description="Opaque token required to report successful partition completion.",
     )
@@ -82,15 +90,15 @@ class MaterializerPartition(BaseConfig):
 class MaterializerConfig(BaseConfig):
     """Strict immutable API runtime contract shared by all materializers."""
 
-    name: str = Field(
+    name: ResourceName = Field(
         pattern=r"^[a-z][a-z0-9_]*$",
         description="Stable lowercase resource name.",
     )
-    version: int = Field(
+    version: ResourceVersion = Field(
         ge=1,
         description="Positive immutable version number for the resource definition.",
     )
-    description: str = Field(
+    description: Description = Field(
         min_length=1,
         description="Human-readable description of the materialized resource.",
     )

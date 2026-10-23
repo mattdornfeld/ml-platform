@@ -1,28 +1,37 @@
 """Strict Pydantic configuration ontology for data resources."""
 
 from collections.abc import Sequence
-from enum import StrEnum
 from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
-from ml_platform.common.types import BaseConfig
+from ml_platform.common.types import (
+    BaseConfig,
+    DatasetName,
+    DatasetType,
+    DataType,
+    Description,
+    DiscriminatedValidationConfig,
+    EntityKey,
+    FeatureName,
+    LabelName,
+    ParameterKey,
+    ParameterValue,
+    PartitionType,
+    ResourceVersion,
+    RunFrequency,
+    Symbol,
+    TransformName,
+)
 from ml_platform.data_sdk._exceptions import (
     DataSdkError,
     MarketSymbolConfigurationError,
 )
-from ml_platform.data_sdk.materializers._materialization_validator import (
-    DiscriminatedValidationConfig,
-)
 from ml_platform.data_sdk.transforms._types import (
     DatasetDependency,
-    DatasetType,
-    EntityKey,
     FeatureDatasetDependency,
     LabelDatasetDependency,
-    PartitionType,
 )
-from ml_platform.data_sdk.transforms._types import DataType as DataType
 
 __all__ = [
     "BaseConfig",
@@ -44,32 +53,23 @@ __all__ = [
     "TripleBarrierConfig",
 ]
 
-type ParameterKey = str
-type ParameterValue = int | float | str | bool
-type TransformName = str
-
-
-class RunFrequency(StrEnum):
-    HOURLY = "hourly"
-    DAILY = "daily"
-
 
 class TransformDependencyConfigurationError(DataSdkError):
     """Raised when transform input datasets or keys are ambiguous."""
 
 
-class DataConfig(BaseConfig):
+class DataConfig[NameT: str](BaseConfig):
     """Common immutable metadata for every versioned resource definition."""
 
-    name: str = Field(
+    name: NameT = Field(
         pattern=r"^[a-z][a-z0-9_]*$",
         description="Stable lowercase resource name.",
     )
-    version: int = Field(
+    version: ResourceVersion = Field(
         ge=1, description="Positive immutable resource-definition version."
     )
-    description: str = Field(
-        default="No description provided.",
+    description: Description = Field(
+        default=Description("No description provided."),
         min_length=1,
         description="Human-readable resource description.",
     )
@@ -84,8 +84,13 @@ class DataConfig(BaseConfig):
         return f"{self.name}_v{self.version}"
 
 
-class DatasetConfig(DataConfig):
+class DatasetConfig(DataConfig[DatasetName]):
     """Configuration for a materializable dataset definition."""
+
+    name: DatasetName = Field(
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Stable lowercase dataset name.",
+    )
 
     run_frequency: RunFrequency = Field(
         default=RunFrequency.DAILY,
@@ -124,7 +129,7 @@ class DatasetConfig(DataConfig):
         return values | {"partition_type": run_frequency}
 
 
-class TransformConfig(DataConfig):
+class TransformConfig[NameT: str](DataConfig[NameT]):
     """Common typed transformation definition shared by features and labels."""
 
     dtype: DataType = Field(
@@ -186,8 +191,13 @@ class TransformConfig(DataConfig):
         return self
 
 
-class LabelConfig(TransformConfig):
+class LabelConfig(TransformConfig[LabelName]):
     """Configuration for a materializable label resource."""
+
+    name: LabelName = Field(
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Stable lowercase label name.",
+    )
 
     datasets: list[LabelDatasetDependency] = Field(
         min_length=1,
@@ -195,8 +205,13 @@ class LabelConfig(TransformConfig):
     )
 
 
-class FeatureConfig(TransformConfig):
+class FeatureConfig(TransformConfig[FeatureName]):
     """Configuration for a materializable feature resource."""
+
+    name: FeatureName = Field(
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Stable lowercase feature name.",
+    )
 
     datasets: list[FeatureDatasetDependency] = Field(
         min_length=1,
@@ -210,16 +225,18 @@ class MarketDataConfig(DatasetConfig):
     dataset_type: Literal[DatasetType.MARKET_DATA] = Field(
         description="Dataset implementation selected by this definition."
     )
-    symbols: list[str] = Field(
+    symbols: list[Symbol] = Field(
         min_length=1, description="Yahoo Finance ticker symbols to download."
     )
 
     @field_validator("symbols")
     @classmethod
-    def normalize_symbols(cls, symbols: list[str]) -> list[str]:
+    def normalize_symbols(cls, symbols: list[Symbol]) -> list[Symbol]:
         """Normalize and validate the configured Yahoo Finance symbols."""
         normalized_symbols = [
-            symbol.strip().upper() for symbol in symbols if symbol.strip()
+            Symbol(symbol.strip().upper())
+            for symbol in symbols
+            if symbol.strip()
         ]
         if not normalized_symbols:
             raise MarketSymbolConfigurationError(

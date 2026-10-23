@@ -2,6 +2,7 @@
 
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -20,6 +21,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
+from ml_platform.common.types import Symbol
 from ml_platform.data_sdk._exceptions import DataSdkError
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.utils import record
@@ -44,7 +46,7 @@ class HourlyOhlcvRow:
     """One complete Yahoo Finance hourly OHLCV observation."""
 
     timestamp: datetime
-    symbol: str
+    symbol: Symbol
     open_price: float
     high_price: float
     low_price: float
@@ -69,7 +71,7 @@ class MarketDataTransform(DatasetTransform):
     """Download configured Yahoo Finance bars and construct the OHLCV DataFrame."""
 
     spark: SparkSession
-    symbols: list[str]
+    symbols: Sequence[Symbol]
     partitions: list[datetime]
 
     @property
@@ -137,7 +139,7 @@ def _contiguous_date_ranges(partitions: list[date]) -> list[tuple[date, date]]:
 
 
 def fetch_hourly_ohlcv(
-    spark: SparkSession, symbol: str, *, start_date: date, end_date: date
+    spark: SparkSession, symbol: Symbol, *, start_date: date, end_date: date
 ) -> DataFrame:
     """Fetch one symbol's extended-hours bars into a typed Spark DataFrame."""
     rows = fetch_hourly_ohlcv_rows(
@@ -149,10 +151,10 @@ def fetch_hourly_ohlcv(
 
 
 def fetch_hourly_ohlcv_rows(
-    symbol: str, *, start_date: date, end_date: date
+    symbol: Symbol, *, start_date: date, end_date: date
 ) -> list[HourlyOhlcvRow]:
     """Fetch one symbol's complete extended-hours OHLCV rows from Yahoo Finance."""
-    normalized = symbol.upper()
+    normalized = Symbol(symbol.upper())
     rows = _yahoo_chart_rows(
         _request_yahoo_chart(normalized, start_date, end_date), normalized
     )
@@ -165,7 +167,7 @@ def fetch_hourly_ohlcv_rows(
 
 
 def _request_yahoo_chart(
-    symbol: str, start_date: date, end_date: date
+    symbol: Symbol, start_date: date, end_date: date
 ) -> dict[str, Any]:
     """Request one Yahoo chart response and return decoded JSON."""
     start = int(datetime.combine(start_date, time.min, UTC).timestamp())
@@ -243,7 +245,7 @@ def _yahoo_chart_rows(
     return [
         HourlyOhlcvRow(
             timestamp=datetime.fromtimestamp(timestamp, tz=UTC),
-            symbol=symbol,
+            symbol=Symbol(symbol),
             open_price=float(open_),
             high_price=float(high),
             low_price=float(low),

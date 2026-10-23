@@ -47,7 +47,7 @@ from ml_platform.data_sdk.transforms._types import (
 )
 
 
-class TransformMaterializationConfig(MaterializerConfig, TransformConfig):
+class TransformMaterializationConfig(MaterializerConfig, TransformConfig[str]):
     """Runtime transformation definition enriched with materialization-specific inputs."""
 
 

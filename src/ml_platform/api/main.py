@@ -63,6 +63,7 @@ from ml_platform.common.api.routes import (
     LabelRoutes,
     PartitionRoutes,
 )
+from ml_platform.common.types import ResourceName, ResourceVersion
 
 
 @asynccontextmanager
@@ -105,8 +106,8 @@ def dashboard_ui(dashboard_path: str = "") -> FileResponse:
     return FileResponse(UI_DIRECTORY / "index.html")
 
 
-ResourceName = Annotated[str, Path(min_length=1)]
-ResourceVersion = Annotated[int, Path(gt=0)]
+ResourcePathName = Annotated[ResourceName, Path(min_length=1)]
+ResourcePathVersion = Annotated[ResourceVersion, Path(gt=0)]
 _NOT_IMPLEMENTED_DETAIL = (
     "Database-backed materialization services have not been implemented."
 )
@@ -535,7 +536,9 @@ def list_datasets(
 
 @app.get(DatasetRoutes.DETAIL.template, tags=["datasets"])
 def get_dataset(
-    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+    name: ResourcePathName,
+    version: ResourcePathVersion,
+    connection: DatabaseConnection,
 ) -> dict[str, Any]:
     """Return one dataset and the latest receipt for each logical partition."""
     with connection.cursor(row_factory=dict_row) as cursor:
@@ -565,8 +568,8 @@ def get_dataset(
 
 @app.patch(DatasetRoutes.UPDATE.template, tags=["datasets"])
 def update_dataset_description(
-    name: ResourceName,
-    version: ResourceVersion,
+    name: ResourcePathName,
+    version: ResourcePathVersion,
     payload: DatasetDescriptionUpdate,
     connection: DatabaseConnection,
 ) -> dict[str, Any]:
@@ -594,7 +597,9 @@ def update_dataset_description(
     tags=["datasets"],
 )
 def delete_dataset(
-    name: ResourceName, version: ResourceVersion, session: DatabaseSession
+    name: ResourcePathName,
+    version: ResourcePathVersion,
+    session: DatabaseSession,
 ) -> None:
     """Soft-delete a dataset and cancel each unfinished partition job."""
     dataset = session.get(Dataset, (name, version))
@@ -748,7 +753,9 @@ def list_features(
 
 @app.get(FeatureRoutes.DETAIL.template, tags=["features"])
 def get_feature(
-    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+    name: ResourcePathName,
+    version: ResourcePathVersion,
+    connection: DatabaseConnection,
 ) -> dict[str, Any]:
     """Return one feature, its dependencies, and latest logical partition receipts."""
     with connection.cursor(row_factory=dict_row) as cursor:
@@ -804,7 +811,9 @@ def get_feature(
     tags=["features"],
 )
 def delete_feature(
-    name: ResourceName, version: ResourceVersion, session: DatabaseSession
+    name: ResourcePathName,
+    version: ResourcePathVersion,
+    session: DatabaseSession,
 ) -> None:
     """Soft-delete a feature and cancel each unfinished partition job."""
     feature = session.get(Feature, (name, version))
@@ -921,8 +930,8 @@ def create_feature(
     tags=["dataset materialization"],
 )
 def materialize_dataset_partitions(
-    name: ResourceName,
-    version: ResourceVersion,
+    name: ResourcePathName,
+    version: ResourcePathVersion,
     payload: PartitionMaterializationRequest,
     connection: DatabaseConnection,
 ) -> MaterializationJobResponse:
@@ -977,7 +986,7 @@ def materialize_dataset_partitions(
             job = cursor.fetchone()
             if job is None:
                 raise RuntimeError("Dataset job insert did not return a row.")
-            for timestamp in missing:
+            for missing_timestamp in missing:
                 cursor.execute(
                     """INSERT INTO partition_update_requests
                     (job_id, dataset_name, dataset_version, timestamp, status, callback_token)
@@ -987,7 +996,7 @@ def materialize_dataset_partitions(
                         job["id"],
                         name,
                         version,
-                        timestamp,
+                        missing_timestamp,
                         secrets.token_urlsafe(32),
                     ),
                 )
@@ -1107,8 +1116,8 @@ def _feature_plan_ids(
     tags=["feature materialization"],
 )
 def materialize_feature_partitions(
-    name: ResourceName,
-    version: ResourceVersion,
+    name: ResourcePathName,
+    version: ResourcePathVersion,
     payload: FeaturePartitionMaterializationRequest,
     connection: DatabaseConnection,
 ) -> MaterializationJobResponse:
@@ -1187,7 +1196,7 @@ def materialize_feature_partitions(
             job = cursor.fetchone()
             if job is None:
                 raise RuntimeError("Feature job insert did not return a row.")
-            for timestamp, plan in planned_by_timestamp.items():
+            for planned_timestamp, plan in planned_by_timestamp.items():
                 cursor.execute(
                     """INSERT INTO feature_partition_update_requests
                     (job_id, feature_name, feature_version, timestamp, status, callback_token)
@@ -1197,7 +1206,7 @@ def materialize_feature_partitions(
                         job["id"],
                         name,
                         version,
-                        timestamp,
+                        planned_timestamp,
                         secrets.token_urlsafe(32),
                     ),
                 )
@@ -1304,7 +1313,9 @@ def list_labels(
 
 @app.get(LabelRoutes.DETAIL.template, tags=["labels"])
 def get_label(
-    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+    name: ResourcePathName,
+    version: ResourcePathVersion,
+    connection: DatabaseConnection,
 ) -> dict[str, Any]:
     """Return one label definition, dependencies, and logical partitions."""
     with connection.cursor(row_factory=dict_row) as cursor:
@@ -1454,7 +1465,9 @@ def create_label(
     tags=["labels"],
 )
 def delete_label(
-    name: ResourceName, version: ResourceVersion, session: DatabaseSession
+    name: ResourcePathName,
+    version: ResourcePathVersion,
+    session: DatabaseSession,
 ) -> None:
     """Soft-delete a label and cancel each unfinished partition job."""
     label = session.get(Label, (name, version))
@@ -1593,8 +1606,8 @@ def _label_plan_ids(
     tags=["label materialization"],
 )
 def materialize_label_partitions(
-    name: ResourceName,
-    version: ResourceVersion,
+    name: ResourcePathName,
+    version: ResourcePathVersion,
     payload: LabelPartitionMaterializationRequest,
     connection: DatabaseConnection,
 ) -> MaterializationJobResponse:
@@ -1673,7 +1686,7 @@ def materialize_label_partitions(
             job = cursor.fetchone()
             if job is None:
                 raise RuntimeError("Label job insert did not return a row.")
-            for timestamp, plan in plans.items():
+            for planned_timestamp, plan in plans.items():
                 cursor.execute(
                     """INSERT INTO label_partition_update_requests
                     (job_id, label_name, label_version, timestamp, status, callback_token)
@@ -1683,7 +1696,7 @@ def materialize_label_partitions(
                         job["id"],
                         name,
                         version,
-                        timestamp,
+                        planned_timestamp,
                         secrets.token_urlsafe(32),
                     ),
                 )

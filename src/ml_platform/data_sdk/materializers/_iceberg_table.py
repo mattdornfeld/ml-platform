@@ -11,10 +11,10 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as spark_functions
 from pyspark.sql.column import Column
 
+from ml_platform.common.types import PartitionType
 from ml_platform.data_sdk.materializers.exceptions import (
     MissingIcebergSnapshotError,
 )
-from ml_platform.data_sdk.transforms._types import PartitionType
 
 
 @dataclass(frozen=True)

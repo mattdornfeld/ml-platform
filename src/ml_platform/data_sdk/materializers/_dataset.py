@@ -7,6 +7,12 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as spark_functions
 from pyspark.sql.column import Column
 
+from ml_platform.common.types import (
+    DatasetType,
+    EntityKey,
+    PartitionType,
+    Symbol,
+)
 from ml_platform.data_sdk._exceptions import MarketSymbolConfigurationError
 from ml_platform.data_sdk.materializers._base import (
     Materializer,
@@ -26,11 +32,6 @@ from ml_platform.data_sdk.materializers.exceptions import (
     UnsupportedDatasetTypeError,
 )
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
-from ml_platform.data_sdk.transforms._types import (
-    DatasetType,
-    EntityKey,
-    PartitionType,
-)
 
 _OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 _CONTENT_HASH_COLUMNS = (
@@ -54,16 +55,18 @@ class DatasetMaterializationConfig(MaterializerConfig):
     partition_type: PartitionType = Field(
         description="Iceberg timestamp partition cadence used for this dataset.",
     )
-    symbols: list[str] = Field(
+    symbols: list[Symbol] = Field(
         min_length=1,
         description="Yahoo Finance ticker symbols to retrieve for each requested partition.",
     )
 
     @field_validator("symbols")
     @classmethod
-    def _normalize_symbols(cls, symbols: list[str]) -> list[str]:
+    def _normalize_symbols(cls, symbols: list[Symbol]) -> list[Symbol]:
         normalized = [
-            symbol.strip().upper() for symbol in symbols if symbol.strip()
+            Symbol(symbol.strip().upper())
+            for symbol in symbols
+            if symbol.strip()
         ]
         if not normalized:
             raise MarketSymbolConfigurationError(

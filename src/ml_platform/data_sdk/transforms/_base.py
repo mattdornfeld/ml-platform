@@ -5,8 +5,8 @@ from collections.abc import Sequence
 
 from pyspark.sql import DataFrame
 
+from ml_platform.common.types import EntityKey, PartitionType
 from ml_platform.data_sdk._exceptions import DataSdkError
-from ml_platform.data_sdk.transforms._types import EntityKey, PartitionType
 from ml_platform.data_sdk.utils import record
 
 
