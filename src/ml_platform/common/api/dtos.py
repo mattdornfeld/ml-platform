@@ -69,6 +69,14 @@ class DatasetType(StrEnum):
     MARKET_DATA = "market_data"
 
 
+class ResourceType(StrEnum):
+    """Materializable resource kinds exposed by the control plane."""
+
+    DATASET = "dataset"
+    FEATURE = "feature"
+    LABEL = "label"
+
+
 class DatasetTimeRange(_ApiModel):
     """Inclusive start and exclusive end dates for a dataset definition."""
 
@@ -290,7 +298,7 @@ class LabelPartitionMaterializationRequest(
 class JobTarget(_ApiModel):
     """A versioned resource targeted by a materialization job."""
 
-    resource_type: Literal["dataset", "feature", "label"]
+    resource_type: ResourceType
     name: str
     version: int
 
@@ -298,7 +306,7 @@ class JobTarget(_ApiModel):
 class JobPartition(_ApiModel):
     """One resource partition targeted by a materialization job."""
 
-    resource_type: Literal["dataset", "feature", "label"]
+    resource_type: ResourceType
     name: str
     version: int
     timestamp: datetime
@@ -355,7 +363,7 @@ class PartitionCompletionRequest(_ApiModel):
     """One authenticated receipt in an atomic Iceberg completion batch."""
 
     partition_id: UUID
-    resource_type: Literal["dataset", "feature", "label"]
+    resource_type: ResourceType
     row_count: int = Field(ge=0)
     schema_: dict[str, str] = Field(alias="schema", min_length=1)
     content_hash: str = Field(min_length=1)
@@ -382,13 +390,13 @@ class PartitionCompletionRequest(_ApiModel):
     def validate_dependencies(self) -> "PartitionCompletionRequest":
         """Derived resources must report their exact pinned dataset revisions."""
         if (
-            self.resource_type == "dataset"
+            self.resource_type is ResourceType.DATASET
             and self.dataset_partition_ids is not None
         ):
             raise ValueError(
                 "Dataset receipts must not include dataset_partition_ids."
             )
-        if self.resource_type != "dataset":
+        if self.resource_type is not ResourceType.DATASET:
             if not self.dataset_partition_ids:
                 raise ValueError(
                     "Derived receipts require dataset_partition_ids."
@@ -404,7 +412,7 @@ class PartitionResultResponse(_ApiModel):
     """The recorded receipt for one successfully materialized partition."""
 
     partition_id: UUID
-    resource_type: Literal["dataset", "feature", "label"]
+    resource_type: ResourceType
     row_count: int
     schema_: dict[str, str] = Field(alias="schema")
     content_hash: str

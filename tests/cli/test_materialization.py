@@ -10,6 +10,7 @@ from ml_platform.cli.materialization import (
     _load_yaml,
     sync_resources,
 )
+from ml_platform.common.api.dtos import ResourceType
 
 
 class ResourceSyncTest(unittest.TestCase):
@@ -72,7 +73,7 @@ validations:
             ],
             {},
         ]
-        result = sync_resources("http://api", "dataset", self.root)
+        result = sync_resources("http://api", ResourceType.DATASET, self.root)
         self.assertEqual(result, {"created": [], "deleted": ["obsolete v1"]})
         self.assertEqual(
             request.call_args_list[1].args[1:3],
@@ -84,7 +85,7 @@ validations:
         self, request: object
     ) -> None:
         request.side_effect = [[], {}]
-        result = sync_resources("http://api", "feature", self.root)
+        result = sync_resources("http://api", ResourceType.FEATURE, self.root)
         self.assertEqual(result, {"created": ["returns v1"], "deleted": []})
         payload = request.call_args_list[1].args[3]
         self.assertEqual(

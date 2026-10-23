@@ -6,7 +6,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -16,6 +16,7 @@ from ml_platform.common.api.dtos import (
     DatasetCreateRequest,
     FeatureCreateRequest,
     LabelCreateRequest,
+    ResourceType,
 )
 from ml_platform.common.api.routes import (
     DatasetRoutes,
@@ -179,21 +180,21 @@ def _label_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
 
 
 def sync_resources(
-    base_url: str, resource: str, config_dir: Path = DEFAULT_CONFIG_DIR
+    base_url: str, resource: ResourceType, config_dir: Path = DEFAULT_CONFIG_DIR
 ) -> dict[str, list[str]]:
     """Reconcile API resource definitions with checked-in configs by soft-deleting removed identities."""
     match resource:
-        case "dataset":
+        case ResourceType.DATASET:
             desired = _dataset_configs(config_dir)
             list_route = DatasetRoutes.LIST
             create_route = DatasetRoutes.CREATE
             delete_route = DatasetRoutes.DELETE
-        case "feature":
+        case ResourceType.FEATURE:
             desired = _feature_configs(config_dir)
             list_route = FeatureRoutes.LIST
             create_route = FeatureRoutes.CREATE
             delete_route = FeatureRoutes.DELETE
-        case "label":
+        case ResourceType.LABEL:
             desired = _label_configs(config_dir)
             list_route = LabelRoutes.LIST
             create_route = LabelRoutes.CREATE
@@ -219,9 +220,9 @@ def sync_resources(
                 base_url, create_route.method, create_route.template, payload
             )
             created.append(f"{identity[0]} v{identity[1]}")
-        elif resource == "dataset" and active[identity].get("config", {}).get(
-            "description"
-        ) != payload["config"].get("description"):
+        elif resource is ResourceType.DATASET and active[identity].get(
+            "config", {}
+        ).get("description") != payload["config"].get("description"):
             _api_request(
                 base_url,
                 DatasetRoutes.UPDATE.method,
@@ -257,18 +258,18 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     create = commands.add_parser("create")
     create_resources = create.add_subparsers(dest="resource", required=True)
-    for resource in ("dataset", "feature", "label"):
-        resource_parser = create_resources.add_parser(resource)
+    for resource in ResourceType:
+        resource_parser = create_resources.add_parser(resource.value)
         resource_parser.add_argument("--config", required=True)
-        if resource == "dataset":
+        if resource is ResourceType.DATASET:
             resource_parser.add_argument("--name", required=True)
             resource_parser.add_argument("--version", type=int, required=True)
     materialize = commands.add_parser("materialize")
     materialize_resources = materialize.add_subparsers(
         dest="resource", required=True
     )
-    for resource in ("dataset", "feature", "label"):
-        resource_parser = materialize_resources.add_parser(resource)
+    for resource in ResourceType:
+        resource_parser = materialize_resources.add_parser(resource.value)
         resource_parser.add_argument("--name", required=True)
         resource_parser.add_argument("--version", type=int, required=True)
         resource_parser.add_argument("--timestamp", action="append", default=[])
@@ -288,9 +289,9 @@ def main() -> None:
     job = describe_resources.add_parser("job")
     job.add_argument("job_id")
     for plural, resource in (
-        ("datasets", "dataset"),
-        ("features", "feature"),
-        ("labels", "label"),
+        ("datasets", ResourceType.DATASET),
+        ("features", ResourceType.FEATURE),
+        ("labels", ResourceType.LABEL),
     ):
         resource_commands = commands.add_parser(plural)
         resource_actions = resource_commands.add_subparsers(
@@ -304,44 +305,51 @@ def main() -> None:
         sync.set_defaults(sync_resource=resource)
     args = parser.parse_args()
 
-    if args.command == "create" and args.resource == "dataset":
-        payload = _dataset_payload(_load_yaml(args.config))
-        if payload["name"] != args.name or payload["version"] != args.version:
-            raise ValueError(
-                "Dataset --name and --version must match the config identity."
-            )
-        result = _api_request(
-            args.api_url,
-            DatasetRoutes.CREATE.method,
-            DatasetRoutes.CREATE.template,
-            payload,
-        )
-    elif args.command == "create" and args.resource == "feature":
-        result = _api_request(
-            args.api_url,
-            FeatureRoutes.CREATE.method,
-            FeatureRoutes.CREATE.template,
-            _feature_payload(_load_yaml(args.config)),
-        )
-    elif args.command == "create" and args.resource == "label":
-        result = _api_request(
-            args.api_url,
-            LabelRoutes.CREATE.method,
-            LabelRoutes.CREATE.template,
-            _label_payload(_load_yaml(args.config)),
-        )
+    if args.command == "create":
+        resource = ResourceType(args.resource)
+        match resource:
+            case ResourceType.DATASET:
+                payload = _dataset_payload(_load_yaml(args.config))
+                if (
+                    payload["name"] != args.name
+                    or payload["version"] != args.version
+                ):
+                    raise ValueError(
+                        "Dataset --name and --version must match the config identity."
+                    )
+                result = _api_request(
+                    args.api_url,
+                    DatasetRoutes.CREATE.method,
+                    DatasetRoutes.CREATE.template,
+                    payload,
+                )
+            case ResourceType.FEATURE:
+                result = _api_request(
+                    args.api_url,
+                    FeatureRoutes.CREATE.method,
+                    FeatureRoutes.CREATE.template,
+                    _feature_payload(_load_yaml(args.config)),
+                )
+            case ResourceType.LABEL:
+                result = _api_request(
+                    args.api_url,
+                    LabelRoutes.CREATE.method,
+                    LabelRoutes.CREATE.template,
+                    _label_payload(_load_yaml(args.config)),
+                )
+            case _ as unsupported_resource:
+                assert_never(unsupported_resource)
     elif args.command == "materialize":
-        match args.resource:
-            case "dataset":
+        resource = ResourceType(args.resource)
+        match resource:
+            case ResourceType.DATASET:
                 route = DatasetRoutes.MATERIALIZE
-            case "feature":
+            case ResourceType.FEATURE:
                 route = FeatureRoutes.MATERIALIZE
-            case "label":
+            case ResourceType.LABEL:
                 route = LabelRoutes.MATERIALIZE
             case _ as unsupported_resource:
-                raise ValueError(
-                    f"Unsupported resource {unsupported_resource!r}."
-                )
+                assert_never(unsupported_resource)
         result = _api_request(
             args.api_url,
             route.method,
@@ -355,6 +363,7 @@ def main() -> None:
     else:
         _describe_job(args.api_url, args.job_id)
         return
+
     sys.stdout.write(json.dumps(result, default=str) + "\n")
     if (
         args.command == "materialize"
