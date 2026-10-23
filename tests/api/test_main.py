@@ -4,12 +4,15 @@ import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import Select
 
 from ml_platform.api import main as api_main
 from ml_platform.api.database import get_connection
 from ml_platform.api.main import app, create_dataset, get_job
+from ml_platform.api.models import Dataset, DatasetPartitionRequest, Job
 from ml_platform.common.api.dtos import DatasetCreateRequest
 
 
@@ -27,42 +30,65 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
 
     def test_create_dataset_enqueues_materialization_job(self) -> None:
         """Registration creates the authoritative submitted materialization job."""
-        row = {
-            "name": "sp500",
-            "version": 1,
-            "dataset_type": "market_data",
-            "config": {
-                "keys": ["symbol"],
-                "partition_type": "daily",
-                "symbols": ["AAPL"],
-                "time_range": {
-                    "start_date": "2026-01-01",
-                    "end_date": "2026-01-02",
-                },
-            },
-            "created_at": datetime.now(UTC),
-        }
-        cursor = MagicMock()
-        cursor.fetchone.side_effect = [
-            row,
-            {"id": "00000000-0000-0000-0000-000000000001"},
-        ]
-        cursor.__enter__.return_value = cursor
-        connection = MagicMock()
-        connection.cursor.return_value = cursor
+        now = datetime.now(UTC)
+        models: list[object] = []
+        session = MagicMock()
+        session.add.side_effect = models.append
+
+        def flush() -> None:
+            """Assign the server-generated identifier used by partition requests."""
+            job = next(model for model in models if isinstance(model, Job))
+            job.id = uuid4()
+
+        def refresh(model: object) -> None:
+            """Apply server defaults exposed by PostgreSQL RETURNING."""
+            match model:
+                case Dataset():
+                    model.created_at = now
+                case Job():
+                    model.created_at = now
+                    model.updated_at = now
+                case _ as unsupported_model:
+                    raise TypeError(
+                        f"Unsupported model refresh: {unsupported_model!r}."
+                    )
+
+        session.flush.side_effect = flush
+        session.refresh.side_effect = refresh
         payload = DatasetCreateRequest.model_validate(
-            {key: value for key, value in row.items() if key != "created_at"}
+            {
+                "name": "sp500",
+                "version": 1,
+                "dataset_type": "market_data",
+                "config": {
+                    "keys": ["symbol"],
+                    "partition_type": "daily",
+                    "symbols": ["AAPL"],
+                    "time_range": {
+                        "start_date": "2026-01-01",
+                        "end_date": "2026-01-02",
+                    },
+                },
+            }
         )
 
-        response = create_dataset(payload, connection)
+        response = create_dataset(payload, session)
 
         self.assertEqual(response.name, "sp500")
         self.assertEqual(response.id, "sp500_v1")
-        connection.commit.assert_called_once()
         self.assertTrue(
             any(
-                "submitted" in str(call)
-                for call in cursor.execute.call_args_list
+                isinstance(model, Job)
+                and model.type == "dataset_materialization"
+                and model.status == "submitted"
+                for model in models
+            )
+        )
+        self.assertTrue(
+            any(
+                isinstance(model, DatasetPartitionRequest)
+                and model.status == "pending"
+                for model in models
             )
         )
 
@@ -490,35 +516,22 @@ class DashboardReadApiTest(unittest.TestCase):
     """Verify dashboard data endpoints expose resource and partition summaries."""
 
     def test_dataset_summary_returns_status_counts(self) -> None:
-        """Dataset list is a read-only projection suitable for the dashboard cards."""
-        from ml_platform.api.main import list_datasets
+        """Dataset list is a read-only projection suitable for dashboard cards."""
+        dataset = Dataset(
+            name="sp500",
+            version=3,
+            dataset_type="market_data",
+            config={},
+            created_at=datetime.now(UTC),
+        )
+        session = MagicMock()
+        session.execute.return_value.all.return_value = [(dataset, 2, 1, 1, 0)]
 
-        cursor = MagicMock()
-        cursor.fetchall.return_value = [
-            {
-                "name": "sp500",
-                "version": 3,
-                "dataset_type": "market_data",
-                "config": {},
-                "created_at": datetime.now(UTC),
-                "partition_count": 2,
-                "created_partition_count": 1,
-                "pending_partition_count": 1,
-                "failed_partition_count": 0,
-            }
-        ]
-        cursor.__enter__.return_value = cursor
-        connection = MagicMock()
-        connection.cursor.return_value = cursor
-
-        result = list_datasets(connection)
+        result = api_main.list_datasets(session)
 
         self.assertEqual(result[0]["name"], "sp500")
         self.assertEqual(result[0]["created_partition_count"], 1)
-        self.assertIn(
-            "FILTER (WHERE request.status = 'created')",
-            str(cursor.execute.call_args),
-        )
+        self.assertIsInstance(session.execute.call_args.args[0], Select)
 
     def test_static_dashboard_is_served(self) -> None:
         """The browser UI is available without a separate frontend deployment."""
@@ -546,12 +559,21 @@ class ResourceDeletionTest(unittest.TestCase):
         """Deleting a dataset retires its definition and any unfinished work."""
         from ml_platform.api.main import delete_dataset
 
-        connection, cursor = self._connection([{"name": "sp500"}])
-        delete_dataset("sp500", 3, connection)
-        sql = "\n".join(str(call) for call in cursor.execute.call_args_list)
-        self.assertIn("deleted_at", sql)
-        self.assertIn("cancelled", sql)
-        connection.commit.assert_called_once()
+        dataset = Dataset(
+            name="sp500",
+            version=3,
+            dataset_type="market_data",
+            config={},
+            created_at=datetime.now(UTC),
+        )
+        session = MagicMock()
+        session.get.return_value = dataset
+
+        delete_dataset("sp500", 3, session)
+
+        self.assertIsNotNone(dataset.deleted_at)
+        self.assertEqual(session.execute.call_count, 2)
+        session.commit.assert_called_once()
 
     def test_deleted_dataset_cannot_materialize_partitions(self) -> None:
         """The partition endpoint rejects a resource that has been soft-deleted."""
@@ -574,14 +596,15 @@ class ResourceDeletionTest(unittest.TestCase):
 
     def test_dataset_list_excludes_deleted_unless_requested(self) -> None:
         """Catalog list calls keep soft-deleted versions hidden by default."""
-        from ml_platform.api.main import list_datasets
+        session = MagicMock()
+        session.execute.return_value.all.return_value = []
+        api_main.list_datasets(session)
+        hidden_statement = session.execute.call_args.args[0]
+        api_main.list_datasets(session, include_deleted=True)
+        all_statement = session.execute.call_args.args[0]
 
-        connection, cursor = self._connection([])
-        cursor.fetchall.return_value = []
-        list_datasets(connection)
-        self.assertEqual(cursor.execute.call_args.args[1], (False,))
-        list_datasets(connection, include_deleted=True)
-        self.assertEqual(cursor.execute.call_args.args[1], (True,))
+        self.assertIn("deleted_at IS NULL", str(hidden_statement))
+        self.assertNotIn("deleted_at IS NULL", str(all_statement))
 
 
 class MinioLocationTest(unittest.TestCase):

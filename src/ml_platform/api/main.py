@@ -16,12 +16,26 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from kubernetes import client as kubernetes_client
 from kubernetes.client.exceptions import ApiException
-from psycopg import Connection, errors
+from psycopg import Connection
 from psycopg.rows import dict_row
-from psycopg.types.json import Json, Jsonb
+from psycopg.types.json import Jsonb
+from sqlalchemy import case, func, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from ml_platform.api.database import get_connection
+from ml_platform.api.database import get_connection, get_session
 from ml_platform.api.migrations import migrate_database
+from ml_platform.api.models import (
+    Dataset,
+    DatasetPartitionRequest,
+    Feature,
+    FeatureDatasetDependency,
+    FeaturePartitionRequest,
+    Job,
+    Label,
+    LabelDatasetDependency,
+    LabelPartitionRequest,
+)
 from ml_platform.api.scheduler import JobScheduler
 from ml_platform.common.api.dtos import (
     DatasetCreateRequest,
@@ -100,6 +114,7 @@ _NOT_IMPLEMENTED = HTTPException(
     status_code=501, detail=_NOT_IMPLEMENTED_DETAIL
 )
 DatabaseConnection = Annotated[Connection, Depends(get_connection)]
+DatabaseSession = Annotated[Session, Depends(get_session)]
 
 
 def validation_example(
@@ -437,27 +452,85 @@ def _resource_jobs(
 
 @app.get(DatasetRoutes.LIST.template, tags=["datasets"])
 def list_datasets(
-    connection: DatabaseConnection, *, include_deleted: bool = False
+    session: DatabaseSession, *, include_deleted: bool = False
 ) -> list[dict[str, Any]]:
     """List dataset definitions with logical partition status counts for the dashboard."""
-    with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """SELECT datasets.name, datasets.version, datasets.dataset_type, datasets.config, datasets.created_at, datasets.deleted_at, datasets.deprecated_at,
-            COUNT(request.partition_id) AS partition_count,
-            COUNT(request.partition_id) FILTER (WHERE request.status = 'created') AS created_partition_count,
-            COUNT(request.partition_id) FILTER (WHERE request.status = 'pending') AS pending_partition_count,
-            COUNT(request.partition_id) FILTER (WHERE request.status IN ('failed', 'cancelled')) AS failed_partition_count
-            FROM datasets LEFT JOIN partition_update_requests request
-              ON request.dataset_name = datasets.name AND request.dataset_version = datasets.version
-            WHERE (%s OR datasets.deleted_at IS NULL)
-            GROUP BY datasets.name, datasets.version, datasets.dataset_type, datasets.config, datasets.created_at, datasets.deleted_at, datasets.deprecated_at
-            ORDER BY datasets.name, datasets.version DESC""",
-            (include_deleted,),
+    partition_counts = (
+        select(
+            DatasetPartitionRequest.dataset_name.label("name"),
+            DatasetPartitionRequest.dataset_version.label("version"),
+            func.count(DatasetPartitionRequest.partition_id).label(
+                "partition_count"
+            ),
+            func.count(
+                case(
+                    (
+                        DatasetPartitionRequest.status == "created",
+                        DatasetPartitionRequest.partition_id,
+                    )
+                )
+            ).label("created_partition_count"),
+            func.count(
+                case(
+                    (
+                        DatasetPartitionRequest.status == "pending",
+                        DatasetPartitionRequest.partition_id,
+                    )
+                )
+            ).label("pending_partition_count"),
+            func.count(
+                case(
+                    (
+                        DatasetPartitionRequest.status.in_(
+                            ("failed", "cancelled")
+                        ),
+                        DatasetPartitionRequest.partition_id,
+                    )
+                )
+            ).label("failed_partition_count"),
         )
-        datasets = list(cursor.fetchall())
-    for dataset in datasets:
-        dataset["id"] = f"{dataset['name']}_v{dataset['version']}"
-    return datasets
+        .group_by(
+            DatasetPartitionRequest.dataset_name,
+            DatasetPartitionRequest.dataset_version,
+        )
+        .subquery()
+    )
+    statement = (
+        select(Dataset, partition_counts)
+        .outerjoin(
+            partition_counts,
+            (partition_counts.c.name == Dataset.name)
+            & (partition_counts.c.version == Dataset.version),
+        )
+        .order_by(Dataset.name, Dataset.version.desc())
+    )
+    if not include_deleted:
+        statement = statement.where(Dataset.deleted_at.is_(None))
+
+    rows = session.execute(statement).all()
+    return [
+        {
+            "name": dataset.name,
+            "version": dataset.version,
+            "dataset_type": dataset.dataset_type,
+            "config": dataset.config,
+            "created_at": dataset.created_at,
+            "deleted_at": dataset.deleted_at,
+            "deprecated_at": dataset.deprecated_at,
+            "partition_count": partition_count or 0,
+            "created_partition_count": created_partition_count or 0,
+            "pending_partition_count": pending_partition_count or 0,
+            "failed_partition_count": failed_partition_count or 0,
+            "id": f"{dataset.name}_v{dataset.version}",
+        }
+        for (
+            dataset,
+            partition_count,
+            created_partition_count,
+            pending_partition_count,
+            failed_partition_count,
+        ) in rows
+    ]
 
 
 @app.get(DatasetRoutes.DETAIL.template, tags=["datasets"])
@@ -521,33 +594,36 @@ def update_dataset_description(
     tags=["datasets"],
 )
 def delete_dataset(
-    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+    name: ResourceName, version: ResourceVersion, session: DatabaseSession
 ) -> None:
-    """Soft-delete a dataset version and cancel its unstarted partition requests."""
-    with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """UPDATE datasets SET deleted_at = COALESCE(deleted_at, now())
-            WHERE name = %s AND version = %s RETURNING name""",
-            (name, version),
+    """Soft-delete a dataset and cancel each unfinished partition job."""
+    dataset = session.get(Dataset, (name, version))
+    if dataset is None:
+        raise HTTPException(
+            status_code=404, detail="Dataset version does not exist."
         )
-        if cursor.fetchone() is None:
-            raise HTTPException(
-                status_code=404, detail="Dataset version does not exist."
-            )
-        cursor.execute(
-            """UPDATE partition_update_requests SET status = 'cancelled', updated_at = now()
-            WHERE dataset_name = %s AND dataset_version = %s AND status = 'pending'""",
-            (name, version),
+    if dataset.deleted_at is None:
+        dataset.deleted_at = datetime.now(UTC)
+    pending_job_ids = select(DatasetPartitionRequest.job_id).where(
+        DatasetPartitionRequest.dataset_name == name,
+        DatasetPartitionRequest.dataset_version == version,
+        DatasetPartitionRequest.status == "pending",
+    )
+    session.execute(
+        update(DatasetPartitionRequest)
+        .where(
+            DatasetPartitionRequest.dataset_name == name,
+            DatasetPartitionRequest.dataset_version == version,
+            DatasetPartitionRequest.status == "pending",
         )
-        cursor.execute(
-            """UPDATE jobs SET status = 'cancelled', updated_at = now()
-            WHERE status = 'submitted' AND id IN (
-              SELECT DISTINCT job_id FROM partition_update_requests
-              WHERE dataset_name = %s AND dataset_version = %s
-            )""",
-            (name, version),
-        )
-    connection.commit()
+        .values(status="cancelled", updated_at=func.now())
+    )
+    session.execute(
+        update(Job)
+        .where(Job.status == "submitted", Job.id.in_(pending_job_ids))
+        .values(status="cancelled", updated_at=func.now())
+    )
+    session.commit()
 
 
 @app.post(
@@ -558,43 +634,47 @@ def delete_dataset(
     tags=["datasets"],
 )
 def create_dataset(
-    payload: DatasetCreateRequest, connection: DatabaseConnection
+    payload: DatasetCreateRequest, session: DatabaseSession
 ) -> DatasetResponse:
-    """Register an immutable dataset definition."""
+    """Register an immutable dataset definition and its initial backfill job."""
+    dataset = Dataset(
+        name=payload.name,
+        version=payload.version,
+        dataset_type=payload.dataset_type.value,
+        config=payload.config.model_dump(mode="json"),
+    )
     try:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                """INSERT INTO datasets (name, version, dataset_type, config)
-                VALUES (%s, %s, %s, %s)
-                RETURNING name, version, dataset_type, config, created_at""",
-                (
-                    payload.name,
-                    payload.version,
-                    payload.dataset_type.value,
-                    Json(payload.config.model_dump(mode="json")),
-                ),
-            )
-            row = cursor.fetchone()
-            job_id = _enqueue_dataset_job(
-                cursor,
-                payload.name,
-                payload.version,
-                payload.config.model_dump(mode="json"),
-            )
-        connection.commit()
-    except errors.UniqueViolation as error:
+        session.add(dataset)
+        job = _enqueue_dataset_job(
+            session,
+            payload.name,
+            payload.version,
+            dataset.config,
+        )
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
         raise HTTPException(
             status_code=409, detail="Dataset name and version already exist."
         ) from error
-    if row is None:
-        raise RuntimeError("Dataset insert did not return a row.")
-    return DatasetResponse.model_validate({**row, "job_id": job_id})
+    session.refresh(dataset)
+    session.refresh(job)
+    return DatasetResponse.model_validate(
+        {
+            "name": dataset.name,
+            "version": dataset.version,
+            "dataset_type": dataset.dataset_type,
+            "config": dataset.config,
+            "created_at": dataset.created_at,
+            "job_id": job.id,
+        }
+    )
 
 
 def _enqueue_dataset_job(
-    cursor: Any, name: str, version: int, config: dict[str, Any]
-) -> UUID:
-    """Create the authoritative queue record and daily partition requests."""
+    session: Session, name: str, version: int, config: dict[str, Any]
+) -> Job:
+    """Create the initial job and every daily dataset partition request."""
     start = datetime.combine(
         datetime.fromisoformat(config["time_range"]["start_date"]).date(),
         time.min,
@@ -605,42 +685,106 @@ def _enqueue_dataset_job(
         time.min,
         UTC,
     )
-    cursor.execute(
-        "INSERT INTO jobs (type, status) VALUES ('dataset_materialization', 'submitted') RETURNING id"
-    )
-    job_id = UUID(str(cursor.fetchone()["id"]))
+    job = Job(type="dataset_materialization", status="submitted")
+    session.add(job)
+    session.flush()
     timestamp = start
     while timestamp < end:
-        cursor.execute(
-            """INSERT INTO partition_update_requests (job_id, dataset_name, dataset_version, timestamp, status, callback_token)
-            VALUES (%s, %s, %s, %s, 'pending', %s)""",
-            (job_id, name, version, timestamp, secrets.token_urlsafe(32)),
+        session.add(
+            DatasetPartitionRequest(
+                job_id=job.id,
+                dataset_name=name,
+                dataset_version=version,
+                timestamp=timestamp,
+                status="pending",
+                callback_token=secrets.token_urlsafe(32),
+            )
         )
         timestamp += timedelta(days=1)
-    return job_id
+    return job
 
 
 @app.get(FeatureRoutes.LIST.template, tags=["features"])
 def list_features(
-    connection: DatabaseConnection, *, include_deleted: bool = False
+    session: DatabaseSession, *, include_deleted: bool = False
 ) -> list[dict[str, Any]]:
-    """List feature definitions with logical partition status counts for the dashboard."""
-    with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """SELECT features.name, features.version, features.dtype, features.frequency, features.keys,
-            features.description, features.created_at, features.deleted_at, features.deprecated_at, COUNT(request.partition_id) AS partition_count,
-            COUNT(request.partition_id) FILTER (WHERE request.status = 'created') AS created_partition_count,
-            COUNT(request.partition_id) FILTER (WHERE request.status = 'pending') AS pending_partition_count,
-            COUNT(request.partition_id) FILTER (WHERE request.status IN ('failed', 'cancelled')) AS failed_partition_count
-            FROM features LEFT JOIN feature_partition_update_requests request
-              ON request.feature_name = features.name AND request.feature_version = features.version
-            WHERE (%s OR features.deleted_at IS NULL)
-            GROUP BY features.name, features.version, features.dtype, features.frequency, features.keys,
-                features.description, features.created_at, features.deleted_at, features.deprecated_at
-            ORDER BY features.name, features.version DESC""",
-            (include_deleted,),
+    """List feature definitions with logical partition status counts."""
+    partition_counts = (
+        select(
+            FeaturePartitionRequest.feature_name.label("name"),
+            FeaturePartitionRequest.feature_version.label("version"),
+            func.count(FeaturePartitionRequest.partition_id).label(
+                "partition_count"
+            ),
+            func.count(
+                case(
+                    (
+                        FeaturePartitionRequest.status == "created",
+                        FeaturePartitionRequest.partition_id,
+                    )
+                )
+            ).label("created_partition_count"),
+            func.count(
+                case(
+                    (
+                        FeaturePartitionRequest.status == "pending",
+                        FeaturePartitionRequest.partition_id,
+                    )
+                )
+            ).label("pending_partition_count"),
+            func.count(
+                case(
+                    (
+                        FeaturePartitionRequest.status.in_(
+                            ("failed", "cancelled")
+                        ),
+                        FeaturePartitionRequest.partition_id,
+                    )
+                )
+            ).label("failed_partition_count"),
         )
-        return list(cursor.fetchall())
+        .group_by(
+            FeaturePartitionRequest.feature_name,
+            FeaturePartitionRequest.feature_version,
+        )
+        .subquery()
+    )
+    statement = (
+        select(Feature, partition_counts)
+        .outerjoin(
+            partition_counts,
+            (partition_counts.c.name == Feature.name)
+            & (partition_counts.c.version == Feature.version),
+        )
+        .order_by(Feature.name, Feature.version.desc())
+    )
+    if not include_deleted:
+        statement = statement.where(Feature.deleted_at.is_(None))
+
+    return [
+        {
+            "name": feature.name,
+            "version": feature.version,
+            "dtype": feature.dtype,
+            "frequency": feature.frequency,
+            "keys": feature.keys,
+            "description": feature.description,
+            "created_at": feature.created_at,
+            "deleted_at": feature.deleted_at,
+            "deprecated_at": feature.deprecated_at,
+            "partition_count": partition_count or 0,
+            "created_partition_count": created_partition_count or 0,
+            "pending_partition_count": pending_partition_count or 0,
+            "failed_partition_count": failed_partition_count or 0,
+        }
+        for (
+            feature,
+            partition_count,
+            created_partition_count,
+            pending_partition_count,
+            failed_partition_count,
+        ) in session.execute(statement).all()
+    ]
 
 
 @app.get(FeatureRoutes.DETAIL.template, tags=["features"])
@@ -701,33 +845,36 @@ def get_feature(
     tags=["features"],
 )
 def delete_feature(
-    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+    name: ResourceName, version: ResourceVersion, session: DatabaseSession
 ) -> None:
-    """Soft-delete a feature version and cancel its unstarted partition requests."""
-    with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """UPDATE features SET deleted_at = COALESCE(deleted_at, now())
-            WHERE name = %s AND version = %s RETURNING name""",
-            (name, version),
+    """Soft-delete a feature and cancel each unfinished partition job."""
+    feature = session.get(Feature, (name, version))
+    if feature is None:
+        raise HTTPException(
+            status_code=404, detail="Feature version does not exist."
         )
-        if cursor.fetchone() is None:
-            raise HTTPException(
-                status_code=404, detail="Feature version does not exist."
-            )
-        cursor.execute(
-            """UPDATE feature_partition_update_requests SET status = 'cancelled', updated_at = now()
-            WHERE feature_name = %s AND feature_version = %s AND status = 'pending'""",
-            (name, version),
+    if feature.deleted_at is None:
+        feature.deleted_at = datetime.now(UTC)
+    pending_job_ids = select(FeaturePartitionRequest.job_id).where(
+        FeaturePartitionRequest.feature_name == name,
+        FeaturePartitionRequest.feature_version == version,
+        FeaturePartitionRequest.status == "pending",
+    )
+    session.execute(
+        update(FeaturePartitionRequest)
+        .where(
+            FeaturePartitionRequest.feature_name == name,
+            FeaturePartitionRequest.feature_version == version,
+            FeaturePartitionRequest.status == "pending",
         )
-        cursor.execute(
-            """UPDATE jobs SET status = 'cancelled', updated_at = now()
-            WHERE status = 'submitted' AND id IN (
-              SELECT DISTINCT job_id FROM feature_partition_update_requests
-              WHERE feature_name = %s AND feature_version = %s
-            )""",
-            (name, version),
-        )
-    connection.commit()
+        .values(status="cancelled", updated_at=func.now())
+    )
+    session.execute(
+        update(Job)
+        .where(Job.status == "submitted", Job.id.in_(pending_job_ids))
+        .values(status="cancelled", updated_at=func.now())
+    )
+    session.commit()
 
 
 @app.post(
@@ -738,77 +885,72 @@ def delete_feature(
     tags=["features"],
 )
 def create_feature(
-    payload: FeatureCreateRequest, connection: DatabaseConnection
+    payload: FeatureCreateRequest, session: DatabaseSession
 ) -> FeatureResponse:
-    """Register an immutable feature definition."""
-    try:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            for dependency in payload.datasets:
-                cursor.execute(
-                    """SELECT dataset_type, deleted_at FROM datasets WHERE name = %s AND version = %s""",
-                    (dependency.name, dependency.version),
-                )
-                dataset = cursor.fetchone()
-                if dataset is None or dataset["deleted_at"] is not None:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="Feature datasets must reference active dataset versions.",
-                    )
-                if dataset["dataset_type"] != dependency.dataset_type.value:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="Feature dataset type must match the registered dataset version.",
-                    )
-            cursor.execute(
-                """INSERT INTO features
-                (name, version, dtype, frequency, keys, validations, transform, description, parameters)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING name, version, dtype, frequency, keys, validations, transform, description, parameters, created_at""",
-                (
-                    payload.name,
-                    payload.version,
-                    payload.dtype,
-                    payload.frequency,
-                    Json([key.value for key in payload.keys]),
-                    Json(
-                        [
-                            validation.model_dump()
-                            for validation in payload.validations
-                        ]
-                    ),
-                    payload.transform,
-                    payload.description,
-                    Json(payload.parameters),
+    """Register an immutable feature definition and active dataset dependencies."""
+    for dependency in payload.datasets:
+        dataset = session.get(Dataset, (dependency.name, dependency.version))
+        if dataset is None or dataset.deleted_at is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Feature datasets must reference active dataset versions.",
+            )
+        if dataset.dataset_type != dependency.dataset_type.value:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Feature dataset type must match the registered dataset "
+                    "version."
                 ),
             )
-            row = cursor.fetchone()
-            for dependency in payload.datasets:
-                cursor.execute(
-                    """INSERT INTO feature_dataset_dependencies
-                    (feature_name, feature_version, dataset_name, dataset_version, num_lookback_partitions)
-                    VALUES (%s, %s, %s, %s, %s)""",
-                    (
-                        payload.name,
-                        payload.version,
-                        dependency.name,
-                        dependency.version,
-                        dependency.input_window.lookback_partitions,
+    feature = Feature(
+        name=payload.name,
+        version=payload.version,
+        dtype=payload.dtype.value,
+        frequency=payload.frequency.value,
+        keys=[key.value for key in payload.keys],
+        validations=[
+            validation.model_dump() for validation in payload.validations
+        ],
+        transform=payload.transform,
+        description=payload.description,
+        parameters=payload.parameters,
+    )
+    try:
+        session.add(feature)
+        for dependency in payload.datasets:
+            session.add(
+                FeatureDatasetDependency(
+                    feature_name=payload.name,
+                    feature_version=payload.version,
+                    dataset_name=dependency.name,
+                    dataset_version=dependency.version,
+                    num_lookback_partitions=(
+                        dependency.input_window.lookback_partitions
                     ),
                 )
-        connection.commit()
-    except errors.ForeignKeyViolation as error:
-        raise HTTPException(
-            status_code=422,
-            detail="Feature datasets must reference registered dataset versions.",
-        ) from error
-    except errors.UniqueViolation as error:
+            )
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
         raise HTTPException(
             status_code=409, detail="Feature name and version already exist."
         ) from error
-    if row is None:
-        raise RuntimeError("Feature insert did not return a row.")
+    session.refresh(feature)
     return FeatureResponse.model_validate(
-        {**row, "datasets": [item.model_dump() for item in payload.datasets]}
+        {
+            "name": feature.name,
+            "version": feature.version,
+            "dtype": feature.dtype,
+            "frequency": feature.frequency,
+            "keys": feature.keys,
+            "validations": feature.validations,
+            "transform": feature.transform,
+            "description": feature.description,
+            "parameters": feature.parameters,
+            "created_at": feature.created_at,
+            "datasets": [item.model_dump() for item in payload.datasets],
+        }
     )
 
 
@@ -1120,32 +1262,85 @@ def materialize_feature_partitions(
 
 @app.get(LabelRoutes.LIST.template, tags=["labels"])
 def list_labels(
-    connection: DatabaseConnection, *, include_deleted: bool = False
+    session: DatabaseSession, *, include_deleted: bool = False
 ) -> list[dict[str, Any]]:
     """List label definitions with logical partition status counts."""
-    with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """SELECT labels.name, labels.version, labels.dtype, labels.frequency,
-            labels.keys, labels.description, labels.created_at,
-            labels.deleted_at, labels.deprecated_at,
-            COUNT(request.partition_id) AS partition_count,
-            COUNT(request.partition_id) FILTER (WHERE request.status = 'created')
-                AS created_partition_count,
-            COUNT(request.partition_id) FILTER (WHERE request.status = 'pending')
-                AS pending_partition_count,
-            COUNT(request.partition_id) FILTER (WHERE request.status IN ('failed', 'cancelled'))
-                AS failed_partition_count
-            FROM labels LEFT JOIN label_partition_update_requests AS request
-              ON request.label_name = labels.name
-             AND request.label_version = labels.version
-            WHERE (%s OR labels.deleted_at IS NULL)
-            GROUP BY labels.name, labels.version, labels.dtype, labels.frequency,
-              labels.keys, labels.description, labels.created_at,
-              labels.deleted_at, labels.deprecated_at
-            ORDER BY labels.name, labels.version DESC""",
-            (include_deleted,),
+    partition_counts = (
+        select(
+            LabelPartitionRequest.label_name.label("name"),
+            LabelPartitionRequest.label_version.label("version"),
+            func.count(LabelPartitionRequest.partition_id).label(
+                "partition_count"
+            ),
+            func.count(
+                case(
+                    (
+                        LabelPartitionRequest.status == "created",
+                        LabelPartitionRequest.partition_id,
+                    )
+                )
+            ).label("created_partition_count"),
+            func.count(
+                case(
+                    (
+                        LabelPartitionRequest.status == "pending",
+                        LabelPartitionRequest.partition_id,
+                    )
+                )
+            ).label("pending_partition_count"),
+            func.count(
+                case(
+                    (
+                        LabelPartitionRequest.status.in_(
+                            ("failed", "cancelled")
+                        ),
+                        LabelPartitionRequest.partition_id,
+                    )
+                )
+            ).label("failed_partition_count"),
         )
-        return list(cursor.fetchall())
+        .group_by(
+            LabelPartitionRequest.label_name,
+            LabelPartitionRequest.label_version,
+        )
+        .subquery()
+    )
+    statement = (
+        select(Label, partition_counts)
+        .outerjoin(
+            partition_counts,
+            (partition_counts.c.name == Label.name)
+            & (partition_counts.c.version == Label.version),
+        )
+        .order_by(Label.name, Label.version.desc())
+    )
+    if not include_deleted:
+        statement = statement.where(Label.deleted_at.is_(None))
+
+    return [
+        {
+            "name": label.name,
+            "version": label.version,
+            "dtype": label.dtype,
+            "frequency": label.frequency,
+            "keys": label.keys,
+            "description": label.description,
+            "created_at": label.created_at,
+            "deleted_at": label.deleted_at,
+            "deprecated_at": label.deprecated_at,
+            "partition_count": partition_count or 0,
+            "created_partition_count": created_partition_count or 0,
+            "pending_partition_count": pending_partition_count or 0,
+            "failed_partition_count": failed_partition_count or 0,
+        }
+        for (
+            label,
+            partition_count,
+            created_partition_count,
+            pending_partition_count,
+            failed_partition_count,
+        ) in session.execute(statement).all()
+    ]
 
 
 @app.get(LabelRoutes.DETAIL.template, tags=["labels"])
@@ -1223,82 +1418,74 @@ def get_label(
     tags=["labels"],
 )
 def create_label(
-    payload: LabelCreateRequest, connection: DatabaseConnection
+    payload: LabelCreateRequest, session: DatabaseSession
 ) -> LabelResponse:
-    """Register an immutable label definition with active dataset dependencies."""
-    try:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            for dependency in payload.datasets:
-                cursor.execute(
-                    """SELECT dataset_type, deleted_at FROM datasets
-                    WHERE name = %s AND version = %s""",
-                    (dependency.name, dependency.version),
-                )
-                dataset = cursor.fetchone()
-                if dataset is None or dataset["deleted_at"] is not None:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="Label datasets must reference active dataset versions.",
-                    )
-                if dataset["dataset_type"] != dependency.dataset_type.value:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="Label dataset type must match the registered dataset version.",
-                    )
-            cursor.execute(
-                """INSERT INTO labels
-                (name, version, dtype, frequency, keys, validations, transform,
-                 description, parameters)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING name, version, dtype, frequency, keys, validations,
-                  transform, description, parameters, created_at""",
-                (
-                    payload.name,
-                    payload.version,
-                    payload.dtype,
-                    payload.frequency,
-                    Json([key.value for key in payload.keys]),
-                    Json(
-                        [
-                            validation.model_dump()
-                            for validation in payload.validations
-                        ]
-                    ),
-                    payload.transform,
-                    payload.description,
-                    Json(payload.parameters),
+    """Register an immutable label definition and active dataset dependencies."""
+    for dependency in payload.datasets:
+        dataset = session.get(Dataset, (dependency.name, dependency.version))
+        if dataset is None or dataset.deleted_at is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Label datasets must reference active dataset versions.",
+            )
+        if dataset.dataset_type != dependency.dataset_type.value:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Label dataset type must match the registered dataset version."
                 ),
             )
-            row = cursor.fetchone()
-            for dependency in payload.datasets:
-                cursor.execute(
-                    """INSERT INTO label_dataset_dependencies
-                    (label_name, label_version, dataset_name, dataset_version,
-                     num_lookback_partitions, num_lookahead_partitions)
-                    VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (
-                        payload.name,
-                        payload.version,
-                        dependency.name,
-                        dependency.version,
-                        dependency.input_window.lookback_partitions,
-                        dependency.input_window.lookahead_partitions,
+    label = Label(
+        name=payload.name,
+        version=payload.version,
+        dtype=payload.dtype.value,
+        frequency=payload.frequency.value,
+        keys=[key.value for key in payload.keys],
+        validations=[
+            validation.model_dump() for validation in payload.validations
+        ],
+        transform=payload.transform,
+        description=payload.description,
+        parameters=payload.parameters,
+    )
+    try:
+        session.add(label)
+        for dependency in payload.datasets:
+            session.add(
+                LabelDatasetDependency(
+                    label_name=payload.name,
+                    label_version=payload.version,
+                    dataset_name=dependency.name,
+                    dataset_version=dependency.version,
+                    num_lookback_partitions=(
+                        dependency.input_window.lookback_partitions
+                    ),
+                    num_lookahead_partitions=(
+                        dependency.input_window.lookahead_partitions
                     ),
                 )
-        connection.commit()
-    except errors.ForeignKeyViolation as error:
-        raise HTTPException(
-            status_code=422,
-            detail="Label datasets must reference registered dataset versions.",
-        ) from error
-    except errors.UniqueViolation as error:
+            )
+        session.commit()
+    except IntegrityError as error:
+        session.rollback()
         raise HTTPException(
             status_code=409, detail="Label name and version already exist."
         ) from error
-    if row is None:
-        raise RuntimeError("Label insert did not return a row.")
+    session.refresh(label)
     return LabelResponse.model_validate(
-        {**row, "datasets": [item.model_dump() for item in payload.datasets]}
+        {
+            "name": label.name,
+            "version": label.version,
+            "dtype": label.dtype,
+            "frequency": label.frequency,
+            "keys": label.keys,
+            "validations": label.validations,
+            "transform": label.transform,
+            "description": label.description,
+            "parameters": label.parameters,
+            "created_at": label.created_at,
+            "datasets": [item.model_dump() for item in payload.datasets],
+        }
     )
 
 
@@ -1308,34 +1495,36 @@ def create_label(
     tags=["labels"],
 )
 def delete_label(
-    name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
+    name: ResourceName, version: ResourceVersion, session: DatabaseSession
 ) -> None:
-    """Soft-delete a label version and cancel its unstarted materialization."""
-    with connection.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """UPDATE labels SET deleted_at = COALESCE(deleted_at, now())
-            WHERE name = %s AND version = %s RETURNING name""",
-            (name, version),
+    """Soft-delete a label and cancel each unfinished partition job."""
+    label = session.get(Label, (name, version))
+    if label is None:
+        raise HTTPException(
+            status_code=404, detail="Label version does not exist."
         )
-        if cursor.fetchone() is None:
-            raise HTTPException(
-                status_code=404, detail="Label version does not exist."
-            )
-        cursor.execute(
-            """UPDATE label_partition_update_requests
-            SET status = 'cancelled', updated_at = now()
-            WHERE label_name = %s AND label_version = %s AND status = 'pending'""",
-            (name, version),
+    if label.deleted_at is None:
+        label.deleted_at = datetime.now(UTC)
+    pending_job_ids = select(LabelPartitionRequest.job_id).where(
+        LabelPartitionRequest.label_name == name,
+        LabelPartitionRequest.label_version == version,
+        LabelPartitionRequest.status == "pending",
+    )
+    session.execute(
+        update(LabelPartitionRequest)
+        .where(
+            LabelPartitionRequest.label_name == name,
+            LabelPartitionRequest.label_version == version,
+            LabelPartitionRequest.status == "pending",
         )
-        cursor.execute(
-            """UPDATE jobs SET status = 'cancelled', updated_at = now()
-            WHERE status = 'submitted' AND id IN (
-              SELECT DISTINCT job_id FROM label_partition_update_requests
-              WHERE label_name = %s AND label_version = %s
-            )""",
-            (name, version),
-        )
-    connection.commit()
+        .values(status="cancelled", updated_at=func.now())
+    )
+    session.execute(
+        update(Job)
+        .where(Job.status == "submitted", Job.id.in_(pending_job_ids))
+        .values(status="cancelled", updated_at=func.now())
+    )
+    session.commit()
 
 
 def _plan_label_inputs(

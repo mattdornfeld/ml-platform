@@ -17,6 +17,7 @@ dependencies = [
     "kubernetes>=32.0",
     "simple-classproperty>=4.0.2",
     "exchange-calendars>=4.13,<5",
+    "sqlalchemy>=2.0,<2.1",
 ]
 
 [project.scripts]
