@@ -17,15 +17,21 @@ from pydantic import (
 from ml_platform.common.types import (
     CallbackToken,
     ContentHash,
+    CreatedAt,
+    DatasetId,
     DatasetName,
     DatasetType,
     DataType,
     Description,
     DiscriminatedValidationConfig,
     EntityKey,
+    FeatureId,
     FeatureName,
     IcebergSchema,
+    LabelId,
     LabelName,
+    LookAheadPartitions,
+    LookbackPartition,
     ParameterKey,
     ParameterValue,
     PartitionTimestamp,
@@ -112,15 +118,15 @@ class DatasetCreateRequest(_ApiModel):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
-    def id(self) -> str:
-        """Return the immutable resource ID derived from name and version."""
-        return f"{self.name}_v{self.version}"
+    def id(self) -> DatasetId:
+        """Return the immutable dataset ID derived from name and version."""
+        return DatasetId(f"{self.name}_v{self.version}")
 
 
 class DatasetResponse(DatasetCreateRequest):
     """A persisted dataset definition."""
 
-    created_at: datetime
+    created_at: CreatedAt
 
 
 class DatasetDescriptionUpdate(_ApiModel):
@@ -132,13 +138,13 @@ class DatasetDescriptionUpdate(_ApiModel):
 class FeatureInputWindow(_ApiModel):
     """Historical source partitions available to one point-in-time feature."""
 
-    lookback_partitions: int = Field(ge=0)
+    lookback_partitions: LookbackPartition = Field(ge=0)
 
 
 class LabelInputWindow(FeatureInputWindow):
     """Historical and realized-outcome source partitions required by a label."""
 
-    lookahead_partitions: int = Field(ge=0)
+    lookahead_partitions: LookAheadPartitions = Field(ge=0)
 
 
 class FeatureDatasetDependency(_ApiModel):
@@ -174,6 +180,11 @@ class FeatureCreateRequest(_ApiModel):
         default_factory=list
     )
 
+    @property
+    def id(self) -> FeatureId:
+        """Return the immutable feature ID derived from name and version."""
+        return FeatureId(f"{self.name}_v{self.version}")
+
     @model_validator(mode="after")
     def validate_dependencies(self) -> "FeatureCreateRequest":
         """Keep every dataset identity and transform input unambiguous."""
@@ -199,7 +210,7 @@ class FeatureCreateRequest(_ApiModel):
 class FeatureResponse(FeatureCreateRequest):
     """A persisted feature definition."""
 
-    created_at: datetime
+    created_at: CreatedAt
 
 
 class LabelCreateRequest(_ApiModel):
@@ -219,6 +230,11 @@ class LabelCreateRequest(_ApiModel):
     validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list
     )
+
+    @property
+    def id(self) -> LabelId:
+        """Return the immutable label ID derived from name and version."""
+        return LabelId(f"{self.name}_v{self.version}")
 
     @model_validator(mode="after")
     def validate_dependencies(self) -> "LabelCreateRequest":
@@ -245,7 +261,7 @@ class LabelCreateRequest(_ApiModel):
 class LabelResponse(LabelCreateRequest):
     """A persisted label definition."""
 
-    created_at: datetime
+    created_at: CreatedAt
 
 
 class FeatureMaterializationMode(StrEnum):
@@ -331,7 +347,7 @@ class JobResponse(_ApiModel):
     id: UUID
     type: JobType
     status: JobStatus
-    created_at: datetime
+    created_at: CreatedAt
     updated_at: datetime
     targets: list[JobTarget] = Field(default_factory=list)
     partitions: list[JobPartition] = Field(default_factory=list)
@@ -352,7 +368,7 @@ class PartitionUpdateRequestResponse(_ApiModel):
         examples=["2026-10-20T18:00:00Z"],
     )
     status: PartitionStatus
-    created_at: datetime
+    created_at: CreatedAt
     updated_at: datetime
 
 
@@ -421,7 +437,7 @@ class PartitionResultResponse(_ApiModel):
     schema_: IcebergSchema = Field(alias="schema")
     content_hash: ContentHash
     snapshot_id: int
-    created_at: datetime
+    created_at: CreatedAt
 
 
 class ErrorResponse(_ApiModel):

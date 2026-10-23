@@ -7,10 +7,13 @@ from pyspark.sql import DataFrame
 
 from ml_platform.common.types import (
     BaseConfig,
+    DatasetId,
     DatasetName,
     DatasetType,
     DataType,
     EntityKey,
+    LookAheadPartitions,
+    LookbackPartition,
     PartitionType,
     ResourceVersion,
 )
@@ -51,15 +54,15 @@ class DatasetDependency(BaseConfig):
     )
 
     @property
-    def id(self) -> str:
-        """Return the canonical resource ID."""
-        return f"{self.name}_v{self.version}"
+    def id(self) -> DatasetId:
+        """Return the canonical dataset ID."""
+        return DatasetId(f"{self.name}_v{self.version}")
 
 
 class FeatureInputWindow(BaseConfig):
     """Historical source partitions available to a point-in-time feature."""
 
-    lookback_partitions: int = Field(
+    lookback_partitions: LookbackPartition = Field(
         ge=0,
         description="Number of preceding source partitions required by the feature.",
     )
@@ -68,7 +71,7 @@ class FeatureInputWindow(BaseConfig):
 class LabelInputWindow(FeatureInputWindow):
     """Historical and realized-outcome partitions required by one label."""
 
-    lookahead_partitions: int = Field(
+    lookahead_partitions: LookAheadPartitions = Field(
         ge=0,
         description="Number of following source partitions required by the label.",
     )
@@ -98,9 +101,9 @@ class DatasetReference:
     version: ResourceVersion
 
     @property
-    def id(self) -> str:
-        """Return the canonical resource ID."""
-        return f"{self.name}_v{self.version}"
+    def id(self) -> DatasetId:
+        """Return the canonical dataset ID."""
+        return DatasetId(f"{self.name}_v{self.version}")
 
 
 @dataclass(frozen=True)

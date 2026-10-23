@@ -7,14 +7,18 @@ from pydantic import Field, field_validator, model_validator
 
 from ml_platform.common.types import (
     BaseConfig,
+    DatasetId,
     DatasetName,
     DatasetType,
     DataType,
     Description,
     DiscriminatedValidationConfig,
     EntityKey,
+    FeatureId,
     FeatureName,
+    LabelId,
     LabelName,
+    LookbackPartition,
     ParameterKey,
     ParameterValue,
     PartitionType,
@@ -87,6 +91,11 @@ class DataConfig[NameT: str](BaseConfig):
 class DatasetConfig(DataConfig[DatasetName]):
     """Configuration for a materializable dataset definition."""
 
+    @property
+    def id(self) -> DatasetId:
+        """Return the canonical dataset ID derived from name and version."""
+        return DatasetId(f"{self.name}_v{self.version}")
+
     name: DatasetName = Field(
         pattern=r"^[a-z][a-z0-9_]*$",
         description="Stable lowercase dataset name.",
@@ -103,8 +112,8 @@ class DatasetConfig(DataConfig[DatasetName]):
         min_length=1,
         description="Ordered logical entity-key columns that identify each dataset row.",
     )
-    num_lookback_partitions: int = Field(
-        default=0,
+    num_lookback_partitions: LookbackPartition = Field(
+        default=LookbackPartition(0),
         ge=0,
         description="Number of preceding partitions required when this dataset is a dependency.",
     )
@@ -194,6 +203,11 @@ class TransformConfig[NameT: str](DataConfig[NameT]):
 class LabelConfig(TransformConfig[LabelName]):
     """Configuration for a materializable label resource."""
 
+    @property
+    def id(self) -> LabelId:
+        """Return the canonical label ID derived from name and version."""
+        return LabelId(f"{self.name}_v{self.version}")
+
     name: LabelName = Field(
         pattern=r"^[a-z][a-z0-9_]*$",
         description="Stable lowercase label name.",
@@ -207,6 +221,11 @@ class LabelConfig(TransformConfig[LabelName]):
 
 class FeatureConfig(TransformConfig[FeatureName]):
     """Configuration for a materializable feature resource."""
+
+    @property
+    def id(self) -> FeatureId:
+        """Return the canonical feature ID derived from name and version."""
+        return FeatureId(f"{self.name}_v{self.version}")
 
     name: FeatureName = Field(
         pattern=r"^[a-z][a-z0-9_]*$",

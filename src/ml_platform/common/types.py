@@ -10,8 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field
 CallbackToken = NewType("CallbackToken", str)
 ContentHash = NewType("ContentHash", str)
 Description = NewType("Description", str)
+DatasetId = NewType("DatasetId", str)
 DatasetName = NewType("DatasetName", str)
+FeatureId = NewType("FeatureId", str)
 FeatureName = NewType("FeatureName", str)
+LabelId = NewType("LabelId", str)
 LabelName = NewType("LabelName", str)
 ParameterKey = NewType("ParameterKey", str)
 type ParameterValue = int | float | str | bool
@@ -21,6 +24,9 @@ ResourceVersion = NewType("ResourceVersion", int)
 Symbol = NewType("Symbol", str)
 TransformName = NewType("TransformName", str)
 IcebergSchema = NewType("IcebergSchema", dict[str, str])
+CreatedAt = NewType("CreatedAt", datetime)
+LookbackPartition = NewType("LookbackPartition", int)
+LookAheadPartitions = NewType("LookAheadPartitions", int)
 
 
 class EntityKey(StrEnum):
