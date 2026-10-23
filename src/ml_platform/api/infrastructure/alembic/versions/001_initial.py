@@ -1,20 +1,15 @@
-"""Initial."""
+"""Alembic metadata wrapper for SQL revision 001."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "001"
-down_revision = None
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "-- PostgreSQL control-plane schema for dataset and feature materialization.\n-- Dataset configs are opaque API payloads. Spark/Iceberg owns table schemas.\n-- Partition rows are immutable revisions: corrections insert a new row rather\n-- than updating content_hash or snapshot_id on an existing row.\n\nCREATE EXTENSION IF NOT EXISTS pgcrypto;\n\nDO $$ BEGIN\n    CREATE TYPE job_type AS ENUM ('dataset_materialization', 'feature_materialization');\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;\n\nDO $$ BEGIN\n    CREATE TYPE job_status AS ENUM ('submitted', 'succeeded', 'failed', 'cancelled');\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;\n\nDO $$ BEGIN\n    CREATE TYPE partition_status AS ENUM ('pending', 'created', 'failed', 'cancelled');\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND $$;\n\nCREATE TABLE datasets (\n    name TEXT NOT NULL,\n    version INTEGER NOT NULL CHECK (version > 0),\n    dataset_type TEXT NOT NULL CHECK (dataset_type IN ('market_data')),\n    config JSONB NOT NULL,\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    PRIMARY KEY (name, version)\n);\n\nCREATE TABLE features (\n    name TEXT NOT NULL,\n    version INTEGER NOT NULL CHECK (version > 0),\n    dtype TEXT NOT NULL CHECK (dtype IN ('double', 'float', 'int', 'bigint')),\n    frequency TEXT NOT NULL CHECK (frequency IN ('hourly', 'daily')),\n    feature_key TEXT NOT NULL CHECK (feature_key IN ('symbol')),\n    validations JSONB NOT NULL DEFAULT '{}'::JSONB,\n    transform TEXT NOT NULL,\n    description TEXT NOT NULL,\n    parameters JSONB NOT NULL DEFAULT '{}'::JSONB,\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    PRIMARY KEY (name, version)\n);\n\n-- A feature may depend only on registered dataset versions.\nCREATE TABLE feature_dataset_dependencies (\n    feature_name TEXT NOT NULL,\n    feature_version INTEGER NOT NULL,\n    dataset_name TEXT NOT NULL,\n    dataset_version INTEGER NOT NULL,\n    num_lookback_partitions INTEGER NOT NULL CHECK (num_lookback_partitions >= 0),\n    PRIMARY KEY (\n        feature_name,\n        feature_version,\n        dataset_name,\n        dataset_version\n    ),\n    FOREIGN KEY (feature_name, feature_version)\n        REFERENCES features (name, version),\n    FOREIGN KEY (dataset_name, dataset_version)\n        REFERENCES datasets (name, version)\n);\n\nCREATE TABLE jobs (\n    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n    type job_type NOT NULL,\n    status job_status NOT NULL DEFAULT 'submitted',\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()\n);\n\n-- A request identifies one dataset partition to be materialized. It owns the\n-- dataset identity, logical partition timestamp, dispatching job, and status.\nCREATE TABLE partition_update_requests (\n    partition_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n    job_id UUID NOT NULL REFERENCES jobs (id),\n    dataset_name TEXT NOT NULL,\n    dataset_version INTEGER NOT NULL,\n    timestamp TIMESTAMPTZ NOT NULL,\n    status partition_status NOT NULL DEFAULT 'pending',\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    FOREIGN KEY (dataset_name, dataset_version)\n        REFERENCES datasets (name, version)\n);\n\n-- A request identifies one feature partition to be materialized. It owns the\n-- feature identity, logical partition timestamp, dispatching job, and status.\nCREATE TABLE feature_partition_update_requests (\n    partition_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n    job_id UUID NOT NULL REFERENCES jobs (id),\n    feature_name TEXT NOT NULL,\n    feature_version INTEGER NOT NULL,\n    timestamp TIMESTAMPTZ NOT NULL,\n    status partition_status NOT NULL DEFAULT 'pending',\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    FOREIGN KEY (feature_name, feature_version)\n        REFERENCES features (name, version)\n);\n\n-- Written only after the Spark job has successfully committed the Iceberg\n-- transaction. The logical timestamp is partition_update_requests.timestamp.\nCREATE TABLE dataset_partitions (\n    partition_id UUID PRIMARY KEY\n        REFERENCES partition_update_requests (partition_id),\n    content_hash TEXT NOT NULL,\n    snapshot_id BIGINT NOT NULL,\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now()\n);\n\n-- Written only after the Spark job has successfully committed the Iceberg\n-- transaction. The logical timestamp is feature_partition_update_requests.timestamp.\nCREATE TABLE feature_partitions (\n    partition_id UUID PRIMARY KEY\n        REFERENCES feature_partition_update_requests (partition_id),\n    content_hash TEXT NOT NULL,\n    snapshot_id BIGINT NOT NULL,\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now()\n);\n\n-- Actual lineage: exact dataset-partition revisions used for a feature partition.\nCREATE TABLE feature_partition_dataset_dependencies (\n    feature_partition_id UUID NOT NULL REFERENCES feature_partitions (partition_id),\n    dataset_partition_id UUID NOT NULL REFERENCES dataset_partitions (partition_id),\n    PRIMARY KEY (feature_partition_id, dataset_partition_id)\n);\n\nCREATE INDEX IF NOT EXISTS feature_partition_dependencies_parent_index\n    ON feature_partition_dataset_dependencies (dataset_partition_id);\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="001",
+    down_revision=None,
+    sql_file="001_initial.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

@@ -1,20 +1,15 @@
-"""Fix job queue claim constraint."""
+"""Alembic metadata wrapper for SQL revision 003."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "003"
-down_revision = "002"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "ALTER TABLE job_queue DROP CONSTRAINT job_queue_check;\nALTER TABLE job_queue ADD CONSTRAINT job_queue_check\n    CHECK (completed_at IS NULL OR claimed_at IS NOT NULL);\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="003",
+    down_revision="002",
+    sql_file="003_fix_job_queue_claim_constraint.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

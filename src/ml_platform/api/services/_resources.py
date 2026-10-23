@@ -2,7 +2,6 @@
 
 import os
 from datetime import datetime
-from typing import Any
 from urllib.parse import quote
 
 from kubernetes import client as kubernetes_client
@@ -18,19 +17,13 @@ def minio_browser_url(object_path: str) -> str | None:
     return f"{console_url.rstrip('/')}/browser/warehouse/{prefix}"
 
 
-def attach_minio_locations(resource: dict[str, Any], table_path: str) -> None:
-    """Attach direct MinIO Console locations for an Iceberg table and its day partitions."""
-    resource["minio_table_url"] = minio_browser_url(table_path)
-    for partition in resource.get("partitions", []):
-        timestamp = partition["timestamp"]
-        partition_day = (
-            timestamp.date().isoformat()
-            if isinstance(timestamp, datetime)
-            else str(timestamp)[:10]
-        )
-        partition["minio_url"] = minio_browser_url(
-            f"{table_path}/data/timestamp_day={partition_day}"
-        )
+def minio_partition_url(
+    table_path: str,
+    timestamp: datetime,
+) -> str | None:
+    """Build a MinIO Console URL for one Iceberg day-partition prefix."""
+    partition_day = timestamp.date().isoformat()
+    return minio_browser_url(f"{table_path}/data/timestamp_day={partition_day}")
 
 
 def headlamp_resource_url(resource_path: str, resource_name: str) -> str | None:

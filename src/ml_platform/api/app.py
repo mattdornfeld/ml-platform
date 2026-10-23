@@ -1,13 +1,12 @@
 """FastAPI application composition for the ML Platform control plane."""
 
 import asyncio
-import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from ml_platform.api.infrastructure import upgrade_database
+from ml_platform.api.infrastructure import database_url, upgrade_database
 from ml_platform.api.routers import (
     datasets_router,
     features_router,
@@ -25,7 +24,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     """Populate PostgreSQL then run the authoritative materialization scheduler."""
     upgrade_database()
     stop = asyncio.Event()
-    scheduler = JobScheduler(os.environ["DATABASE_URL"])
+    scheduler = JobScheduler(database_url())
     scheduler_task = asyncio.create_task(scheduler.run(stop))
     try:
         yield

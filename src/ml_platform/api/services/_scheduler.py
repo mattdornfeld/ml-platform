@@ -10,6 +10,7 @@ from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.incluster_config import load_incluster_config
 
+from ml_platform.api._exceptions import UnsupportedScheduledJobTypeError
 from ml_platform.api.repositories import SchedulerRepository
 from ml_platform.common.types import JobId
 
@@ -48,7 +49,7 @@ class JobScheduler:
                 elif job_type == "label_materialization":
                     self._ensure_label_application(job_id, application_name)
                 else:
-                    raise ValueError(f"Unsupported job type {job_type!r}.")
+                    raise UnsupportedScheduledJobTypeError(job_type)
                 if self._is_eligible(job_id, job_type):
                     self._remove_admission_gate(application_name)
                 self._observe_application(job_id, application_name, job_type)

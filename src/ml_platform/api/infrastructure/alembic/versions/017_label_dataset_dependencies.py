@@ -1,20 +1,15 @@
-"""Label dataset dependencies."""
+"""Alembic metadata wrapper for SQL revision 017."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "017"
-down_revision = "016"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "-- Persist label definitions' declared dataset dependencies for API job planning.\nCREATE TABLE label_dataset_dependencies (\n    label_name TEXT NOT NULL,\n    label_version INTEGER NOT NULL,\n    dataset_name TEXT NOT NULL,\n    dataset_version INTEGER NOT NULL,\n    argument_name TEXT NOT NULL,\n    num_lookback_partitions INTEGER NOT NULL CHECK (num_lookback_partitions >= 0),\n    PRIMARY KEY (label_name, label_version, dataset_name, dataset_version),\n    UNIQUE (label_name, label_version, argument_name),\n    FOREIGN KEY (label_name, label_version) REFERENCES labels (name, version),\n    FOREIGN KEY (dataset_name, dataset_version) REFERENCES datasets (name, version)\n);\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="017",
+    down_revision="016",
+    sql_file="017_label_dataset_dependencies.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

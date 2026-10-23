@@ -1,20 +1,15 @@
-"""Dataset active partition requests."""
+"""Alembic metadata wrapper for SQL revision 011."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "011"
-down_revision = "010"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "-- A logical dataset partition has at most one active writer. Completed request rows\n-- remain immutable revision history and may be replaced only through an explicit\n-- refresh API when that is introduced.\nCREATE UNIQUE INDEX partition_update_requests_active_identity_index\n    ON partition_update_requests (dataset_name, dataset_version, timestamp)\n    WHERE status = 'pending';\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="011",
+    down_revision="010",
+    sql_file="011_dataset_active_partition_requests.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

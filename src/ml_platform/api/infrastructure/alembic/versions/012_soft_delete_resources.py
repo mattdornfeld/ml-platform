@@ -1,20 +1,15 @@
-"""Soft delete resources."""
+"""Alembic metadata wrapper for SQL revision 012."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "012"
-down_revision = "011"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "-- Resource definitions are immutable; retirement only changes their control-plane visibility.\nALTER TABLE datasets ADD COLUMN deleted_at TIMESTAMPTZ;\nALTER TABLE datasets ADD COLUMN deprecated_at TIMESTAMPTZ;\nALTER TABLE features ADD COLUMN deleted_at TIMESTAMPTZ;\nALTER TABLE features ADD COLUMN deprecated_at TIMESTAMPTZ;\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="012",
+    down_revision="011",
+    sql_file="012_soft_delete_resources.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

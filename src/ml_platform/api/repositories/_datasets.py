@@ -7,10 +7,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+    from sqlalchemy.sql.elements import ColumnElement
 
 from itertools import starmap
 
@@ -19,11 +21,11 @@ from ml_platform.api.domain import (
     DatasetSummary,
     JobStatus,
     JobType,
+    MaterializationJob,
     MaterializationPartition,
     MaterializationRequest,
     PartitionCounts,
     PartitionStatus,
-    ResourceLifecycle,
     ResourcePartition,
 )
 from ml_platform.api.repositories._models import (
@@ -32,6 +34,11 @@ from ml_platform.api.repositories._models import (
     DatasetPartitionRequest,
     Job,
 )
+from ml_platform.api.repositories.exceptions import (
+    DatasetVersionExistsError,
+    UnsupportedDatasetStatusError,
+)
+from ml_platform.common.api.dtos import DatasetStatus
 from ml_platform.common.types import (
     CreatedAt,
     Description,
@@ -52,13 +59,13 @@ class DatasetRepository:
     session: Session
 
     @staticmethod
-    def _lifecycle(dataset: Dataset) -> ResourceLifecycle:
+    def _status(dataset: Dataset) -> DatasetStatus:
         """Map nullable persistence lifecycle markers to one durable state."""
         if dataset.deleted_at is not None:
-            return ResourceLifecycle.DELETED
+            return DatasetStatus.DELETED
         if dataset.deprecated_at is not None:
-            return ResourceLifecycle.DEPRECATED
-        return ResourceLifecycle.ACTIVE
+            return DatasetStatus.DEPRECATED
+        return DatasetStatus.ACTIVE
 
     @classmethod
     def _definition(cls, dataset: Dataset) -> DatasetDefinition:
@@ -69,7 +76,7 @@ class DatasetRepository:
             dataset_type=dataset.dataset_type,
             config=dataset.config,
             created_at=CreatedAt(dataset.created_at),
-            lifecycle=cls._lifecycle(dataset),
+            lifecycle=cls._status(dataset),
             deleted_at=dataset.deleted_at,
             deprecated_at=dataset.deprecated_at,
         )
@@ -106,8 +113,29 @@ class DatasetRepository:
             else SnapshotId(receipt.snapshot_id),
         )
 
-    def list(self, *, include_deleted: bool) -> tuple[DatasetSummary, ...]:
-        """Return registered dataset versions and their partition state totals."""
+    @staticmethod
+    def _status_predicate(status: DatasetStatus) -> ColumnElement[bool]:
+        """Return the database predicate for one public dataset lifecycle state."""
+        match status:
+            case DatasetStatus.ACTIVE:
+                return and_(
+                    Dataset.deleted_at.is_(None),
+                    Dataset.deprecated_at.is_(None),
+                )
+            case DatasetStatus.DEPRECATED:
+                return and_(
+                    Dataset.deleted_at.is_(None),
+                    Dataset.deprecated_at.is_not(None),
+                )
+            case DatasetStatus.DELETED:
+                return Dataset.deleted_at.is_not(None)
+            case _ as unsupported_status:
+                raise UnsupportedDatasetStatusError(str(unsupported_status))
+
+    def list(
+        self, *, statuses: tuple[DatasetStatus, ...]
+    ) -> tuple[DatasetSummary, ...]:
+        """Return dataset versions in the requested lifecycle states."""
         counts = (
             select(
                 DatasetPartitionRequest.dataset_name.label("name"),
@@ -161,8 +189,9 @@ class DatasetRepository:
             )
             .order_by(Dataset.name, Dataset.version.desc())
         )
-        if not include_deleted:
-            statement = statement.where(Dataset.deleted_at.is_(None))
+        statement = statement.where(
+            or_(*(self._status_predicate(status) for status in statuses))
+        )
         return tuple(
             DatasetSummary(
                 definition=self._definition(dataset),
@@ -282,8 +311,12 @@ class DatasetRepository:
             dataset_type=dataset_type,
             config=config,
         )
-        self.session.add(dataset)
-        self.session.commit()
+        try:
+            self.session.add(dataset)
+            self.session.commit()
+        except IntegrityError as error:
+            self.session.rollback()
+            raise DatasetVersionExistsError from error
         self.session.refresh(dataset)
         return self._definition(dataset)
 
@@ -369,8 +402,6 @@ class DatasetRepository:
         for request in requests:
             self.session.refresh(request)
         self.session.refresh(job)
-        from ml_platform.api.domain import MaterializationJob
-
         submitted = MaterializationJob(
             id=JobId(job.id),
             type=JobType(job.type),

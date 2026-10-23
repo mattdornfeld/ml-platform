@@ -1,20 +1,15 @@
-"""Normalize job status enum."""
+"""Alembic metadata wrapper for SQL revision 008."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "008"
-down_revision = "007"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "ALTER TABLE jobs ALTER COLUMN status DROP DEFAULT;\nCREATE TYPE job_status_v2 AS ENUM ('submitted', 'succeeded', 'failed', 'cancelled');\nALTER TABLE jobs ALTER COLUMN status TYPE job_status_v2 USING status::text::job_status_v2;\nDROP TYPE job_status;\nALTER TYPE job_status_v2 RENAME TO job_status;\nALTER TABLE jobs ALTER COLUMN status SET DEFAULT 'submitted';\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="008",
+    down_revision="007",
+    sql_file="008_normalize_job_status_enum.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

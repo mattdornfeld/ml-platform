@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import exists, func, literal, select, tuple_, update
 from sqlalchemy.orm import Session
 
+from ml_platform.api._exceptions import UnsupportedScheduledJobTypeError
 from ml_platform.api.domain import JobStatus, JobType, PartitionStatus
 from ml_platform.api.infrastructure import engine_for
 from ml_platform.api.repositories._models import (
@@ -23,6 +24,16 @@ from ml_platform.api.repositories._models import (
     LabelDatasetDependency,
     LabelPartitionPlan,
     LabelPartitionRequest,
+)
+from ml_platform.api.repositories.exceptions import (
+    DatasetMaterializationJobMultipleTargetsError,
+    DatasetMaterializationJobWithoutPartitionsError,
+    FeatureMaterializationJobMultipleTargetsError,
+    FeatureMaterializationJobWithoutPartitionsError,
+    LabelMaterializationJobMultipleTargetsError,
+    LabelMaterializationJobWithoutPartitionsError,
+    ScheduledMaterializationJobNotFoundError,
+    UnsupportedScheduledRequestTypeError,
 )
 
 if TYPE_CHECKING:
@@ -43,6 +54,14 @@ class SchedulerRepository:
     def _engine(self) -> Engine:
         """Configured synchronous engine for short scheduler sessions."""
         return engine_for(self.database_url)
+
+    @staticmethod
+    def _job_type(job_type: str) -> JobType:
+        """Resolve a persisted scheduler job type to its typed enum value."""
+        try:
+            return JobType(job_type)
+        except ValueError as error:
+            raise UnsupportedScheduledJobTypeError(job_type) from error
 
     @staticmethod
     def _session_job(job: Job) -> dict[str, object]:
@@ -150,7 +169,7 @@ class SchedulerRepository:
                 )
             )
         else:
-            raise ValueError(f"Unsupported request type {request_type!r}.")
+            raise UnsupportedScheduledRequestTypeError(request_type.__name__)
         plan_by_request: dict[UUID, list[dict[str, object]]] = {}
         for (
             partition_request_id,
@@ -240,18 +259,14 @@ class SchedulerRepository:
         with Session(self._engine) as session:
             rows = list(session.execute(statement))
         if not rows:
-            raise ValueError(
-                f"No dataset partitions are associated with job {job_id}."
-            )
+            raise DatasetMaterializationJobWithoutPartitionsError(str(job_id))
         first_request, dataset = rows[0]
         if any(
             request.dataset_name != first_request.dataset_name
             or request.dataset_version != first_request.dataset_version
             for request, _ in rows
         ):
-            raise ValueError(
-                f"Dataset job {job_id} has multiple target resources."
-            )
+            raise DatasetMaterializationJobMultipleTargetsError(str(job_id))
         return {
             "name": dataset.name,
             "version": dataset.version,
@@ -275,8 +290,8 @@ class SchedulerRepository:
         with Session(self._engine) as session:
             rows = list(session.execute(target_statement))
             if not rows:
-                raise ValueError(
-                    f"No feature partitions are associated with job {job_id}."
+                raise FeatureMaterializationJobWithoutPartitionsError(
+                    str(job_id)
                 )
             first_request, feature = rows[0]
             dependencies = list(
@@ -311,9 +326,7 @@ class SchedulerRepository:
             or request.feature_version != first_request.feature_version
             for request, _ in rows
         ):
-            raise ValueError(
-                f"Feature job {job_id} has multiple target resources."
-            )
+            raise FeatureMaterializationJobMultipleTargetsError(str(job_id))
         return {
             "config": {
                 "name": feature.name,
@@ -357,9 +370,7 @@ class SchedulerRepository:
         with Session(self._engine) as session:
             rows = list(session.execute(target_statement))
             if not rows:
-                raise ValueError(
-                    f"No label partitions are associated with job {job_id}."
-                )
+                raise LabelMaterializationJobWithoutPartitionsError(str(job_id))
             first_request, label = rows[0]
             dependencies = list(
                 session.execute(
@@ -392,9 +403,7 @@ class SchedulerRepository:
             or request.label_version != first_request.label_version
             for request, _ in rows
         ):
-            raise ValueError(
-                f"Label job {job_id} has multiple target resources."
-            )
+            raise LabelMaterializationJobMultipleTargetsError(str(job_id))
         return {
             "config": {
                 "name": label.name,
@@ -426,7 +435,7 @@ class SchedulerRepository:
 
     def is_eligible(self, job_id: JobId, job_type: str) -> bool:
         """Allow only the oldest submitted job for every partition it targets."""
-        match JobType(job_type):
+        match self._job_type(job_type):
             case JobType.DATASET_MATERIALIZATION:
                 request_table = DatasetPartitionRequest.__table__
                 name_column = request_table.c.dataset_name
@@ -440,8 +449,8 @@ class SchedulerRepository:
                 name_column = request_table.c.label_name
                 version_column = request_table.c.label_version
             case _ as unsupported_job_type:
-                raise ValueError(
-                    f"Unsupported job type {unsupported_job_type!r}."
+                raise UnsupportedScheduledJobTypeError(
+                    str(unsupported_job_type)
                 )
         older_request = request_table.alias("older_request")
         jobs_table = Job.__table__
@@ -449,7 +458,7 @@ class SchedulerRepository:
         with Session(self._engine) as session:
             current_job = session.get(Job, job_id)
             if current_job is None:
-                raise ValueError(f"Job {job_id} does not exist.")
+                raise ScheduledMaterializationJobNotFoundError(str(job_id))
             targets = session.execute(
                 select(name_column, version_column, request_table.c.timestamp)
                 .where(request_table.c.job_id == job_id)
@@ -501,7 +510,7 @@ class SchedulerRepository:
 
     def finish(self, job_id: JobId, outcome: str, job_type: str) -> None:
         """Persist a terminal outcome after confirming all receipts exist."""
-        match JobType(job_type):
+        match self._job_type(job_type):
             case JobType.DATASET_MATERIALIZATION:
                 request_table = DatasetPartitionRequest.__table__
             case JobType.FEATURE_MATERIALIZATION:
@@ -509,8 +518,8 @@ class SchedulerRepository:
             case JobType.LABEL_MATERIALIZATION:
                 request_table = LabelPartitionRequest.__table__
             case _ as unsupported_job_type:
-                raise ValueError(
-                    f"Unsupported job type {unsupported_job_type!r}."
+                raise UnsupportedScheduledJobTypeError(
+                    str(unsupported_job_type)
                 )
         with Session(self._engine) as session:
             job = session.get(Job, job_id)
@@ -531,7 +540,7 @@ class SchedulerRepository:
             ):
                 terminal_status = JobStatus.FAILED
             if terminal_status is JobStatus.FAILED:
-                match JobType(job_type):
+                match self._job_type(job_type):
                     case JobType.DATASET_MATERIALIZATION:
                         session.execute(
                             update(DatasetPartitionRequest)
@@ -572,8 +581,8 @@ class SchedulerRepository:
                             )
                         )
                     case _ as unsupported_job_type:
-                        raise ValueError(
-                            f"Unsupported job type {unsupported_job_type!r}."
+                        raise UnsupportedScheduledJobTypeError(
+                            str(unsupported_job_type)
                         )
             job.status = terminal_status.value
             session.commit()

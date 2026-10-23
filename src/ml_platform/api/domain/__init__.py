@@ -24,7 +24,9 @@ from ml_platform.api.domain._partitions import (
     ResourcePartition,
 )
 from ml_platform.api.domain._transforms import (
+    TransformDatasetDependency,
     TransformDefinition,
+    TransformDetail,
     TransformSummary,
 )
 
@@ -45,6 +47,8 @@ __all__ = [
     "ResourceLifecycle",
     "ResourcePartition",
     "ResourceType",
+    "TransformDatasetDependency",
     "TransformDefinition",
+    "TransformDetail",
     "TransformSummary",
 ]

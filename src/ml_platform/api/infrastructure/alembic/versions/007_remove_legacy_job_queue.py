@@ -1,20 +1,15 @@
-"""Remove legacy job queue."""
+"""Alembic metadata wrapper for SQL revision 007."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "007"
-down_revision = "006"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "-- Kueue holds submitted Kubernetes workloads; PostgreSQL retains only durable job outcomes.\nDROP TABLE IF EXISTS job_queue;\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="007",
+    down_revision="006",
+    sql_file="007_remove_legacy_job_queue.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

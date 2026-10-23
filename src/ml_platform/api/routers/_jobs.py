@@ -1,10 +1,12 @@
 """Materialization job inspection routes."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from ml_platform.api._dependencies import DatabaseSession, JobPathId
+from ml_platform.api.domain import JobPartition, JobTarget
 from ml_platform.api.repositories import JobRepository
 from ml_platform.api.routers._openapi import JOB_VALIDATION, error_responses
+from ml_platform.api.routers.exceptions import MaterializationJobNotFoundError
 from ml_platform.api.services import (
     headlamp_resource_url,
     job_kubernetes_resources,
@@ -16,38 +18,24 @@ from ml_platform.common.types import JobId
 router = APIRouter(tags=["jobs"])
 
 
-def _target_response(target: object) -> dict[str, object]:
+def _target_response(target: JobTarget) -> dict[str, object]:
     """Adapt one repository domain target to its HTTP representation."""
-    from ml_platform.api.domain import JobTarget
-
-    match target:
-        case JobTarget():
-            return {
-                "resource_type": target.resource_type,
-                "name": target.name,
-                "version": target.version,
-            }
-        case _ as unsupported_target:
-            raise TypeError(f"Unsupported job target {unsupported_target!r}.")
+    return {
+        "resource_type": target.resource_type,
+        "name": target.name,
+        "version": target.version,
+    }
 
 
-def _partition_response(partition: object) -> dict[str, object]:
+def _partition_response(partition: JobPartition) -> dict[str, object]:
     """Adapt one repository domain partition to its HTTP representation."""
-    from ml_platform.api.domain import JobPartition
-
-    match partition:
-        case JobPartition():
-            return {
-                "resource_type": partition.resource_type,
-                "name": partition.name,
-                "version": partition.version,
-                "timestamp": partition.timestamp,
-                "status": partition.status,
-            }
-        case _ as unsupported_partition:
-            raise TypeError(
-                f"Unsupported job partition {unsupported_partition!r}."
-            )
+    return {
+        "resource_type": partition.resource_type,
+        "name": partition.name,
+        "version": partition.version,
+        "timestamp": partition.timestamp,
+        "status": partition.status,
+    }
 
 
 @router.get(JobRoutes.LIST.template, tags=["jobs"])
@@ -81,9 +69,7 @@ def get_job(job_id: JobPathId, session: DatabaseSession) -> JobResponse:
     repository = JobRepository(session)
     job = repository.get(job_id)
     if job is None:
-        raise HTTPException(
-            status_code=404, detail="Materialization job does not exist."
-        )
+        raise MaterializationJobNotFoundError
     prefix = job.type.removesuffix("_materialization")
     application_name = f"{prefix}-{job_id}".lower()
     return JobResponse.model_validate(

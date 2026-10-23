@@ -1,18 +1,15 @@
-"""Add submitted job status."""
+"""Alembic metadata wrapper for SQL revision 005."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "005"
-down_revision = "004"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute("ALTER TYPE job_status ADD VALUE IF NOT EXISTS 'submitted';\n")
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="005",
+    down_revision="004",
+    sql_file="005_add_submitted_job_status.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from ml_platform.api.domain._lifecycle import ResourceLifecycle
 from ml_platform.api.domain._partitions import PartitionCounts
+from ml_platform.common.api.dtos import DatasetStatus
 from ml_platform.common.types import CreatedAt, ResourceName, ResourceVersion
 
 
@@ -17,7 +17,7 @@ class DatasetDefinition:
     dataset_type: str
     config: dict[str, object]
     created_at: CreatedAt
-    lifecycle: ResourceLifecycle
+    lifecycle: DatasetStatus
     deleted_at: datetime | None
     deprecated_at: datetime | None
 

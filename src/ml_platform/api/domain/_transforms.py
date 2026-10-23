@@ -3,10 +3,16 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from ml_platform.api.domain._jobs import MaterializationJob
 from ml_platform.api.domain._lifecycle import ResourceLifecycle
-from ml_platform.api.domain._partitions import PartitionCounts
+from ml_platform.api.domain._partitions import (
+    PartitionCounts,
+    ResourcePartition,
+)
 from ml_platform.common.types import (
     CreatedAt,
+    DatasetName,
+    DatasetType,
     Description,
     ResourceName,
     ResourceVersion,
@@ -38,3 +44,24 @@ class TransformSummary:
 
     definition: TransformDefinition
     partitions: PartitionCounts
+
+
+@dataclass(frozen=True)
+class TransformDatasetDependency:
+    """One versioned dataset consumed by a transform."""
+
+    name: DatasetName
+    version: ResourceVersion
+    dataset_type: DatasetType
+    lookback_partitions: int
+    lookahead_partitions: int
+
+
+@dataclass(frozen=True)
+class TransformDetail:
+    """One transform definition with all displayable persisted state."""
+
+    definition: TransformDefinition
+    datasets: tuple[TransformDatasetDependency, ...]
+    partitions: tuple[ResourcePartition, ...]
+    jobs: tuple[MaterializationJob, ...]

@@ -1,20 +1,15 @@
-"""Feature partition callback tokens."""
+"""Alembic metadata wrapper for SQL revision 009."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "009"
-down_revision = "008"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "ALTER TABLE feature_partition_update_requests ADD COLUMN callback_token TEXT;\nUPDATE feature_partition_update_requests SET callback_token = encode(gen_random_bytes(32), 'hex')\n    WHERE callback_token IS NULL;\nALTER TABLE feature_partition_update_requests ALTER COLUMN callback_token SET NOT NULL;\nCREATE UNIQUE INDEX feature_partition_update_requests_callback_token_index\n    ON feature_partition_update_requests (callback_token);\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="009",
+    down_revision="008",
+    sql_file="009_feature_partition_callback_tokens.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

@@ -30,3 +30,8 @@
 - Explicitly model external-data and transformation outputs with named, strongly typed classes rather than anonymous broad containers such as `tuple[object, ...]`.
 - Ask the user before changing a public API contract, including endpoint shapes, API DTOs, or user-facing configuration schemas.
 - Ask before introducing broad container types such as `dict[str, object]` or `dict[str, Any]`. They are exceptional escape hatches, not defaults; prefer explicitly modeled, strongly typed data structures.
+- Validate request-bound input immediately at the API boundary, before invoking repositories or services. Do not duplicate request validation in downstream persistence code.
+- Define a named, public custom exception for every application failure that is intentionally raised. Do not raise generic `ValueError`, `RuntimeError`, `TypeError`, or `Exception` for application failures.
+- API exceptions must carry an explicit HTTP status code so the API boundary can render the intended response consistently.
+- Put imports at module scope. Do not place imports inside methods or functions unless an unavoidable, documented import cycle requires it.
+- When a function requires only a shared subset of properties, define a typed structural interface or protocol for that contract instead of accepting a union of concrete model types. Prefer this approach in future designs.

@@ -4,19 +4,29 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from ml_platform.api.domain import (
     JobStatus,
     JobType,
+    MaterializationJob,
     MaterializationPartition,
     MaterializationRequest,
+    PartitionCounts,
     PartitionStatus,
+    ResourcePartition,
+    ResourceType,
+    TransformDatasetDependency,
+    TransformDefinition,
+    TransformDetail,
+    TransformSummary,
 )
+from ml_platform.api.domain._lifecycle import ResourceLifecycle
+from ml_platform.api.repositories._jobs import JobRepository
 from ml_platform.api.repositories._models import (
     Dataset,
     DatasetPartition,
@@ -29,17 +39,29 @@ from ml_platform.api.repositories._models import (
     FeaturePartitionRequest,
     Job,
 )
+from ml_platform.api.repositories.exceptions import (
+    DeletedFeatureInputDatasetError,
+    FeatureDependencyDatasetTypeMismatchError,
+    FeatureDependencyDatasetUnavailableError,
+    FeaturePartitionPlanConflictError,
+    FeatureVersionExistsError,
+    FeatureVersionUnavailableError,
+    MissingFeatureInputPartitionsError,
+)
 from ml_platform.common.api.dtos import (
+    FeatureCreateRequest,
     FeatureMaterializationMode,
     FeaturePartitionMaterializationRequest,
 )
 from ml_platform.common.types import (
     CreatedAt,
+    Description,
     JobId,
     PartitionId,
     PartitionTimestamp,
     ResourceName,
     ResourceVersion,
+    SnapshotId,
     UpdatedAt,
 )
 
@@ -54,6 +76,283 @@ class FeatureRepository:
     """Persist immutable feature input plans and materialization requests."""
 
     session: Session
+
+    @staticmethod
+    def _definition(feature: Feature) -> TransformDefinition:
+        """Map a feature ORM row to its immutable domain definition."""
+        lifecycle = (
+            ResourceLifecycle.DELETED
+            if feature.deleted_at is not None
+            else ResourceLifecycle.DEPRECATED
+            if feature.deprecated_at is not None
+            else ResourceLifecycle.ACTIVE
+        )
+        return TransformDefinition(
+            name=ResourceName(feature.name),
+            version=ResourceVersion(feature.version),
+            dtype=feature.dtype,
+            frequency=feature.frequency,
+            keys=tuple(feature.keys),
+            validations=tuple(feature.validations),
+            transform=feature.transform,
+            description=Description(feature.description),
+            parameters=feature.parameters,
+            created_at=CreatedAt(feature.created_at),
+            lifecycle=lifecycle,
+            deleted_at=feature.deleted_at,
+            deprecated_at=feature.deprecated_at,
+        )
+
+    @staticmethod
+    def _resource_partition(
+        request: FeaturePartitionRequest,
+        receipt: FeaturePartition | None,
+    ) -> ResourcePartition:
+        """Map a feature request and receipt to its latest partition state."""
+        return ResourcePartition(
+            id=PartitionId(request.partition_id),
+            timestamp=PartitionTimestamp(request.timestamp),
+            status=PartitionStatus(request.status),
+            created_at=CreatedAt(request.created_at),
+            updated_at=UpdatedAt(request.updated_at),
+            content_hash=None if receipt is None else receipt.content_hash,
+            snapshot_id=None
+            if receipt is None
+            else SnapshotId(receipt.snapshot_id),
+        )
+
+    def summaries(
+        self, *, include_deleted: bool
+    ) -> tuple[TransformSummary, ...]:
+        """Return feature versions with their latest logical partition counts."""
+        counts = (
+            select(
+                FeaturePartitionRequest.feature_name.label("name"),
+                FeaturePartitionRequest.feature_version.label("version"),
+                func.count(FeaturePartitionRequest.partition_id).label("total"),
+                func.count(
+                    case(
+                        (
+                            FeaturePartitionRequest.status
+                            == PartitionStatus.CREATED.value,
+                            FeaturePartitionRequest.partition_id,
+                        )
+                    )
+                ).label("created"),
+                func.count(
+                    case(
+                        (
+                            FeaturePartitionRequest.status
+                            == PartitionStatus.PENDING.value,
+                            FeaturePartitionRequest.partition_id,
+                        )
+                    )
+                ).label("pending"),
+                func.count(
+                    case(
+                        (
+                            FeaturePartitionRequest.status.in_(
+                                (
+                                    PartitionStatus.FAILED.value,
+                                    PartitionStatus.CANCELLED.value,
+                                )
+                            ),
+                            FeaturePartitionRequest.partition_id,
+                        )
+                    )
+                ).label("failed"),
+            )
+            .group_by(
+                FeaturePartitionRequest.feature_name,
+                FeaturePartitionRequest.feature_version,
+            )
+            .subquery()
+        )
+        statement = (
+            select(
+                Feature,
+                counts.c.total,
+                counts.c.created,
+                counts.c.pending,
+                counts.c.failed,
+            )
+            .outerjoin(
+                counts,
+                (counts.c.name == Feature.name)
+                & (counts.c.version == Feature.version),
+            )
+            .order_by(Feature.name, Feature.version.desc())
+        )
+        if not include_deleted:
+            statement = statement.where(Feature.deleted_at.is_(None))
+        return tuple(
+            TransformSummary(
+                definition=self._definition(feature),
+                partitions=PartitionCounts(
+                    total=total or 0,
+                    created=created or 0,
+                    pending=pending or 0,
+                    failed=failed or 0,
+                ),
+            )
+            for feature, total, created, pending, failed in self.session.execute(
+                statement
+            )
+        )
+
+    def detail(
+        self, name: ResourceName, version: ResourceVersion
+    ) -> TransformDetail | None:
+        """Return a feature with its dependencies, latest partitions, and jobs."""
+        feature = self.session.get(Feature, (name, version))
+        if feature is None:
+            return None
+        dependencies = tuple(
+            TransformDatasetDependency(
+                name=dependency.dataset_name,
+                version=dependency.dataset_version,
+                dataset_type=dataset_type,
+                lookback_partitions=dependency.num_lookback_partitions,
+                lookahead_partitions=0,
+            )
+            for dependency, dataset_type in self.session.execute(
+                select(FeatureDatasetDependency, Dataset.dataset_type)
+                .join(
+                    Dataset,
+                    (Dataset.name == FeatureDatasetDependency.dataset_name)
+                    & (
+                        Dataset.version
+                        == FeatureDatasetDependency.dataset_version
+                    ),
+                )
+                .where(
+                    FeatureDatasetDependency.feature_name == name,
+                    FeatureDatasetDependency.feature_version == version,
+                )
+                .order_by(
+                    FeatureDatasetDependency.dataset_name,
+                    FeatureDatasetDependency.dataset_version,
+                )
+            )
+        )
+        latest = (
+            select(
+                FeaturePartitionRequest.timestamp,
+                func.max(FeaturePartitionRequest.created_at).label(
+                    "created_at"
+                ),
+            )
+            .where(
+                FeaturePartitionRequest.feature_name == name,
+                FeaturePartitionRequest.feature_version == version,
+            )
+            .group_by(FeaturePartitionRequest.timestamp)
+            .subquery()
+        )
+        partitions = tuple(
+            self._resource_partition(request, receipt)
+            for request, receipt in self.session.execute(
+                select(FeaturePartitionRequest, FeaturePartition)
+                .join(
+                    latest,
+                    (latest.c.timestamp == FeaturePartitionRequest.timestamp)
+                    & (
+                        latest.c.created_at
+                        == FeaturePartitionRequest.created_at
+                    ),
+                )
+                .outerjoin(
+                    FeaturePartition,
+                    FeaturePartition.partition_id
+                    == FeaturePartitionRequest.partition_id,
+                )
+                .order_by(FeaturePartitionRequest.timestamp.desc())
+            )
+        )
+        return TransformDetail(
+            definition=self._definition(feature),
+            datasets=dependencies,
+            partitions=partitions,
+            jobs=JobRepository(self.session).for_resource(
+                ResourceType.FEATURE, name, version
+            ),
+        )
+
+    def create(self, payload: FeatureCreateRequest) -> TransformDefinition:
+        """Register a feature after validating every declared dataset dependency."""
+        for dependency in payload.datasets:
+            dataset = self.session.get(
+                Dataset, (dependency.name, dependency.version)
+            )
+            if dataset is None or dataset.deleted_at is not None:
+                raise FeatureDependencyDatasetUnavailableError
+            if dataset.dataset_type != dependency.dataset_type.value:
+                raise FeatureDependencyDatasetTypeMismatchError
+        feature = Feature(
+            name=payload.name,
+            version=payload.version,
+            dtype=payload.dtype.value,
+            frequency=payload.frequency.value,
+            keys=[key.value for key in payload.keys],
+            validations=[
+                validation.model_dump() for validation in payload.validations
+            ],
+            transform=payload.transform,
+            description=payload.description,
+            parameters=payload.parameters,
+        )
+        try:
+            self.session.add(feature)
+            self.session.add_all(
+                FeatureDatasetDependency(
+                    feature_name=payload.name,
+                    feature_version=payload.version,
+                    dataset_name=dependency.name,
+                    dataset_version=dependency.version,
+                    num_lookback_partitions=dependency.input_window.lookback_partitions,
+                )
+                for dependency in payload.datasets
+            )
+            self.session.commit()
+        except IntegrityError as error:
+            self.session.rollback()
+            raise FeatureVersionExistsError from error
+        self.session.refresh(feature)
+        return self._definition(feature)
+
+    def delete(self, name: ResourceName, version: ResourceVersion) -> bool:
+        """Soft-delete a feature and cancel its unfinished materializations."""
+        feature = self.session.get(Feature, (name, version))
+        if feature is None:
+            return False
+        if feature.deleted_at is None:
+            feature.deleted_at = datetime.now(UTC)
+        pending_job_ids = select(FeaturePartitionRequest.job_id).where(
+            FeaturePartitionRequest.feature_name == name,
+            FeaturePartitionRequest.feature_version == version,
+            FeaturePartitionRequest.status == PartitionStatus.PENDING.value,
+        )
+        self.session.execute(
+            update(FeaturePartitionRequest)
+            .where(
+                FeaturePartitionRequest.feature_name == name,
+                FeaturePartitionRequest.feature_version == version,
+                FeaturePartitionRequest.status == PartitionStatus.PENDING.value,
+            )
+            .values(
+                status=PartitionStatus.CANCELLED.value, updated_at=func.now()
+            )
+        )
+        self.session.execute(
+            update(Job)
+            .where(
+                Job.status == JobStatus.SUBMITTED.value,
+                Job.id.in_(pending_job_ids),
+            )
+            .values(status=JobStatus.CANCELLED.value, updated_at=func.now())
+        )
+        self.session.commit()
+        return True
 
     @staticmethod
     def _partition(
@@ -127,18 +426,14 @@ class FeatureRepository:
                 .tuples()
                 .all()
             )
-            missing_timestamps = sorted(
-                item.isoformat()
-                for item in expected_timestamps.difference(revisions)
+            missing_timestamps = tuple(
+                sorted(expected_timestamps.difference(revisions))
             )
             if missing_timestamps:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "Feature partition cannot be materialized because its "
-                        f"required {dependency.dataset_name}:{dependency.dataset_version} "
-                        f"input partitions are missing: {missing_timestamps}"
-                    ),
+                raise MissingFeatureInputPartitionsError(
+                    dataset_name=dependency.dataset_name,
+                    dataset_version=dependency.dataset_version,
+                    missing_timestamps=missing_timestamps,
                 )
             planned_partition_ids.extend(
                 revisions[item] for item in sorted(expected_timestamps)
@@ -202,9 +497,7 @@ class FeatureRepository:
         """Ensure the target and every declared input dataset are active."""
         resource = self.session.get(Feature, (name, version))
         if resource is None or resource.deleted_at is not None:
-            raise HTTPException(
-                status_code=404, detail="Feature version does not exist."
-            )
+            raise FeatureVersionUnavailableError
         deleted_input = self.session.scalar(
             select(FeatureDatasetDependency.feature_name)
             .join(
@@ -220,13 +513,7 @@ class FeatureRepository:
             .limit(1)
         )
         if deleted_input is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Feature partition cannot be materialized because an input "
-                    "dataset version is deleted."
-                ),
-            )
+            raise DeletedFeatureInputDatasetError
 
     def materialize(
         self,
@@ -286,13 +573,7 @@ class FeatureRepository:
                 ):
                     existing_requests.append(pending)
                     continue
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "Feature partition is already being materialized against "
-                        "a different input revision plan."
-                    ),
-                )
+                raise FeaturePartitionPlanConflictError
             planned_by_timestamp[timestamp] = planned_partition_ids
 
         if not planned_by_timestamp:
@@ -334,8 +615,6 @@ class FeatureRepository:
         self.session.refresh(job)
         for request in requests:
             self.session.refresh(request)
-        from ml_platform.api.domain import MaterializationJob
-
         return MaterializationRequest(
             submitted_job=MaterializationJob(
                 id=JobId(job.id),

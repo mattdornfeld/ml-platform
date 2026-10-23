@@ -1,20 +1,15 @@
-"""Remove dependency argument names."""
+"""Alembic metadata wrapper for SQL revision 024."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "024"
-down_revision = "023"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "-- Dataset names are valid Python identifiers and are injected directly into transforms.\nALTER TABLE feature_dataset_dependencies DROP COLUMN argument_name;\nALTER TABLE feature_dataset_dependencies\n    ADD CONSTRAINT feature_dataset_dependency_name_unique\n    UNIQUE (feature_name, feature_version, dataset_name);\n\nALTER TABLE label_dataset_dependencies DROP COLUMN argument_name;\nALTER TABLE label_dataset_dependencies\n    ADD CONSTRAINT label_dataset_dependency_name_unique\n    UNIQUE (label_name, label_version, dataset_name);\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="024",
+    down_revision="023",
+    sql_file="024_remove_dependency_argument_names.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

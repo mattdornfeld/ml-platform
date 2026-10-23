@@ -22,6 +22,9 @@ from ml_platform.api.repositories._models import (
     Job,
     LabelPartitionRequest,
 )
+from ml_platform.api.repositories.exceptions import (
+    UnsupportedJobResourceTypeError,
+)
 from ml_platform.common.types import (
     CreatedAt,
     JobId,
@@ -193,8 +196,8 @@ class JobRepository:
                     )
                 )
             case _ as unsupported_resource_type:
-                raise ValueError(
-                    f"Unsupported resource type {unsupported_resource_type!r}."
+                raise UnsupportedJobResourceTypeError(
+                    str(unsupported_resource_type)
                 )
 
     def for_resource(

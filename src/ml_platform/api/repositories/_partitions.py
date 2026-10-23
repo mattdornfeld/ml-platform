@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
-from fastapi import HTTPException
 from sqlalchemy import select
 
 from ml_platform.api.domain import JobStatus, PartitionStatus
@@ -26,6 +25,19 @@ from ml_platform.api.repositories._models import (
     LabelPartitionPlan,
     LabelPartitionRequest,
 )
+from ml_platform.api.repositories.exceptions import (
+    CompletionBatchSchemaConflictError,
+    DeletedCompletionResourceError,
+    DuplicateCompletionPartitionIdError,
+    ExistingReceiptSchemaConflictError,
+    InactivePartitionJobError,
+    InvalidPartitionCallbackTokenError,
+    MissingCompletedPartitionReceiptError,
+    PartitionDependencyPlanMismatchError,
+    PartitionReceiptConflictError,
+    UnsupportedPartitionCompletionResourceTypeError,
+    UnsupportedPartitionRequestStatusError,
+)
 from ml_platform.common.api.dtos import (
     PartitionCompletionRequest,
     PartitionResultResponse,
@@ -33,11 +45,24 @@ from ml_platform.common.api.dtos import (
 )
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from uuid import UUID
 
     from sqlalchemy.orm import Session
 
     from ml_platform.common.types import PartitionId
+
+
+class PartitionRequest(Protocol):
+    """Structural contract needed to validate a partition request lifecycle."""
+
+    status: str
+
+
+class Resource(Protocol):
+    """Structural contract needed to validate a resource lifecycle."""
+
+    deleted_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -70,8 +95,8 @@ class PartitionRepository:
             case ResourceType.DATASET:
                 return set()
             case _ as unsupported_resource_type:
-                raise ValueError(
-                    f"Unsupported resource type {unsupported_resource_type!r}."
+                raise UnsupportedPartitionCompletionResourceTypeError(
+                    str(unsupported_resource_type)
                 )
         return set(self.session.scalars(statement))
 
@@ -143,8 +168,8 @@ class PartitionRepository:
                 ).one()
                 return request, resource, job
             case _ as unsupported_resource_type:
-                raise ValueError(
-                    f"Unsupported resource type {unsupported_resource_type!r}."
+                raise UnsupportedPartitionCompletionResourceTypeError(
+                    str(unsupported_resource_type)
                 )
 
     def _existing_schemas(
@@ -195,8 +220,8 @@ class PartitionRepository:
                     )
                 )
             case _ as unsupported_resource_type:
-                raise ValueError(
-                    f"Unsupported resource type {unsupported_resource_type!r}."
+                raise UnsupportedPartitionCompletionResourceTypeError(
+                    str(unsupported_resource_type)
                 )
         return {
             tuple(sorted(schema.items()))
@@ -216,8 +241,8 @@ class PartitionRepository:
             case ResourceType.LABEL:
                 return self.session.get(LabelPartition, item.partition_id)
             case _ as unsupported_resource_type:
-                raise ValueError(
-                    f"Unsupported resource type {unsupported_resource_type!r}."
+                raise UnsupportedPartitionCompletionResourceTypeError(
+                    str(unsupported_resource_type)
                 )
 
     def _create_receipt(
@@ -240,8 +265,8 @@ class PartitionRepository:
             case ResourceType.LABEL:
                 return LabelPartition(**receipt_values)
             case _ as unsupported_resource_type:
-                raise ValueError(
-                    f"Unsupported resource type {unsupported_resource_type!r}."
+                raise UnsupportedPartitionCompletionResourceTypeError(
+                    str(unsupported_resource_type)
                 )
 
     def _record_lineage(self, item: PartitionCompletionRequest) -> None:
@@ -270,8 +295,8 @@ class PartitionRepository:
                     )
                 )
             case _ as unsupported_resource_type:
-                raise ValueError(
-                    f"Unsupported resource type {unsupported_resource_type!r}."
+                raise UnsupportedPartitionCompletionResourceTypeError(
+                    str(unsupported_resource_type)
                 )
 
     def _update_job(
@@ -303,8 +328,8 @@ class PartitionRepository:
                     != PartitionStatus.CREATED.value,
                 )
             case _ as unsupported_resource_type:
-                raise ValueError(
-                    f"Unsupported resource type {unsupported_resource_type!r}."
+                raise UnsupportedPartitionCompletionResourceTypeError(
+                    str(unsupported_resource_type)
                 )
         if (
             job.status == JobStatus.SUBMITTED.value
@@ -332,34 +357,22 @@ class PartitionRepository:
 
     @staticmethod
     def _validate_request_lifecycle(
-        request: DatasetPartitionRequest
-        | FeaturePartitionRequest
-        | LabelPartitionRequest,
-        resource: Dataset | Feature | Label,
+        request: PartitionRequest,
+        resource: Resource,
         job: Job,
     ) -> None:
         """Ensure a callback is authorized by the request and job lifecycles."""
         if resource.deleted_at is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="Partition request is not eligible for completion.",
-            )
+            raise DeletedCompletionResourceError
         match request.status:
             case PartitionStatus.PENDING.value:
                 if job.status != JobStatus.SUBMITTED.value:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Partition job is not active.",
-                    )
+                    raise InactivePartitionJobError
             case PartitionStatus.CREATED.value:
                 pass
             case _ as unsupported_partition_status:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "Partition request is not eligible for completion: "
-                        f"{unsupported_partition_status!r}."
-                    ),
+                raise UnsupportedPartitionRequestStatusError(
+                    unsupported_partition_status
                 )
 
     def _complete_item(
@@ -380,28 +393,17 @@ class PartitionRepository:
         if not secrets.compare_digest(
             request.callback_token, item.callback_token
         ):
-            raise HTTPException(
-                status_code=403, detail="Invalid partition callback token."
-            )
+            raise InvalidPartitionCallbackTokenError
         self._validate_request_lifecycle(request, resource, job)
         if item.resource_type is not ResourceType.DATASET and self._planned_ids(
             item.resource_type, item.partition_id
         ) != set(item.dataset_partition_ids or []):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Callback dataset revisions do not match the immutable input "
-                    "plan."
-                ),
-            )
+            raise PartitionDependencyPlanMismatchError
         resource_key = (item.resource_type, resource.name, resource.version)
         schema = tuple(sorted(item.iceberg_schema.items()))
         prior_schema = schemas_by_resource.get(resource_key)
         if prior_schema is not None and prior_schema != schema:
-            raise HTTPException(
-                status_code=409,
-                detail="Completion batch has conflicting schemas for one Iceberg table.",
-            )
+            raise CompletionBatchSchemaConflictError
         schemas_by_resource[resource_key] = schema
         if any(
             existing_schema != schema
@@ -409,10 +411,7 @@ class PartitionRepository:
                 item, resource.name, resource.version
             )
         ):
-            raise HTTPException(
-                status_code=409,
-                detail="Completion schema conflicts with an existing Iceberg table receipt.",
-            )
+            raise ExistingReceiptSchemaConflictError
         receipt = self._receipt(item)
         if receipt is not None:
             if (
@@ -421,15 +420,9 @@ class PartitionRepository:
                 or receipt.row_count != item.row_count
                 or receipt.iceberg_schema != item.iceberg_schema
             ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Partition receipt conflicts with an existing completion.",
-                )
+                raise PartitionReceiptConflictError
         elif request.status != PartitionStatus.PENDING.value:
-            raise HTTPException(
-                status_code=409,
-                detail="Completed partition is missing its receipt.",
-            )
+            raise MissingCompletedPartitionReceiptError
         else:
             receipt = self._create_receipt(item)
             self.session.add(receipt)
@@ -443,10 +436,7 @@ class PartitionRepository:
         """Authenticate and persist one complete Iceberg receipt batch atomically."""
         partition_ids = [item.partition_id for item in payload]
         if len(set(partition_ids)) != len(partition_ids):
-            raise HTTPException(
-                status_code=409,
-                detail="Completion batch contains duplicate partition IDs.",
-            )
+            raise DuplicateCompletionPartitionIdError
         receipts: dict[
             PartitionId, DatasetPartition | FeaturePartition | LabelPartition
         ] = {}

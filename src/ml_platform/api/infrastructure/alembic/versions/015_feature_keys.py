@@ -1,20 +1,15 @@
-"""Feature keys."""
+"""Alembic metadata wrapper for SQL revision 015."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "015"
-down_revision = "014"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "-- Feature identity may use multiple ordered entity-key columns.\nALTER TABLE features ADD COLUMN feature_keys JSONB;\nUPDATE features SET feature_keys = jsonb_build_array(feature_key) WHERE feature_keys IS NULL;\nALTER TABLE features ALTER COLUMN feature_keys SET NOT NULL;\nALTER TABLE features ADD CONSTRAINT features_feature_keys_array CHECK (jsonb_typeof(feature_keys) = 'array' AND jsonb_array_length(feature_keys) > 0);\nALTER TABLE features DROP COLUMN feature_key;\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="015",
+    down_revision="014",
+    sql_file="015_feature_keys.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

@@ -204,7 +204,12 @@ def sync_resources(
     existing = _api_request(
         base_url,
         list_route.method,
-        f"{list_route.template}?include_deleted=true",
+        (
+            f"{list_route.template}?statuses=active&statuses=deprecated"
+            "&statuses=deleted"
+            if resource is ResourceType.DATASET
+            else f"{list_route.template}?include_deleted=true"
+        ),
     )
     active = {
         (row["name"], int(row["version"])): row

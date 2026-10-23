@@ -132,11 +132,24 @@ def test_dataset_lifecycle_materialization_and_job_inspection(
     assert updated.status_code == 200
     assert updated.json()["config"]["description"] == "Updated market prices."
 
+    active_payload = _dataset_payload()
+    active_payload["name"] = "current_prices"
+    assert api_client.post("/datasets", json=active_payload).status_code == 201
+
     deleted = api_client.delete("/datasets/prices/versions/1")
     assert deleted.status_code == 204
-    assert api_client.get("/datasets").json() == []
-    included = api_client.get("/datasets?include_deleted=true")
+    assert [item["name"] for item in api_client.get("/datasets").json()] == [
+        "current_prices"
+    ]
+    included = api_client.get("/datasets?statuses=deleted")
     assert included.json()[0]["deleted_at"] is not None
+    multiple_statuses = api_client.get(
+        "/datasets?statuses=active&statuses=deleted"
+    )
+    assert [item["name"] for item in multiple_statuses.json()] == [
+        "current_prices",
+        "prices",
+    ]
     assert (
         api_client.post(
             "/datasets/prices/versions/1/partitions",

@@ -1,20 +1,15 @@
-"""Drop feature dependency lookahead."""
+"""Alembic metadata wrapper for SQL revision 022."""
 
-from alembic import op
+from ml_platform.api.infrastructure.alembic._sql import sql_migration
 
-revision = "022"
-down_revision = "021"
-branch_labels = None
-depends_on = None
-
-
-def upgrade() -> None:
-    """Apply this PostgreSQL schema revision."""
-    op.execute(
-        "-- Point-in-time feature inputs may only depend on historical source partitions.\nALTER TABLE feature_dataset_dependencies\nDROP COLUMN num_lookahead_partitions;\n"
-    )
-
-
-def downgrade() -> None:
-    """Signal that this production migration is forward-only."""
-    raise NotImplementedError("Schema migrations are forward-only.")
+migration = sql_migration(
+    revision="022",
+    down_revision="021",
+    sql_file="022_drop_feature_dependency_lookahead.sql",
+)
+revision = migration.revision
+down_revision = migration.down_revision
+branch_labels = migration.branch_labels
+depends_on = migration.depends_on
+upgrade = migration.upgrade
+downgrade = migration.downgrade

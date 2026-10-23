@@ -21,13 +21,12 @@ from ml_platform.api.domain import (
     MaterializationRequest,
     PartitionCounts,
     PartitionStatus,
-    ResourceLifecycle,
     ResourceType,
 )
 from ml_platform.api.infrastructure import get_session
 from ml_platform.api.routers import create_dataset, get_job, list_datasets
-from ml_platform.api.services import attach_minio_locations
-from ml_platform.common.api.dtos import DatasetCreateRequest
+from ml_platform.api.services import minio_browser_url, minio_partition_url
+from ml_platform.common.api.dtos import DatasetCreateRequest, DatasetStatus
 from ml_platform.common.types import (
     CreatedAt,
     JobId,
@@ -395,7 +394,7 @@ class DashboardReadApiTest(unittest.TestCase):
                 dataset_type="market_data",
                 config={},
                 created_at=datetime.now(UTC),
-                lifecycle=ResourceLifecycle.ACTIVE,
+                lifecycle=DatasetStatus.ACTIVE,
                 deleted_at=None,
                 deprecated_at=None,
             ),
@@ -411,7 +410,7 @@ class DashboardReadApiTest(unittest.TestCase):
         self.assertEqual(result[0]["name"], "sp500")
         self.assertEqual(result[0]["created_partition_count"], 1)
         repository_type.return_value.list.assert_called_once_with(
-            include_deleted=False
+            statuses=(DatasetStatus.ACTIVE, DatasetStatus.DEPRECATED)
         )
 
     def test_static_dashboard_is_served(self) -> None:
@@ -471,40 +470,51 @@ class ResourceDeletionTest(unittest.TestCase):
             )
         self.assertEqual(raised.exception.status_code, 404)
 
-    def test_dataset_list_excludes_deleted_unless_requested(self) -> None:
-        """Catalog list calls keep soft-deleted versions hidden by default."""
+    def test_dataset_list_rejects_an_empty_status_filter(self) -> None:
+        """Reject an empty lifecycle-status query before repository access."""
+        app.dependency_overrides[get_session] = lambda: MagicMock()
+        try:
+            client = TestClient(app)
+            response = client.get("/datasets?statuses=")
+        finally:
+            app.dependency_overrides.clear()
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_dataset_list_filters_by_explicit_statuses(self) -> None:
+        """Catalog list calls default to non-deleted dataset statuses."""
         session = MagicMock()
         session.execute.return_value.all.return_value = []
         list_datasets(session)
-        hidden_statement = session.execute.call_args.args[0]
-        list_datasets(session, include_deleted=True)
-        all_statement = session.execute.call_args.args[0]
+        default_statement = session.execute.call_args.args[0]
+        list_datasets(session, statuses=(DatasetStatus.DELETED,))
+        deleted_statement = session.execute.call_args.args[0]
 
-        self.assertIn("deleted_at IS NULL", str(hidden_statement))
-        self.assertNotIn("deleted_at IS NULL", str(all_statement))
+        self.assertIn("deleted_at IS NULL", str(default_statement))
+        self.assertIn("deprecated_at IS NOT NULL", str(default_statement))
+        self.assertIn("deleted_at IS NOT NULL", str(deleted_statement))
 
 
 class MinioLocationTest(unittest.TestCase):
     """Verify control-plane metadata links resolve to Iceberg table prefixes."""
 
     def test_table_and_partition_links_use_the_minio_browser(self) -> None:
-        resource = {
-            "partitions": [{"timestamp": datetime(2026, 10, 20, tzinfo=UTC)}]
-        }
         with patch.dict(
             "os.environ",
             {"MINIO_CONSOLE_URL": "http://minio.test:9003"},
             clear=False,
         ):
-            attach_minio_locations(
-                resource, "features/trailing_volatility_1d-v1"
+            table_url = minio_browser_url("features/trailing_volatility_1d-v1")
+            partition_url = minio_partition_url(
+                "features/trailing_volatility_1d-v1",
+                datetime(2026, 10, 20, tzinfo=UTC),
             )
 
         self.assertEqual(
-            resource["minio_table_url"],
+            table_url,
             "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d-v1%2F",
         )
         self.assertEqual(
-            resource["partitions"][0]["minio_url"],
+            partition_url,
             "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d-v1%2Fdata%2Ftimestamp_day%3D2026-10-20%2F",
         )
