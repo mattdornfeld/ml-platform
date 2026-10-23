@@ -258,7 +258,7 @@ class DatasetPartition(Base):
     content_hash: Mapped[str] = mapped_column(Text)
     snapshot_id: Mapped[int] = mapped_column(BigInteger)
     row_count: Mapped[int] = mapped_column(BigInteger)
-    schema_: Mapped[dict[str, str]] = mapped_column("schema", JSONB)
+    iceberg_schema: Mapped[dict[str, str]] = mapped_column("schema", JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -277,7 +277,7 @@ class FeaturePartition(Base):
     content_hash: Mapped[str] = mapped_column(Text)
     snapshot_id: Mapped[int] = mapped_column(BigInteger)
     row_count: Mapped[int] = mapped_column(BigInteger)
-    schema_: Mapped[dict[str, str]] = mapped_column("schema", JSONB)
+    iceberg_schema: Mapped[dict[str, str]] = mapped_column("schema", JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -296,7 +296,7 @@ class LabelPartition(Base):
     content_hash: Mapped[str] = mapped_column(Text)
     snapshot_id: Mapped[int] = mapped_column(BigInteger)
     row_count: Mapped[int] = mapped_column(BigInteger)
-    schema_: Mapped[dict[str, str]] = mapped_column("schema", JSONB)
+    iceberg_schema: Mapped[dict[str, str]] = mapped_column("schema", JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

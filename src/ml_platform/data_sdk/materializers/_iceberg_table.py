@@ -11,7 +11,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as spark_functions
 from pyspark.sql.column import Column
 
-from ml_platform.common.types import PartitionType
+from ml_platform.common.types import PartitionType, RowCount, SnapshotId
 from ml_platform.data_sdk.materializers.exceptions import (
     MissingIcebergSnapshotError,
 )
@@ -170,7 +170,7 @@ class IcebergTable:
         """Atomically replace every output partition emitted by this materialization."""
         data_frame.writeTo(self.id).overwritePartitions()
 
-    def snapshot_id(self, spark: SparkSession) -> int:
+    def snapshot_id(self, spark: SparkSession) -> SnapshotId:
         """Return the latest committed snapshot for this table."""
         snapshot = (
             spark.table(f"{self.id}.snapshots")
@@ -182,7 +182,7 @@ class IcebergTable:
             raise MissingIcebergSnapshotError(
                 f"Iceberg table {self.id} has no committed snapshot after materialization."
             )
-        return int(snapshot["snapshot_id"])
+        return SnapshotId(int(snapshot["snapshot_id"]))
 
     def partition_content_hashes(
         self,
@@ -225,7 +225,7 @@ class IcebergTable:
 
     def partition_row_counts(
         self, spark: SparkSession, timestamps: tuple[datetime, ...]
-    ) -> dict[str, int]:
+    ) -> dict[str, RowCount]:
         """Count rows in requested committed partitions."""
         target_keys = self.partition_keys(timestamps)
         partition_key = spark_functions.date_format(
@@ -247,7 +247,9 @@ class IcebergTable:
             .count()
             .collect()
         )
-        return {row["partition_key"]: int(row["count"]) for row in rows}
+        return {
+            row["partition_key"]: RowCount(int(row["count"])) for row in rows
+        }
 
     def schema_fields(self, spark: SparkSession) -> dict[str, str]:
         """Return the persisted Spark schema for completion receipts."""

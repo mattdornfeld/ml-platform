@@ -457,7 +457,7 @@ class MaterializationBehaviorTest(unittest.TestCase):
                             "partition_id": partition_id,
                             "resource_type": "feature",
                             "row_count": 1,
-                            "schema": {
+                            "iceberg_schema": {
                                 "timestamp": "timestamp",
                                 "symbol": "string",
                                 "feature_value": "double",

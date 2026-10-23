@@ -74,7 +74,7 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
                 "partition_id": self.partition_ids[index],
                 "resource_type": "dataset",
                 "row_count": index + 1,
-                "schema": schema
+                "iceberg_schema": schema
                 or {"timestamp": "timestamp", "symbol": "string"},
                 "content_hash": content_hash or f"hash-{index}",
                 "snapshot_id": 42,
@@ -222,7 +222,7 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
                 "partition_id": partition_id,
                 "resource_type": resource_type,
                 "row_count": 3,
-                "schema": {
+                "iceberg_schema": {
                     "timestamp": "timestamp",
                     "symbol": "string",
                     "feature_value": "double",

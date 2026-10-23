@@ -346,7 +346,7 @@ COMPLETION_VALIDATION = {
     "missing_schema": {
         "summary": "Committed schema is required",
         "value": validation_example(
-            ["body", 0, "schema"], "Field required", "missing", {}
+            ["body", 0, "iceberg_schema"], "Field required", "missing", {}
         ),
     },
     "empty_content_hash": {
@@ -1786,7 +1786,7 @@ def _completion_plan_ids(
                                 "detail": "Completion batch contains duplicate partition IDs."
                             },
                         },
-                        "schema": {
+                        "iceberg_schema": {
                             "summary": "Schema mismatch",
                             "value": {
                                 "detail": "Completion batch has conflicting schemas for one Iceberg table."
@@ -1833,7 +1833,7 @@ def complete_partitions(
                         "partition_id": "00000000-0000-0000-0000-000000000001",
                         "resource_type": "dataset",
                         "row_count": 1250,
-                        "schema": {
+                        "iceberg_schema": {
                             "timestamp": "timestamp",
                             "symbol": "string",
                         },
@@ -1951,13 +1951,13 @@ def complete_partitions(
             )
             if (
                 table_key in schema_by_table
-                and schema_by_table[table_key] != item.schema_
+                and schema_by_table[table_key] != item.iceberg_schema
             ):
                 raise HTTPException(
                     status_code=409,
                     detail="Completion batch has conflicting schemas for one Iceberg table.",
                 )
-            schema_by_table[table_key] = item.schema_
+            schema_by_table[table_key] = item.iceberg_schema
             requests[item.partition_id] = request
 
             cursor.execute(
@@ -1967,7 +1967,10 @@ def complete_partitions(
                       AND receipt.schema IS NOT NULL""",
                 (request["name"], request["version"]),
             )
-            if any(row["schema"] != item.schema_ for row in cursor.fetchall()):
+            if any(
+                row["schema"] != item.iceberg_schema
+                for row in cursor.fetchall()
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail="Completion schema conflicts with an existing Iceberg table receipt.",
@@ -1984,14 +1987,19 @@ def complete_partitions(
                     existing["content_hash"] != item.content_hash
                     or existing["snapshot_id"] != item.snapshot_id
                     or existing["row_count"] != item.row_count
-                    or existing["schema"] != item.schema_
+                    or existing["schema"] != item.iceberg_schema
                 ):
                     raise HTTPException(
                         status_code=409,
                         detail="Partition receipt conflicts with an existing completion.",
                     )
                 results[item.partition_id] = {
-                    **existing,
+                    "partition_id": existing["partition_id"],
+                    "content_hash": existing["content_hash"],
+                    "snapshot_id": existing["snapshot_id"],
+                    "row_count": existing["row_count"],
+                    "iceberg_schema": existing["schema"],
+                    "created_at": existing["created_at"],
                     "resource_type": item.resource_type,
                 }
             elif request["status"] != "pending":
@@ -2010,13 +2018,14 @@ def complete_partitions(
                 f"""INSERT INTO {receipt_table}
                     (partition_id, content_hash, snapshot_id, row_count, schema)
                     VALUES (%s, %s, %s, %s, %s)
-                    RETURNING partition_id, content_hash, snapshot_id, row_count, schema, created_at""",
+                    RETURNING partition_id, content_hash, snapshot_id, row_count,
+                              schema AS iceberg_schema, created_at""",
                 (
                     item.partition_id,
                     item.content_hash,
                     item.snapshot_id,
                     item.row_count,
-                    Jsonb(item.schema_),
+                    Jsonb(item.iceberg_schema),
                 ),
             )
             receipt = cursor.fetchone()

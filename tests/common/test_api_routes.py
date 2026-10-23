@@ -3,6 +3,9 @@
 import unittest
 from uuid import UUID
 
+from pydantic import BaseModel
+
+from ml_platform.common.api import dtos
 from ml_platform.common.api.routes import (
     DatasetRoutes,
     FeatureRoutes,
@@ -42,3 +45,27 @@ class ApiRoutesTest(unittest.TestCase):
         self.assertEqual(
             PartitionRoutes.COMPLETE.template, "/partitions/complete"
         )
+
+    def test_all_api_dto_fields_have_openapi_descriptions(self) -> None:
+        """Public request and response fields explain their OpenAPI contract."""
+        api_models = (
+            model
+            for model in vars(dtos).values()
+            if (
+                isinstance(model, type)
+                and issubclass(model, BaseModel)
+                and model is not BaseModel
+                and model.__module__ == dtos.__name__
+            )
+        )
+        for model in api_models:
+            missing_fields = [
+                name
+                for name, field in model.model_fields.items()
+                if not field.description
+            ]
+            self.assertEqual(
+                missing_fields,
+                [],
+                f"{model.__name__} fields require OpenAPI descriptions.",
+            )

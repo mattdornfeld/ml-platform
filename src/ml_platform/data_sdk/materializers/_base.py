@@ -25,6 +25,8 @@ from ml_platform.common.types import (
     PartitionType,
     ResourceName,
     ResourceVersion,
+    RowCount,
+    SnapshotId,
 )
 from ml_platform.data_sdk.materializers._constants import (
     materialization_api_url,
@@ -61,7 +63,7 @@ class PartitionDependency(BaseConfig):
     timestamp: PartitionTimestamp = Field(
         description="UTC timestamp that identifies the parent logical partition."
     )
-    snapshot_id: int = Field(
+    snapshot_id: SnapshotId = Field(
         ge=0,
         description="Iceberg snapshot containing the pinned parent partition revision.",
     )
@@ -239,7 +241,7 @@ class Materializer[Config: MaterializerConfig](ABC):
         ).validate(data_frame)
 
     def _complete_partitions(
-        self, spark: SparkSession, snapshot_id: int
+        self, spark: SparkSession, snapshot_id: SnapshotId
     ) -> None:
         """Report committed partition revisions through the control-plane API."""
         table = self.iceberg_table
@@ -258,8 +260,8 @@ class Materializer[Config: MaterializerConfig](ABC):
                 {
                     "partition_id": partition.partition_id,
                     "resource_type": table.resource_type,
-                    "row_count": row_counts.get(partition_key, 0),
-                    "schema": table_schema,
+                    "row_count": row_counts.get(partition_key, RowCount(0)),
+                    "iceberg_schema": table_schema,
                     "content_hash": content_hashes.get(
                         partition_key, table.empty_content_hash()
                     ),
