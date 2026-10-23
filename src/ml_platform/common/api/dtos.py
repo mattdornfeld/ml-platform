@@ -6,6 +6,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import (
+    BaseModel,
     ConfigDict,
     Field,
     computed_field,
@@ -13,7 +14,6 @@ from pydantic import (
     model_validator,
 )
 
-from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.configs import (
     DataType,
     EntityKey,
@@ -27,12 +27,18 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
 )
 
 
-class _ApiModel(BaseConfig):
-    """HTTP DTO base retaining JSON coercion while inheriting common safeguards."""
+class _ApiModel(BaseModel):
+    """Frozen HTTP DTO base with only JSON-boundary type coercion enabled."""
 
     model_config = ConfigDict(
+        extra="forbid",
         strict=False,
-        frozen=False,
+        frozen=True,
+        validate_assignment=True,
+        validate_default=True,
+        revalidate_instances="always",
+        arbitrary_types_allowed=False,
+        allow_inf_nan=False,
         validate_by_name=True,
     )
 
