@@ -39,6 +39,7 @@ from ml_platform.api.repositories._partition_validation import (
     validate_partition_timestamps,
 )
 from ml_platform.api.repositories.exceptions import (
+    DatasetPartitionTypeConfigurationError,
     DatasetVersionExistsError,
     UnsupportedDatasetStatusError,
 )
@@ -51,6 +52,7 @@ from ml_platform.common.types import (
     JobId,
     PartitionId,
     PartitionTimestamp,
+    PartitionType,
     ResourceName,
     ResourceVersion,
     SnapshotId,
@@ -63,6 +65,21 @@ class DatasetRepository:
     """Persist and read immutable datasets and their partition requests."""
 
     session: Session
+
+    @staticmethod
+    def _partition_type(dataset: Dataset) -> PartitionType:
+        """Deserialize the cadence needed by this private write workflow."""
+        raw_partition_type = dataset.config.get("partition_type")
+        if not isinstance(raw_partition_type, str):
+            raise DatasetPartitionTypeConfigurationError(
+                ResourceName(dataset.name), ResourceVersion(dataset.version)
+            )
+        try:
+            return PartitionType(raw_partition_type)
+        except ValueError as error:
+            raise DatasetPartitionTypeConfigurationError(
+                ResourceName(dataset.name), ResourceVersion(dataset.version)
+            ) from error
 
     @staticmethod
     def _status(dataset: Dataset) -> DatasetStatus:
@@ -343,7 +360,7 @@ class DatasetRepository:
             name=name,
             version=version,
             resource_type=ResourceType.DATASET,
-            partition_type=self.definition(dataset).config.partition_type,
+            partition_type=self._partition_type(dataset),
             timestamps=timestamps,
         )
         existing: list[MaterializationPartition] = []
