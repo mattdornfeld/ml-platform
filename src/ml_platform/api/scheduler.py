@@ -392,8 +392,8 @@ class JobScheduler:
             connection.cursor() as cursor,
         ):
             cursor.execute(
-                """SELECT features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters,
-                json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'argument_name', dependencies.argument_name, 'input_window', jsonb_build_object('lookback_partitions', dependencies.num_lookback_partitions))) AS datasets,
+                """SELECT features.name, features.version, features.dtype, features.frequency, features.keys, features.validations, features.transform, features.description, features.parameters,
+                json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'input_window', jsonb_build_object('lookback_partitions', dependencies.num_lookback_partitions))) AS datasets,
                 (SELECT json_agg(json_build_object(
                     'partition_id', request.partition_id,
                     'timestamp', request.timestamp,
@@ -416,7 +416,7 @@ class JobScheduler:
                 JOIN feature_dataset_dependencies dependencies ON dependencies.feature_name = features.name AND dependencies.feature_version = features.version
                 JOIN datasets AS input_datasets ON input_datasets.name = dependencies.dataset_name
                   AND input_datasets.version = dependencies.dataset_version
-                WHERE target.job_id = %s GROUP BY features.name, features.version, features.dtype, features.frequency, features.feature_keys, features.validations, features.transform, features.description, features.parameters""",
+                WHERE target.job_id = %s GROUP BY features.name, features.version, features.dtype, features.frequency, features.keys, features.validations, features.transform, features.description, features.parameters""",
                 (job_id, job_id),
             )
             row = cursor.fetchone()
@@ -431,7 +431,7 @@ class JobScheduler:
                 "version",
                 "dtype",
                 "frequency",
-                "feature_keys",
+                "keys",
                 "validations",
                 "transform",
                 "description",
@@ -450,8 +450,8 @@ class JobScheduler:
             connection.cursor() as cursor,
         ):
             cursor.execute(
-                """SELECT labels.name, labels.version, labels.dtype, labels.frequency, labels.feature_keys, labels.validations, labels.transform, labels.description, labels.parameters,
-                json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'argument_name', dependencies.argument_name, 'input_window', jsonb_build_object('lookback_partitions', dependencies.num_lookback_partitions, 'lookahead_partitions', dependencies.num_lookahead_partitions))) AS datasets,
+                """SELECT labels.name, labels.version, labels.dtype, labels.frequency, labels.keys, labels.validations, labels.transform, labels.description, labels.parameters,
+                json_agg(DISTINCT jsonb_build_object('name', dependencies.dataset_name, 'version', dependencies.dataset_version, 'dataset_type', input_datasets.dataset_type, 'input_window', jsonb_build_object('lookback_partitions', dependencies.num_lookback_partitions, 'lookahead_partitions', dependencies.num_lookahead_partitions))) AS datasets,
                 (SELECT json_agg(json_build_object(
                     'partition_id', request.partition_id,
                     'timestamp', request.timestamp,
@@ -474,7 +474,7 @@ class JobScheduler:
                 JOIN label_dataset_dependencies dependencies ON dependencies.label_name = labels.name AND dependencies.label_version = labels.version
                 JOIN datasets AS input_datasets ON input_datasets.name = dependencies.dataset_name
                   AND input_datasets.version = dependencies.dataset_version
-                WHERE target.job_id = %s GROUP BY labels.name, labels.version, labels.dtype, labels.frequency, labels.feature_keys, labels.validations, labels.transform, labels.description, labels.parameters""",
+                WHERE target.job_id = %s GROUP BY labels.name, labels.version, labels.dtype, labels.frequency, labels.keys, labels.validations, labels.transform, labels.description, labels.parameters""",
                 (job_id, job_id),
             )
             row = cursor.fetchone()
@@ -489,7 +489,7 @@ class JobScheduler:
                 "version",
                 "dtype",
                 "frequency",
-                "feature_keys",
+                "keys",
                 "validations",
                 "transform",
                 "description",

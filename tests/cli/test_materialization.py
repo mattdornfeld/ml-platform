@@ -27,12 +27,11 @@ time_range: {start_date: 2026-01-01, end_date: 2026-01-02}
 version: 1
 dtype: double
 frequency: daily
-feature_keys: [symbol]
+keys: [symbol]
 datasets:
   - name: prices
     version: 2
     dataset_type: market_data
-    argument_name: market_data
     input_window:
       lookback_partitions: 1
 transform: ml_platform.data_sdk.LogReturnTransform
@@ -81,7 +80,6 @@ validations:
                     "name": "prices",
                     "version": 2,
                     "dataset_type": "market_data",
-                    "argument_name": "market_data",
                     "input_window": {"lookback_partitions": 1},
                 }
             ],

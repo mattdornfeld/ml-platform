@@ -12,7 +12,7 @@ from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk._exceptions import DataSdkError
 
 
-class FeatureKey(StrEnum):
+class EntityKey(StrEnum):
     """Supported logical entity keys emitted by data transforms."""
 
     SYMBOL = "symbol"
@@ -126,10 +126,6 @@ class DatasetDependency(BaseConfig):
     )
     dataset_type: DatasetType = Field(
         description="Kind of upstream dataset used to resolve its Iceberg namespace."
-    )
-    argument_name: str = Field(
-        pattern=r"^[a-z][a-z0-9_]*$",
-        description="Transform constructor argument receiving this dataset.",
     )
 
     @property

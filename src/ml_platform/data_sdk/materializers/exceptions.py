@@ -19,7 +19,7 @@ class DatasetPartitionPlanError(MaterializerError):
     """Raised when an output partition lacks its immutable upstream data plan."""
 
 
-class DuplicateDatasetArgumentError(MaterializerError):
+class DuplicateDatasetNameError(MaterializerError):
     """Raised when declared datasets resolve to the same transform argument."""
 
 
@@ -71,8 +71,8 @@ class FiniteValuesValidationError(DataFrameValidationError):
     """Raised when a numeric output value is NaN or infinite."""
 
 
-class InputFeatureKeysValidationError(DataFrameValidationError):
-    """Raised when output feature keys cannot be traced to an input dataset."""
+class InputKeysValidationError(DataFrameValidationError):
+    """Raised when output entity keys cannot be traced to an input dataset."""
 
 
 class TransformLayoutValidationError(DataFrameValidationError):

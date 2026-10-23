@@ -8,7 +8,7 @@ The initial database schema is [src/ml_platform/api/sql/schema.sql](../src/ml_pl
 
 Datasets and features are distinct resources, each identified by an immutable `(name, version)` pair. A dataset has a typed `dataset_type` and an opaque `config JSONB` document. The initial supported type is `market_data`. Spark and Iceberg own the dataset's physical schema.
 
-Feature registration is normalized rather than stored as an opaque configuration. A feature has `dtype`, `frequency`, ordered `feature_keys`, `transform`, `description`, `parameters`, and `validations` fields. Its `datasets` payload creates rows in `feature_dataset_dependencies`; each row identifies an existing `(dataset_name, dataset_version)` and its `num_lookback_partitions`. Foreign keys prevent registering a feature dependency on a dataset version that does not exist.
+Feature registration is normalized rather than stored as an opaque configuration. A feature has `dtype`, `frequency`, ordered `keys`, `transform`, `description`, `parameters`, and `validations` fields. Its `datasets` payload creates rows in `feature_dataset_dependencies`; each row identifies an existing `(dataset_name, dataset_version)` and its `num_lookback_partitions`. Foreign keys prevent registering a feature dependency on a dataset version that does not exist.
 
 A new dataset or feature configuration version creates a new resource version rather than mutating an existing one.
 
@@ -107,7 +107,7 @@ The local deployment installs Kueue's SparkApplication integration, which is cur
 
 ## Iceberg consistency
 
-Every dataset, feature, and label table records the same resource definition in Iceberg table properties: `resource.type`, `resource.name`, `resource.version`, `resource.frequency`, `resource.description`, `resource.dependencies`, and `resource.validations`. Frequency is the table's logical partition cadence (`daily` or `hourly`); dependencies and validations are JSON strings. The shared materializer writes these properties when creating a table and backfills existing tables on their next materialization. Features and labels use canonical layouts inferred from their resource metadata: `timestamp`, ordered `feature_keys`, and respectively `feature_value` or `label_value`. Their frequency determines the Iceberg partition transform. Dataset transforms retain ownership of arbitrary schemas and partition specs.
+Every dataset, feature, and label table records the same resource definition in Iceberg table properties: `resource.type`, `resource.name`, `resource.version`, `resource.frequency`, `resource.description`, `resource.dependencies`, and `resource.validations`. Frequency is the table's logical partition cadence (`daily` or `hourly`); dependencies and validations are JSON strings. The shared materializer writes these properties when creating a table and backfills existing tables on their next materialization. Features and labels use canonical layouts inferred from their resource metadata: `timestamp`, ordered `keys`, and respectively `feature_value` or `label_value`. Their frequency determines the Iceberg partition transform. Dataset transforms retain ownership of arbitrary schemas and partition specs.
 
 An Iceberg snapshot belongs to an Iceberg table, not a single partition. The resource identity held by the update request identifies that table, while `snapshot_id` identifies the table state that committed the result.
 
@@ -188,7 +188,6 @@ The API request IDs, rather than a YAML glob or a scan for missing output, defin
 The worker loads the registered feature metadata, including its transform path, parameters, and `feature_dataset_dependencies` rows. Each dependency declares:
 
 - the dataset `(name, version)`;
-- `input_name`, the name of the transform constructor argument; and
 - `num_lookback_partitions`, the number of preceding available source partitions required for input coverage and lineage.
 
 For every requested feature partition, the API resolves the requested output partition and the preceding calendar dataset partitions implied by `num_lookback_partitions` before creating a job. Dataset materialization writes an empty receipt for a day with no market rows, so every required calendar partition remains part of the reproducible input range. The API persists the planned exact completed dataset partition IDs with the request; those immutable receipts retain the corresponding content hashes and Iceberg snapshots. The worker receives the immutable plan.
@@ -197,7 +196,7 @@ The worker reads the resolved Iceberg input partitions into Spark and injects ea
 
 ### Transform contract
 
-A feature transform is a frozen dataclass implementing `FeatureTransform`. Its constructor receives a named `Dataset` for each declared `input_name` and typed values from the feature `parameters` object.
+A feature transform is a frozen dataclass implementing `FeatureTransform`. Its constructor receives a named `Dataset` for each declared dataset name and typed values from the feature `parameters` object.
 
 ```python
 @dataclass(frozen=True)
@@ -208,9 +207,9 @@ class TrailingVolatilityTransform(FeatureTransform):
     def __call__(self) -> DataFrame: ...
 ```
 
-The materialization harness verifies that declared dependency names exactly match dataset constructor arguments, validates parameter names and types, and invokes the transform. The transform can perform arbitrary Spark operations, but it does not choose input partitions, write output storage, or create lineage records.
+The materialization harness verifies that declared dataset names exactly match dataset constructor arguments, validates parameter names and types, and invokes the transform. The transform can perform arbitrary Spark operations, but it does not choose input partitions, write output storage, or create lineage records.
 
-The transform returns a Spark `DataFrame` with exactly these logical columns, where the middle columns are the registered ordered `feature_keys` (currently `[symbol]`):
+The transform returns a Spark `DataFrame` with exactly these logical columns, where the middle columns are the registered ordered `keys` (currently `[symbol]`):
 
 ```text
 timestamp, symbol, feature_value
@@ -218,9 +217,9 @@ timestamp, symbol, feature_value
 
 The harness always enforces the following invariants before any Iceberg write:
 
-- the returned column set is exactly `timestamp`, the configured feature keys, and `feature_value`;
+- the returned column set is exactly `timestamp`, the configured entity keys, and `feature_value`;
 - `timestamp`, every feature key, and `feature_value` are non-null, and `feature_value` is castable to the registered `dtype`;
-- each `(timestamp, feature_keys)` tuple is unique; and
+- each `(timestamp, keys)` tuple is unique; and
 - the emitted output-partition set contains no partition outside the requested output-partition set.
 
 The feature YAML or API `validations` field is a list of tagged `ValidationConfig` objects:
@@ -232,10 +231,10 @@ validations:
     temporal_filter:
       type: xnys_regular_session
   - type: finite_feature_value
-  - type: feature_keys_from_input
+  - type: keys_from_input
 ```
 
-`MaterializationValidator` is the shared pre-write contract for every materializer. It always validates required or exact columns, non-null persisted values, unique logical keys, unexpected output partitions, and static transform layout declarations. Each declared validation independently contributes its check. `minimum_rows` applies to each requested partition selected by its `temporal_filter`, which defaults to `all_partitions`; partitions outside that filter may complete empty. The implemented `xnys_regular_session` filter selects daily or hourly partitions that overlap a real XNYS regular session, including its holiday, daylight-saving, and early-close schedule. `finite_feature_value` rejects `NaN`, positive infinity, and negative infinity after the dtype cast. `feature_keys_from_input` rejects feature-key values that do not occur in the injected input datasets.
+`MaterializationValidator` is the shared pre-write contract for every materializer. It always validates required or exact columns, non-null persisted values, unique logical keys, unexpected output partitions, and static transform layout declarations. Each declared validation independently contributes its check. `minimum_rows` applies to each requested partition selected by its `temporal_filter`, which defaults to `all_partitions`; partitions outside that filter may complete empty. The implemented `xnys_regular_session` filter selects daily or hourly partitions that overlap a real XNYS regular session, including its holiday, daylight-saving, and early-close schedule. `finite_feature_value` rejects `NaN`, positive infinity, and negative infinity after the dtype cast. `keys_from_input` rejects entity-key values that do not occur in the injected input datasets.
 
 ### Commit and completion
 

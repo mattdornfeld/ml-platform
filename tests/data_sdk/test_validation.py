@@ -10,12 +10,13 @@ from unittest.mock import patch
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as spark_functions
 
+from ml_platform.data_sdk.configs import DataType, RunFrequency
 from ml_platform.data_sdk.dataset_transforms._market_data import (
     MarketDataTransform,
 )
 from ml_platform.data_sdk.exceptions import (
     FiniteValuesValidationError,
-    InputFeatureKeysValidationError,
+    InputKeysValidationError,
     RequestedPartitionsValidationError,
 )
 from ml_platform.data_sdk.materializers import (
@@ -35,7 +36,7 @@ from ml_platform.data_sdk.materializers._feature import (
 )
 from ml_platform.data_sdk.transforms._types import (
     DatasetType,
-    FeatureKey,
+    EntityKey,
     PartitionType,
 )
 
@@ -142,7 +143,7 @@ class MaterializerValidationTest(unittest.TestCase):
                 description="Test market data.",
                 warehouse_dir="warehouse",
                 dataset_type=DatasetType.MARKET_DATA,
-                keys=[FeatureKey.SYMBOL],
+                keys=[EntityKey.SYMBOL],
                 partition_type=PartitionType.DAILY,
                 symbols=["AAA"],
                 validations=[],
@@ -205,14 +206,13 @@ class MaterializerValidationTest(unittest.TestCase):
                 "version": 1,
                 "description": "Test feature.",
                 "warehouse_dir": "temporary-warehouse",
-                "dtype": "double",
-                "frequency": "daily",
+                "dtype": DataType.DOUBLE,
+                "frequency": RunFrequency.DAILY,
                 "datasets": [
                     {
                         "name": "sp500",
                         "version": 3,
                         "dataset_type": DatasetType.MARKET_DATA,
-                        "argument_name": "market_data",
                         "input_window": {"lookback_partitions": 1},
                     }
                 ],
@@ -224,8 +224,8 @@ class MaterializerValidationTest(unittest.TestCase):
                         "reason": "Each requested feature partition requires a row.",
                     },
                     {
-                        "type": "feature_keys_from_input",
-                        "reason": "Feature keys must occur in source market data.",
+                        "type": "keys_from_input",
+                        "reason": "Entity keys must occur in source market data.",
                     },
                 ],
                 "partitions": [
@@ -282,7 +282,7 @@ class MaterializerValidationTest(unittest.TestCase):
                 )
             )
         with self.assertRaisesRegex(
-            InputFeatureKeysValidationError, "absent from input"
+            InputKeysValidationError, "absent from input"
         ):
             validate_feature(
                 feature("BBB", 1.0).selectExpr(
@@ -323,7 +323,7 @@ class MaterializerValidationTest(unittest.TestCase):
                     callback.timestamp for callback in callbacks
                 ),
                 partitions=callbacks,
-                feature_keys=["symbol"],
+                keys=["symbol"],
             )
         )
         source = self.spark.createDataFrame(

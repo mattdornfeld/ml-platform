@@ -17,7 +17,7 @@ from ml_platform.data_sdk.transforms._types import (
     Dataset,
     DatasetReference,
     DataType,
-    FeatureKey,
+    EntityKey,
     PartitionType,
 )
 
@@ -77,7 +77,7 @@ class BuiltInTransformTest(unittest.TestCase):
             LogReturnTransform(
                 market_data=self._market_data(),
                 data_type=DataType.DOUBLE,
-                keys=[FeatureKey.SYMBOL],
+                keys=[EntityKey.SYMBOL],
                 partition_type=PartitionType.HOURLY,
             )()
             .orderBy("timestamp")
@@ -95,7 +95,7 @@ class BuiltInTransformTest(unittest.TestCase):
                 market_data=self._market_data(),
                 lookback_bars=2,
                 data_type=DataType.DOUBLE,
-                keys=[FeatureKey.SYMBOL],
+                keys=[EntityKey.SYMBOL],
                 partition_type=PartitionType.HOURLY,
             )()
             .orderBy("timestamp")
@@ -112,7 +112,7 @@ class BuiltInTransformTest(unittest.TestCase):
                 market_data=self._market_data(),
                 lookback_bars=2,
                 data_type=DataType.DOUBLE,
-                keys=[FeatureKey.SYMBOL],
+                keys=[EntityKey.SYMBOL],
                 partition_type=PartitionType.HOURLY,
             )()
             .orderBy("timestamp")
@@ -131,7 +131,7 @@ class BuiltInTransformTest(unittest.TestCase):
                 profit_taking_multiplier=0.1,
                 stop_loss_multiplier=0.1,
                 data_type=DataType.INT,
-                keys=[FeatureKey.SYMBOL],
+                keys=[EntityKey.SYMBOL],
                 partition_type=PartitionType.HOURLY,
             )()
             .orderBy("timestamp")

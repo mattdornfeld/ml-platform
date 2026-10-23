@@ -4,12 +4,11 @@ version: 2
 description: Triple-barrier long-short labels from hourly market data.
 dtype: int
 frequency: daily
-feature_keys: [symbol]
+keys: [symbol]
 datasets:
   - name: sp500
     version: 3
     dataset_type: market_data
-    argument_name: market_data
     input_window:
       lookback_partitions: 1
       lookahead_partitions: 1

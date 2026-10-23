@@ -2,16 +2,24 @@
 
 from dataclasses import dataclass
 
+from pydantic import Field
+
 from ml_platform.data_sdk.materializers._transform_materializer import (
     TransformMaterializationConfig,
     TransformMaterializer,
     TransformTableDefinition,
 )
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
+from ml_platform.data_sdk.transforms._types import LabelDatasetDependency
 
 
 class LabelMaterializationConfig(TransformMaterializationConfig):
     """Complete JSON contract consumed by a label Spark materializer."""
+
+    datasets: list[LabelDatasetDependency] = Field(
+        min_length=1,
+        description="Versioned datasets injected into label transforms by dataset name.",
+    )
 
 
 @dataclass(frozen=True)

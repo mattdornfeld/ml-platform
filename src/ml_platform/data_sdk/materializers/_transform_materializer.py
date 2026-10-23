@@ -30,7 +30,7 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
 )
 from ml_platform.data_sdk.materializers.exceptions import (
     DatasetPartitionPlanError,
-    DuplicateDatasetArgumentError,
+    DuplicateDatasetNameError,
     TransformDatasetInjectionError,
     TransformImportError,
     TransformParameterError,
@@ -39,10 +39,10 @@ from ml_platform.data_sdk.materializers.exceptions import (
 from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._types import (
     Dataset,
+    DatasetDependency,
     DatasetReference,
     DataType,
-    DatasetDependency,
-    FeatureKey,
+    EntityKey,
     PartitionType,
 )
 
@@ -77,11 +77,9 @@ class TransformMaterializer[
         """Return static table values declared by this transform resource type."""
 
     @property
-    def _feature_key_columns(self) -> tuple[str, ...]:
+    def _key_columns(self) -> tuple[str, ...]:
         """Return the immutable configured entity columns for one transform row."""
-        return tuple(
-            feature_key.value for feature_key in self.config.feature_keys
-        )
+        return tuple(feature_key.value for feature_key in self.config.keys)
 
     @property
     def iceberg_table(self) -> IcebergTable:
@@ -94,7 +92,7 @@ class TransformMaterializer[
             resource_type=self._table_definition.resource_type,
             schema={
                 "timestamp": "timestamp",
-                **dict.fromkeys(self._feature_key_columns, "string"),
+                **dict.fromkeys(self._key_columns, "string"),
                 self._table_definition.value_column: self.config.dtype,
             },
             partition_type=self.config.partition_type,
@@ -110,8 +108,8 @@ class TransformMaterializer[
             additional_properties=(
                 ("transform.dtype", self.config.dtype),
                 (
-                    "transform.feature_keys",
-                    json.dumps(self.config.feature_keys),
+                    "transform.keys",
+                    json.dumps(self.config.keys),
                 ),
                 ("transform.implementation", self.config.transform),
             ),
@@ -121,7 +119,7 @@ class TransformMaterializer[
         """Hash the canonical persisted columns for partition completion receipts."""
         columns = (
             "timestamp",
-            *self._feature_key_columns,
+            *self._key_columns,
             self._table_definition.value_column,
         )
         return spark_functions.sha2(
@@ -147,11 +145,11 @@ class TransformMaterializer[
             ),
             ExactColumnsValidationConfig(
                 reason="Transform output must use the canonical transform schema.",
-                columns=("timestamp", *self._feature_key_columns, value_column),
+                columns=("timestamp", *self._key_columns, value_column),
             ),
             NonNullValuesValidationConfig(
                 reason="Transform keys and values must be present and castable.",
-                columns=("timestamp", *self._feature_key_columns, value_column),
+                columns=("timestamp", *self._key_columns, value_column),
             ),
             FiniteNumericValuesValidationConfig(
                 reason="Transform values must be finite.",
@@ -159,7 +157,7 @@ class TransformMaterializer[
             ),
             UniqueKeyValidationConfig(
                 reason="Each transform key may have one value per timestamp.",
-                columns=("timestamp", *self._feature_key_columns),
+                columns=("timestamp", *self._key_columns),
             ),
         )
 
@@ -218,19 +216,19 @@ class TransformMaterializer[
         return data_frame.dropDuplicates()
 
     def _load_planned_datasets(self, spark: SparkSession) -> dict[str, Dataset]:
-        """Load declared inputs under the transform argument names supplied by the API."""
+        """Load declared inputs under their dataset names."""
         config = self.config
         injected_datasets: dict[str, Dataset] = {}
         for dataset in config.datasets:
-            if dataset.argument_name in injected_datasets:
-                raise DuplicateDatasetArgumentError(
-                    "Declared datasets resolve to duplicate transform constructor argument "
-                    f"{dataset.argument_name!r} for dataset {dataset.id}."
+            if dataset.name in injected_datasets:
+                raise DuplicateDatasetNameError(
+                    "Declared datasets resolve to duplicate dataset name "
+                    f"{dataset.name!r} for dataset {dataset.id}."
                 )
             data_frame = self._planned_dataset(
                 spark, config.partitions, dataset
             )
-            injected_datasets[dataset.argument_name] = Dataset(
+            injected_datasets[dataset.name] = Dataset(
                 metadata=DatasetReference(dataset.name, dataset.version),
                 frame=data_frame,
             )
@@ -282,7 +280,7 @@ class TransformMaterializer[
         }
         annotations = get_type_hints(transform_class.__init__)
         injected_parameters = {
-            "keys": [FeatureKey(key) for key in config.feature_keys],
+            "keys": [EntityKey(key) for key in config.keys],
             "partition_type": config.partition_type,
             "data_type": DataType(config.dtype),
         }

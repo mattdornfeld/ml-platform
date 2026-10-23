@@ -28,7 +28,7 @@ from ml_platform.data_sdk.materializers.exceptions import (
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.transforms._types import (
     DatasetType,
-    FeatureKey,
+    EntityKey,
     PartitionType,
 )
 
@@ -47,7 +47,7 @@ class DatasetMaterializationConfig(MaterializerConfig):
     dataset_type: DatasetType = Field(
         description="Kind of dataset transform to execute."
     )
-    keys: list[FeatureKey] = Field(
+    keys: list[EntityKey] = Field(
         min_length=1,
         description="Ordered logical entity keys emitted by the dataset transform.",
     )

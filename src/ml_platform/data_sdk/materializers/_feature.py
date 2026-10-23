@@ -2,8 +2,10 @@
 
 from dataclasses import dataclass
 
+from pydantic import Field
+
 from ml_platform.data_sdk.materializers._materialization_validator import (
-    FeatureKeysFromInputValidationConfig,
+    KeysFromInputValidationConfig,
     ValidationConfig,
 )
 from ml_platform.data_sdk.materializers._transform_materializer import (
@@ -12,10 +14,16 @@ from ml_platform.data_sdk.materializers._transform_materializer import (
     TransformTableDefinition,
 )
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
+from ml_platform.data_sdk.transforms._types import FeatureDatasetDependency
 
 
 class FeatureMaterializationConfig(TransformMaterializationConfig):
     """Complete JSON contract consumed by a feature Spark materializer."""
+
+    datasets: list[FeatureDatasetDependency] = Field(
+        min_length=1,
+        description="Versioned datasets injected into feature transforms by dataset name.",
+    )
 
 
 @dataclass(frozen=True)
@@ -53,9 +61,9 @@ class FeatureMaterializer(
         """Add feature-specific input-key lineage validation."""
         return (
             *super().validation_configs,
-            FeatureKeysFromInputValidationConfig(
-                reason="Feature keys must occur in at least one input dataset.",
-                feature_keys=self._feature_key_columns,
+            KeysFromInputValidationConfig(
+                reason="Entity keys must occur in at least one input dataset.",
+                keys=self._key_columns,
                 dataset_table_identifiers=tuple(
                     self._dataset_table_identifier(dataset)
                     for dataset in self.config.datasets

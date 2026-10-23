@@ -185,7 +185,7 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
         with psycopg.connect(self.database_url) as connection:
             if resource_type == "feature":
                 connection.execute("""INSERT INTO features
-                    (name, version, dtype, frequency, feature_keys, transform, description)
+                    (name, version, dtype, frequency, keys, transform, description)
                     VALUES ('derived', 1, 'double', 'daily', '["symbol"]'::jsonb, 'example.Transform', 'Derived data')""")
                 request_statement = """INSERT INTO feature_partition_update_requests
                     (partition_id, job_id, feature_name, feature_version, timestamp, callback_token)

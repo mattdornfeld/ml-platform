@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from pyspark.sql import DataFrame
 
 from ml_platform.data_sdk._exceptions import DataSdkError
-from ml_platform.data_sdk.transforms._types import FeatureKey, PartitionType
+from ml_platform.data_sdk.transforms._types import EntityKey, PartitionType
 from ml_platform.data_sdk.utils import record
 
 
@@ -18,7 +18,7 @@ class DataTransformSchemaError(DataSdkError):
 class DataTransform(ABC):
     """Shared base for user-defined dataset, feature, and label calculations."""
 
-    keys: Sequence[FeatureKey]
+    keys: Sequence[EntityKey]
     partition_type: PartitionType
 
     @property

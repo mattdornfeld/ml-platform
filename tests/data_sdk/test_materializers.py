@@ -164,13 +164,12 @@ class TransformMaterializerContractTest(unittest.TestCase):
             "warehouse_dir": "s3a://warehouse",
             "dtype": "double",
             "frequency": "daily",
-            "feature_keys": ["symbol"],
+            "keys": ["symbol"],
             "datasets": [
                 {
                     "name": "sp500",
                     "version": 3,
                     "dataset_type": "market_data",
-                    "argument_name": "market_data",
                     "input_window": {"lookback_partitions": 1},
                 }
             ],
@@ -195,8 +194,21 @@ class TransformMaterializerContractTest(unittest.TestCase):
         feature_table = FeatureMaterializer(
             FeatureMaterializationConfig.model_validate_json(json.dumps(common))
         ).iceberg_table
+        label_common = common | {
+            "datasets": [
+                {
+                    **common["datasets"][0],
+                    "input_window": {
+                        "lookback_partitions": 1,
+                        "lookahead_partitions": 1,
+                    },
+                }
+            ]
+        }
         label_table = LabelMaterializer(
-            LabelMaterializationConfig.model_validate_json(json.dumps(common))
+            LabelMaterializationConfig.model_validate_json(
+                json.dumps(label_common)
+            )
         ).iceberg_table
 
         self.assertEqual(

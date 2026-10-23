@@ -620,7 +620,7 @@ def list_features(
     """List feature definitions with logical partition status counts for the dashboard."""
     with connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
-            """SELECT features.name, features.version, features.dtype, features.frequency, features.feature_keys,
+            """SELECT features.name, features.version, features.dtype, features.frequency, features.keys,
             features.description, features.created_at, features.deleted_at, features.deprecated_at, COUNT(request.partition_id) AS partition_count,
             COUNT(request.partition_id) FILTER (WHERE request.status = 'created') AS created_partition_count,
             COUNT(request.partition_id) FILTER (WHERE request.status = 'pending') AS pending_partition_count,
@@ -628,7 +628,7 @@ def list_features(
             FROM features LEFT JOIN feature_partition_update_requests request
               ON request.feature_name = features.name AND request.feature_version = features.version
             WHERE (%s OR features.deleted_at IS NULL)
-            GROUP BY features.name, features.version, features.dtype, features.frequency, features.feature_keys,
+            GROUP BY features.name, features.version, features.dtype, features.frequency, features.keys,
                 features.description, features.created_at, features.deleted_at, features.deprecated_at
             ORDER BY features.name, features.version DESC""",
             (include_deleted,),
@@ -643,7 +643,7 @@ def get_feature(
     """Return one feature, its dependencies, and latest logical partition receipts."""
     with connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
-            """SELECT name, version, dtype, frequency, feature_keys, validations, transform, description,
+            """SELECT name, version, dtype, frequency, keys, validations, transform, description,
             parameters, created_at, deleted_at, deprecated_at FROM features WHERE name = %s AND version = %s""",
             (name, version),
         )
@@ -654,7 +654,7 @@ def get_feature(
             )
         cursor.execute(
             """SELECT dependencies.dataset_name AS name, dependencies.dataset_version AS version,
-            datasets.dataset_type, dependencies.argument_name, dependencies.num_lookback_partitions
+            datasets.dataset_type, dependencies.num_lookback_partitions
             FROM feature_dataset_dependencies AS dependencies
             JOIN datasets ON datasets.name = dependencies.dataset_name AND datasets.version = dependencies.dataset_version
             WHERE dependencies.feature_name = %s AND dependencies.feature_version = %s
@@ -754,15 +754,15 @@ def create_feature(
                     )
             cursor.execute(
                 """INSERT INTO features
-                (name, version, dtype, frequency, feature_keys, validations, transform, description, parameters)
+                (name, version, dtype, frequency, keys, validations, transform, description, parameters)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING name, version, dtype, frequency, feature_keys, validations, transform, description, parameters, created_at""",
+                RETURNING name, version, dtype, frequency, keys, validations, transform, description, parameters, created_at""",
                 (
                     payload.name,
                     payload.version,
                     payload.dtype,
                     payload.frequency,
-                    Json([key.value for key in payload.feature_keys]),
+                    Json([key.value for key in payload.keys]),
                     Json(
                         [
                             validation.model_dump()
@@ -778,14 +778,13 @@ def create_feature(
             for dependency in payload.datasets:
                 cursor.execute(
                     """INSERT INTO feature_dataset_dependencies
-                    (feature_name, feature_version, dataset_name, dataset_version, argument_name, num_lookback_partitions)
-                    VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (feature_name, feature_version, dataset_name, dataset_version, num_lookback_partitions)
+                    VALUES (%s, %s, %s, %s, %s)""",
                     (
                         payload.name,
                         payload.version,
                         dependency.name,
                         dependency.version,
-                        dependency.argument_name,
                         dependency.input_window.lookback_partitions,
                     ),
                 )
@@ -1120,7 +1119,7 @@ def list_labels(
     with connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """SELECT labels.name, labels.version, labels.dtype, labels.frequency,
-            labels.feature_keys, labels.description, labels.created_at,
+            labels.keys, labels.description, labels.created_at,
             labels.deleted_at, labels.deprecated_at,
             COUNT(request.partition_id) AS partition_count,
             COUNT(request.partition_id) FILTER (WHERE request.status = 'created')
@@ -1134,7 +1133,7 @@ def list_labels(
              AND request.label_version = labels.version
             WHERE (%s OR labels.deleted_at IS NULL)
             GROUP BY labels.name, labels.version, labels.dtype, labels.frequency,
-              labels.feature_keys, labels.description, labels.created_at,
+              labels.keys, labels.description, labels.created_at,
               labels.deleted_at, labels.deprecated_at
             ORDER BY labels.name, labels.version DESC""",
             (include_deleted,),
@@ -1149,7 +1148,7 @@ def get_label(
     """Return one label definition, dependencies, and logical partitions."""
     with connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
-            """SELECT name, version, dtype, frequency, feature_keys, validations,
+            """SELECT name, version, dtype, frequency, keys, validations,
             transform, description, parameters, created_at, deleted_at, deprecated_at
             FROM labels WHERE name = %s AND version = %s""",
             (name, version),
@@ -1162,7 +1161,7 @@ def get_label(
         cursor.execute(
             """SELECT dependencies.dataset_name AS name,
             dependencies.dataset_version AS version, datasets.dataset_type,
-            dependencies.argument_name, dependencies.num_lookback_partitions,
+            dependencies.num_lookback_partitions,
             dependencies.num_lookahead_partitions
             FROM label_dataset_dependencies AS dependencies
             JOIN datasets ON datasets.name = dependencies.dataset_name
@@ -1241,17 +1240,17 @@ def create_label(
                     )
             cursor.execute(
                 """INSERT INTO labels
-                (name, version, dtype, frequency, feature_keys, validations, transform,
+                (name, version, dtype, frequency, keys, validations, transform,
                  description, parameters)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING name, version, dtype, frequency, feature_keys, validations,
+                RETURNING name, version, dtype, frequency, keys, validations,
                   transform, description, parameters, created_at""",
                 (
                     payload.name,
                     payload.version,
                     payload.dtype,
                     payload.frequency,
-                    Json([key.value for key in payload.feature_keys]),
+                    Json([key.value for key in payload.keys]),
                     Json(
                         [
                             validation.model_dump()
@@ -1268,14 +1267,13 @@ def create_label(
                 cursor.execute(
                     """INSERT INTO label_dataset_dependencies
                     (label_name, label_version, dataset_name, dataset_version,
-                     argument_name, num_lookback_partitions, num_lookahead_partitions)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                     num_lookback_partitions, num_lookahead_partitions)
+                    VALUES (%s, %s, %s, %s, %s, %s)""",
                     (
                         payload.name,
                         payload.version,
                         dependency.name,
                         dependency.version,
-                        dependency.argument_name,
                         dependency.input_window.lookback_partitions,
                         dependency.input_window.lookahead_partitions,
                     ),

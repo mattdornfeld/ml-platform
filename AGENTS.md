@@ -25,6 +25,7 @@
 - Do not create a property for data used only once, or when inlining is equally clear; inline it at the call site.
 - Encapsulate construction of an object's derived representation inside that object. Pass typed source values to its constructor rather than assembling internal SQL, properties, or similar representations at call sites.
 - Do not use `typing.cast` without explicit user approval. Prefer generics, protocols, type guards, or stronger interfaces that preserve the concrete type.
+- Prefer specialized field types in child classes over union field types in parent classes. Use a generic parent contract when shared behavior needs to retain the child's concrete type.
 
 - Explicitly model external-data and transformation outputs with named, strongly typed classes rather than anonymous broad containers such as `tuple[object, ...]`.
 - Ask the user before changing a public API contract, including endpoint shapes, API DTOs, or user-facing configuration schemas.

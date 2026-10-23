@@ -14,6 +14,14 @@ from pydantic import (
 )
 
 from ml_platform.common.types import BaseConfig
+from ml_platform.data_sdk.configs import (
+    DataType,
+    EntityKey,
+    ParameterKey,
+    ParameterValue,
+    RunFrequency,
+    TransformName,
+)
 from ml_platform.data_sdk.materializers._materialization_validator import (
     DiscriminatedValidationConfig,
 )
@@ -55,12 +63,6 @@ class PartitionStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-class FeatureKey(StrEnum):
-    """Supported logical keys for feature output rows."""
-
-    SYMBOL = "symbol"
-
-
 class DatasetType(StrEnum):
     """Dataset types accepted by the control plane."""
 
@@ -81,7 +83,7 @@ class MarketDataDatasetConfig(_ApiModel):
     validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list
     )
-    keys: list[FeatureKey] = Field(min_length=1)
+    keys: list[EntityKey] = Field(min_length=1)
     partition_type: Literal["hourly", "daily"]
     symbols: list[str] = Field(min_length=1)
     time_range: DatasetTimeRange
@@ -133,7 +135,6 @@ class FeatureDatasetDependency(_ApiModel):
     name: str = Field(min_length=1)
     version: int = Field(gt=0)
     dataset_type: DatasetType
-    argument_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     input_window: FeatureInputWindow
 
 
@@ -148,36 +149,38 @@ class FeatureCreateRequest(_ApiModel):
 
     name: str = Field(min_length=1)
     version: int = Field(gt=0)
-    dtype: Literal["double", "float", "int", "bigint"]
-    frequency: Literal["hourly", "daily"]
-    feature_keys: list[FeatureKey] = Field(
-        default_factory=lambda: [FeatureKey.SYMBOL], min_length=1
+    dtype: DataType
+    frequency: RunFrequency
+    keys: list[EntityKey] = Field(
+        default_factory=lambda: [EntityKey.SYMBOL], min_length=1
     )
     datasets: list[FeatureDatasetDependency] = Field(min_length=1)
-    transform: str = Field(min_length=1)
+    transform: TransformName = Field(min_length=1)
     description: str = Field(min_length=1)
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[ParameterKey, ParameterValue] = Field(default_factory=dict)
     validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list
     )
 
     @model_validator(mode="after")
-    def validate_dataset_arguments(self) -> "FeatureCreateRequest":
-        """Keep every dataset identity and transform argument unambiguous."""
+    def validate_dependencies(self) -> "FeatureCreateRequest":
+        """Keep every dataset identity and transform input unambiguous."""
         identities = {
             (dataset.name, dataset.version) for dataset in self.datasets
         }
-        arguments = {dataset.argument_name for dataset in self.datasets}
         if len(identities) != len(self.datasets):
             raise ValueError(
                 "Feature datasets must have unique name and version identities."
             )
-        if len(arguments) != len(self.datasets):
+        if len({dataset.name for dataset in self.datasets}) != len(
+            self.datasets
+        ):
             raise ValueError(
-                "Feature datasets must have unique transform argument names."
+                "Feature datasets must have unique names because dataset names "
+                "are transform constructor arguments."
             )
-        if len(set(self.feature_keys)) != len(self.feature_keys):
-            raise ValueError("Feature keys must be unique.")
+        if len(set(self.keys)) != len(self.keys):
+            raise ValueError("Entity keys must be unique.")
         return self
 
 
@@ -192,36 +195,38 @@ class LabelCreateRequest(_ApiModel):
 
     name: str = Field(min_length=1)
     version: int = Field(gt=0)
-    dtype: Literal["double", "float", "int", "bigint"]
-    frequency: Literal["hourly", "daily"]
-    feature_keys: list[FeatureKey] = Field(
-        default_factory=lambda: [FeatureKey.SYMBOL], min_length=1
+    dtype: DataType
+    frequency: RunFrequency
+    keys: list[EntityKey] = Field(
+        default_factory=lambda: [EntityKey.SYMBOL], min_length=1
     )
     datasets: list[LabelDatasetDependency] = Field(min_length=1)
-    transform: str = Field(min_length=1)
+    transform: TransformName = Field(min_length=1)
     description: str = Field(min_length=1)
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[ParameterKey, ParameterValue] = Field(default_factory=dict)
     validations: list[DiscriminatedValidationConfig] = Field(
         default_factory=list
     )
 
     @model_validator(mode="after")
-    def validate_dataset_arguments(self) -> "LabelCreateRequest":
-        """Keep every label input identity and transform argument unambiguous."""
+    def validate_dependencies(self) -> "LabelCreateRequest":
+        """Keep every label input identity and transform input unambiguous."""
         identities = {
             (dataset.name, dataset.version) for dataset in self.datasets
         }
-        arguments = {dataset.argument_name for dataset in self.datasets}
         if len(identities) != len(self.datasets):
             raise ValueError(
                 "Label datasets must have unique name and version identities."
             )
-        if len(arguments) != len(self.datasets):
+        if len({dataset.name for dataset in self.datasets}) != len(
+            self.datasets
+        ):
             raise ValueError(
-                "Label datasets must have unique transform argument names."
+                "Label datasets must have unique names because dataset names "
+                "are transform constructor arguments."
             )
-        if len(set(self.feature_keys)) != len(self.feature_keys):
-            raise ValueError("Feature keys must be unique.")
+        if len(set(self.keys)) != len(self.keys):
+            raise ValueError("Entity keys must be unique.")
         return self
 
 

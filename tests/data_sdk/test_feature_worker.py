@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from pyspark.sql import DataFrame
 
+from ml_platform.data_sdk.configs import DataType, RunFrequency
 from ml_platform.data_sdk.exceptions import DatasetPartitionPlanError
 from ml_platform.data_sdk.label_transforms._triple_barrier import (
     TripleBarrierLabelTransform,
@@ -90,7 +91,6 @@ class PlannedInputTest(unittest.TestCase):
                 name="sp500",
                 version=3,
                 dataset_type=DatasetType.MARKET_DATA,
-                argument_name="market_data",
                 input_window=FeatureInputWindow(lookback_partitions=0),
             ),
         )
@@ -113,16 +113,15 @@ class PlannedInputTest(unittest.TestCase):
                     name="sp500",
                     version=3,
                     dataset_type=DatasetType.MARKET_DATA,
-                    argument_name="market_data",
                     input_window=FeatureInputWindow(lookback_partitions=0),
                 ),
             )
 
     @patch.object(FeatureMaterializer, "_planned_dataset")
-    def test_injects_each_declared_dataset_under_its_argument_name(
+    def test_injects_each_declared_dataset_under_its_dataset_name(
         self, planned_dataset: MagicMock
     ) -> None:
-        """Multiple datasets retain their own identity, snapshot plan, and constructor slot."""
+        """Multiple datasets retain their identity, snapshot plan, and name slot."""
         timestamp = datetime(2026, 10, 19, tzinfo=UTC)
         config = FeatureMaterializationConfig.model_validate(
             {
@@ -130,22 +129,20 @@ class PlannedInputTest(unittest.TestCase):
                 "version": 1,
                 "description": "Joined feature.",
                 "warehouse_dir": "temporary-warehouse",
-                "dtype": "double",
-                "frequency": "daily",
+                "dtype": DataType.DOUBLE,
+                "frequency": RunFrequency.DAILY,
                 "transform": "ml_platform.data_sdk.feature_transforms._joined.JoinedTransform",
                 "datasets": [
                     {
-                        "name": "prices_v2",
+                        "name": "prices",
                         "version": 1,
                         "dataset_type": DatasetType.MARKET_DATA,
-                        "argument_name": "prices",
                         "input_window": {"lookback_partitions": 1},
                     },
                     {
-                        "name": "company_facts",
+                        "name": "fundamentals",
                         "version": 2,
                         "dataset_type": DatasetType.MARKET_DATA,
-                        "argument_name": "fundamentals",
                         "input_window": {"lookback_partitions": 0},
                     },
                 ],
@@ -157,14 +154,14 @@ class PlannedInputTest(unittest.TestCase):
                         "partition_dependencies": [
                             {
                                 "partition_id": "prices-parent",
-                                "dataset_name": "prices_v2",
+                                "dataset_name": "prices",
                                 "dataset_version": 1,
                                 "timestamp": timestamp,
                                 "snapshot_id": 42,
                             },
                             {
                                 "partition_id": "facts-parent",
-                                "dataset_name": "company_facts",
+                                "dataset_name": "fundamentals",
                                 "dataset_version": 2,
                                 "timestamp": timestamp,
                                 "snapshot_id": 99,
@@ -185,10 +182,10 @@ class PlannedInputTest(unittest.TestCase):
         self.assertIs(feature, price_frame)
         self.assertIs(datasets["fundamentals"].frame, facts_frame)
         self.assertEqual(
-            planned_dataset.call_args_list[0].args[2].name, "prices_v2"
+            planned_dataset.call_args_list[0].args[2].name, "prices"
         )
         self.assertEqual(
-            planned_dataset.call_args_list[1].args[2].name, "company_facts"
+            planned_dataset.call_args_list[1].args[2].name, "fundamentals"
         )
 
 
@@ -214,16 +211,18 @@ class TransformMaterializerTest(unittest.TestCase):
                 "version": 1,
                 "description": "Labels.",
                 "warehouse_dir": "temporary-warehouse",
-                "dtype": "int",
-                "frequency": "daily",
-                "feature_keys": ["symbol"],
+                "dtype": DataType.INT,
+                "frequency": RunFrequency.DAILY,
+                "keys": ["symbol"],
                 "datasets": [
                     {
-                        "name": "sp500",
+                        "name": "market_data",
                         "version": 3,
                         "dataset_type": DatasetType.MARKET_DATA,
-                        "argument_name": "market_data",
-                        "input_window": {"lookback_partitions": 1},
+                        "input_window": {
+                            "lookback_partitions": 1,
+                            "lookahead_partitions": 1,
+                        },
                     }
                 ],
                 "transform": "ml_platform.data_sdk.label_transforms._triple_barrier.TripleBarrierLabelTransform",
@@ -241,7 +240,7 @@ class TransformMaterializerTest(unittest.TestCase):
                         "partition_dependencies": [
                             {
                                 "partition_id": "market",
-                                "dataset_name": "sp500",
+                                "dataset_name": "market_data",
                                 "dataset_version": 3,
                                 "timestamp": timestamp,
                                 "snapshot_id": 42,

@@ -1,8 +1,9 @@
 """Strict Pydantic configuration ontology for data resources."""
 
+from collections.abc import Sequence
 from datetime import date
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -15,10 +16,11 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
     DiscriminatedValidationConfig,
 )
 from ml_platform.data_sdk.transforms._types import (
+    DatasetDependency,
     DatasetType,
+    EntityKey,
     FeatureDatasetDependency,
     LabelDatasetDependency,
-    FeatureKey,
     PartitionType,
 )
 from ml_platform.data_sdk.transforms._types import DataType as DataType
@@ -29,18 +31,24 @@ __all__ = [
     "DataType",
     "DatasetConfig",
     "DatasetType",
+    "EntityKey",
     "FeatureConfig",
-    "FeatureDatasetConfig",
-    "FeatureKey",
     "LabelConfig",
     "LabelDatasetDependency",
     "MarketDataConfig",
+    "ParameterKey",
+    "ParameterValue",
     "PartitionType",
     "RunFrequency",
     "TimeRange",
     "TransformConfig",
+    "TransformName",
     "TripleBarrierConfig",
 ]
+
+type ParameterKey = str
+type ParameterValue = int | float | str | bool
+type TransformName = str
 
 
 class RunFrequency(StrEnum):
@@ -115,7 +123,7 @@ class DatasetConfig(DataConfig):
     partition_type: PartitionType = Field(
         description="Physical timestamp partition cadence; defaults to the configured run frequency."
     )
-    keys: list[FeatureKey] = Field(
+    keys: list[EntityKey] = Field(
         min_length=1,
         description="Ordered logical entity-key columns that identify each dataset row.",
     )
@@ -127,9 +135,9 @@ class DatasetConfig(DataConfig):
 
     @field_validator("keys", mode="before")
     @classmethod
-    def parse_keys(cls, keys: list[FeatureKey | str]) -> list[FeatureKey]:
-        """Parse YAML key literals into the closed FeatureKey enum."""
-        return [FeatureKey(key) for key in keys]
+    def parse_keys(cls, keys: list[EntityKey | str]) -> list[EntityKey]:
+        """Parse YAML key literals into the closed EntityKey enum."""
+        return [EntityKey(key) for key in keys]
 
     @model_validator(mode="before")
     @classmethod
@@ -145,44 +153,38 @@ class DatasetConfig(DataConfig):
         return values | {"partition_type": run_frequency}
 
 
-class FeatureDatasetConfig(FeatureDatasetDependency):
-    """User-facing dependency mapped to a transform constructor argument."""
-
-
 class TransformConfig(DataConfig):
     """Common typed transformation definition shared by features and labels."""
 
-    dtype: Literal["double", "float", "int", "bigint"] = Field(
+    dtype: DataType = Field(
         description="Spark SQL type used to persist the transform value."
     )
-    frequency: Literal["hourly", "daily"] = Field(
+    frequency: RunFrequency = Field(
         description="Cadence of the transform's materialized partitions."
     )
-    feature_keys: list[FeatureKey] = Field(
-        default_factory=lambda: [FeatureKey.SYMBOL],
+    keys: list[EntityKey] = Field(
+        default_factory=lambda: [EntityKey.SYMBOL],
         min_length=1,
         description="Ordered entity-key columns that identify each transform row.",
     )
-    datasets: list[FeatureDatasetDependency | LabelDatasetDependency] = Field(
+    datasets: Sequence[DatasetDependency] = Field(
         min_length=1,
-        description="Versioned datasets mapped to transform constructor arguments.",
+        description="Versioned datasets injected into transforms by dataset name.",
     )
-    transform: str = Field(
+    transform: TransformName = Field(
         pattern=r"^[a-z_][a-z0-9_.]*\.[A-Za-z_][A-Za-z0-9_]*$",
         description="Absolute import path of the transform implementation.",
     )
-    parameters: dict[str, int | float | str | bool] = Field(
+    parameters: dict[ParameterKey, ParameterValue] = Field(
         default_factory=dict,
         description="Typed keyword arguments passed to the transform constructor.",
     )
 
-    @field_validator("feature_keys", mode="before")
+    @field_validator("keys", mode="before")
     @classmethod
-    def parse_feature_keys(
-        cls, feature_keys: list[FeatureKey | str]
-    ) -> list[FeatureKey]:
-        """Parse YAML key literals into the closed FeatureKey enum."""
-        return [FeatureKey(feature_key) for feature_key in feature_keys]
+    def parse_keys(cls, keys: list[EntityKey | str]) -> list[EntityKey]:
+        """Parse YAML key literals into the closed EntityKey enum."""
+        return [EntityKey(feature_key) for feature_key in keys]
 
     @property
     def partition_type(self) -> PartitionType:
@@ -190,24 +192,25 @@ class TransformConfig(DataConfig):
         return PartitionType(self.frequency)
 
     @model_validator(mode="after")
-    def validate_transform_dependencies(self) -> "TransformConfig":
+    def validate_transform_dependencies(self) -> Self:
         """Require unambiguous transform identities and injected datasets."""
         if len({dataset.id for dataset in self.datasets}) != len(self.datasets):
             raise TransformDependencyConfigurationError(
                 "Transform datasets must have unique name/version identities; "
                 f"received: {', '.join(dataset.id for dataset in self.datasets)}."
             )
-        if len({dataset.argument_name for dataset in self.datasets}) != len(
+        if len({dataset.name for dataset in self.datasets}) != len(
             self.datasets
         ):
             raise TransformDependencyConfigurationError(
-                "Transform datasets must have unique constructor arguments; "
-                f"received: {', '.join(dataset.argument_name for dataset in self.datasets)}."
+                "Transform datasets must have unique names because dataset names "
+                "are transform constructor arguments; "
+                f"received: {', '.join(dataset.name for dataset in self.datasets)}."
             )
-        if len(set(self.feature_keys)) != len(self.feature_keys):
+        if len(set(self.keys)) != len(self.keys):
             raise TransformDependencyConfigurationError(
-                "Transform feature keys must be unique; "
-                f"received: {', '.join(feature_key.value for feature_key in self.feature_keys)}."
+                "Transform entity keys must be unique; "
+                f"received: {', '.join(feature_key.value for feature_key in self.keys)}."
             )
         return self
 
@@ -215,42 +218,19 @@ class TransformConfig(DataConfig):
 class LabelConfig(TransformConfig):
     """Configuration for a materializable label resource."""
 
-    dtype: Literal["double", "float", "int", "bigint"] = Field(
-        default="int",
-        description="Spark SQL type used to store the label value.",
+    datasets: list[LabelDatasetDependency] = Field(
+        min_length=1,
+        description="Versioned datasets injected into label transforms by dataset name.",
     )
-    frequency: Literal["hourly", "daily"] = Field(
-        default="daily",
-        description="Cadence of the label's materialized partitions.",
-    )
-
-    @model_validator(mode="after")
-    def validate_label_input_windows(self) -> "LabelConfig":
-        """Require each label input to declare its realized-outcome window."""
-        if any(
-            not isinstance(dataset, LabelDatasetDependency)
-            for dataset in self.datasets
-        ):
-            raise TransformDependencyConfigurationError(
-                "Label datasets must declare lookback and lookahead partitions."
-            )
-        return self
 
 
 class FeatureConfig(TransformConfig):
     """Configuration for a materializable feature resource."""
 
-    @model_validator(mode="after")
-    def validate_feature_input_windows(self) -> "FeatureConfig":
-        """Forbid future source partitions in point-in-time feature definitions."""
-        if any(
-            not isinstance(dataset, FeatureDatasetDependency)
-            for dataset in self.datasets
-        ):
-            raise TransformDependencyConfigurationError(
-                "Feature datasets may declare only lookback partitions."
-            )
-        return self
+    datasets: list[FeatureDatasetDependency] = Field(
+        min_length=1,
+        description="Versioned datasets injected into feature transforms by dataset name.",
+    )
 
 
 class MarketDataConfig(DatasetConfig):

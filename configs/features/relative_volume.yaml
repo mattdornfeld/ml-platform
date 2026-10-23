@@ -4,12 +4,11 @@ name: relative_volume
 version: 1
 dtype: double
 frequency: hourly
-feature_keys: [symbol]
+keys: [symbol]
 datasets:
   - name: sp500
     version: 3
     dataset_type: market_data
-    argument_name: market_data
     # Market data is daily-partitioned; use one preceding daily partition.
     input_window:
       lookback_partitions: 1

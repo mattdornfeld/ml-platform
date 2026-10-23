@@ -18,7 +18,7 @@ from ml_platform.data_sdk.materializers.exceptions import (
     DataFrameValidationError,
     ExactColumnsValidationError,
     FiniteValuesValidationError,
-    InputFeatureKeysValidationError,
+    InputKeysValidationError,
     MinimumRowsValidationError,
     NonNullValuesValidationError,
     RequestedPartitionsValidationError,
@@ -132,11 +132,11 @@ class FiniteNumericValuesValidationConfig(ValidationConfig):
     )
 
 
-class FeatureKeysFromInputValidationConfig(ValidationConfig):
-    """Require feature keys to occur in at least one injected input dataset."""
+class KeysFromInputValidationConfig(ValidationConfig):
+    """Require entity keys to occur in at least one injected input dataset."""
 
-    type: Literal["feature_keys_from_input"] = "feature_keys_from_input"
-    feature_keys: tuple[str, ...] = Field(
+    type: Literal["keys_from_input"] = "keys_from_input"
+    keys: tuple[str, ...] = Field(
         default=(), description="Output entity-key columns to validate."
     )
     dataset_table_identifiers: tuple[str, ...] = Field(
@@ -194,7 +194,7 @@ DiscriminatedValidationConfig = Annotated[
     MinimumRowsValidationConfig
     | NonNullValuesValidationConfig
     | FiniteNumericValuesValidationConfig
-    | FeatureKeysFromInputValidationConfig
+    | KeysFromInputValidationConfig
     | ExactColumnsValidationConfig
     | UniqueKeyValidationConfig
     | RequestedPartitionsValidationConfig,
@@ -424,51 +424,49 @@ class FiniteValuesValidation(DataFrameValidation):
 
 
 @dataclass(frozen=True)
-class InputFeatureKeysValidation(DataFrameValidation):
-    """Require feature keys to occur in at least one injected dataset."""
+class InputKeysValidation(DataFrameValidation):
+    """Require entity keys to occur in at least one injected dataset."""
 
-    feature_keys: tuple[str, ...]
+    keys: tuple[str, ...]
     input_frames: tuple[DataFrame, ...]
 
     def validate(self, data_frame: DataFrame) -> None:
-        """Reject feature keys not represented by an injected input dataset."""
+        """Reject entity keys not represented by an injected input dataset."""
         input_key_frames: list[DataFrame] = []
         for input_frame in self.input_frames:
-            missing_keys = set(self.feature_keys).difference(
-                input_frame.columns
-            )
+            missing_keys = set(self.keys).difference(input_frame.columns)
             if missing_keys:
-                raise InputFeatureKeysValidationError(
-                    "Input dataset is missing required feature-key columns: "
+                raise InputKeysValidationError(
+                    "Input dataset is missing required entity-key columns: "
                     f"{', '.join(sorted(missing_keys))}."
                 )
             input_key_frames.append(
                 input_frame.select(
                     *(
                         spark_functions.col(key).cast("string").alias(key)
-                        for key in self.feature_keys
+                        for key in self.keys
                     )
                 ).distinct()
             )
         if not input_key_frames:
-            raise InputFeatureKeysValidationError(
+            raise InputKeysValidationError(
                 "Feature-key validation requires at least one injected input dataset."
             )
         input_keys = input_key_frames[0]
         for input_key_frame in input_key_frames[1:]:
             input_keys = input_keys.unionByName(input_key_frame)
         unknown_keys = (
-            data_frame.select(*self.feature_keys)
+            data_frame.select(*self.keys)
             .distinct()
             .join(
                 input_keys.distinct(),
-                list(self.feature_keys),
+                list(self.keys),
                 "left_anti",
             )
         )
         if unknown_keys.limit(1).count():
-            raise InputFeatureKeysValidationError(
-                f"Output contains feature-key values absent from input datasets for keys: {', '.join(self.feature_keys)}."
+            raise InputKeysValidationError(
+                f"Output contains entity-key values absent from input datasets for keys: {', '.join(self.keys)}."
             )
 
 
@@ -596,14 +594,14 @@ class MaterializationValidator:
                             config.minimum_rows,
                             config.temporal_filter,
                         ).validate(data_frame)
-                    case FeatureKeysFromInputValidationConfig():
+                    case KeysFromInputValidationConfig():
                         input_frames = tuple(
                             data_frame.sparkSession.table(identifier)
                             for identifier in config.dataset_table_identifiers
                         )
-                        InputFeatureKeysValidation(
-                            config.feature_keys, input_frames
-                        ).validate(data_frame)
+                        InputKeysValidation(config.keys, input_frames).validate(
+                            data_frame
+                        )
                     case _ as unsupported_config:
                         raise UnsupportedValidationOverrideError(
                             "Materialization validator does not support validation type "
