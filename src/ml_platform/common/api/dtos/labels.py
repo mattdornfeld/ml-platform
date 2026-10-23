@@ -1,8 +1,11 @@
 """Label API request and response DTOs."""
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from ml_platform.common.api.dtos._base import _ApiModel
+from ml_platform.common.api.dtos._base import (
+    _ApiModel,
+    _require_unique_validation_types,
+)
 from ml_platform.common.api.dtos.features import (
     FeatureDatasetDependency,
     FeatureInputWindow,
@@ -45,7 +48,11 @@ class LabelDatasetDependency(FeatureDatasetDependency):
 class LabelCreateRequest(_ApiModel):
     """Payload for registering an immutable, normalized label definition."""
 
-    name: LabelName = Field(min_length=1, description="Stable label name.")
+    name: LabelName = Field(
+        min_length=1,
+        pattern=r"^[a-z][a-z0-9_]*$",
+        description="Stable label name.",
+    )
     version: ResourceVersion = Field(
         gt=0, description="Positive immutable label version number."
     )
@@ -66,6 +73,7 @@ class LabelCreateRequest(_ApiModel):
     )
     transform: TransformName = Field(
         min_length=1,
+        pattern=r"^[a-z_][a-z0-9_.]*\.[A-Za-z_][A-Za-z0-9_]*$",
         description="Import path of the label transform class.",
     )
     description: Description = Field(
@@ -104,7 +112,26 @@ class LabelCreateRequest(_ApiModel):
             )
         if len(set(self.keys)) != len(self.keys):
             raise ValueError("Entity keys must be unique.")
+        _require_unique_validation_types(self.validations)
         return self
+
+    @field_validator("description", "transform")
+    @classmethod
+    def reject_blank_text(cls, value: str) -> str:
+        """Reject whitespace-only descriptive and import-path fields."""
+        if not value.strip():
+            raise ValueError("Value must contain non-whitespace text.")
+        return value
+
+    @field_validator("parameters")
+    @classmethod
+    def require_non_blank_parameter_keys(
+        cls, parameters: dict[ParameterKey, ParameterValue]
+    ) -> dict[ParameterKey, ParameterValue]:
+        """Reject whitespace-only transform parameter names."""
+        if any(not parameter_key.strip() for parameter_key in parameters):
+            raise ValueError("Transform parameter keys must not be blank.")
+        return parameters
 
 
 class LabelResponse(LabelCreateRequest):

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from ml_platform.api import app
 from ml_platform.api.domain import (
@@ -26,7 +27,11 @@ from ml_platform.api.domain import (
 from ml_platform.api.infrastructure import get_session
 from ml_platform.api.routers import create_dataset, get_job, list_datasets
 from ml_platform.api.services import minio_browser_url, minio_partition_url
-from ml_platform.common.api.dtos import DatasetCreateRequest, DatasetStatus
+from ml_platform.common.api.dtos import (
+    DatasetCreateRequest,
+    DatasetStatus,
+    FeatureCreateRequest,
+)
 from ml_platform.common.types import (
     CreatedAt,
     JobId,
@@ -119,6 +124,101 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
             ],
         )
 
+    def test_dataset_request_normalizes_symbols_and_rejects_ambiguity(
+        self,
+    ) -> None:
+        """Dataset request validation rejects ambiguous names, keys, and symbols."""
+        request = DatasetCreateRequest.model_validate(
+            {
+                "name": "sp500",
+                "version": 1,
+                "dataset_type": "market_data",
+                "config": {
+                    "keys": ["symbol"],
+                    "partition_type": "daily",
+                    "symbols": [" aapl "],
+                },
+            }
+        )
+        self.assertEqual(request.config.symbols, ["AAPL"])
+
+        with self.assertRaises(ValidationError):
+            DatasetCreateRequest.model_validate(
+                request.model_dump(mode="json") | {"name": "S&P500"}
+            )
+        with self.assertRaises(ValidationError):
+            DatasetCreateRequest.model_validate(
+                request.model_dump(mode="json")
+                | {
+                    "config": request.config.model_dump(mode="json")
+                    | {"keys": ["symbol", "symbol"]}
+                }
+            )
+        with self.assertRaises(ValidationError):
+            DatasetCreateRequest.model_validate(
+                request.model_dump(mode="json")
+                | {
+                    "config": request.config.model_dump(mode="json")
+                    | {"symbols": ["AAPL", "aapl"]}
+                }
+            )
+
+    def test_transform_request_rejects_ambiguous_validation_overrides(
+        self,
+    ) -> None:
+        """Feature requests reject duplicate validation policies before storage."""
+        with self.assertRaises(ValidationError):
+            FeatureCreateRequest.model_validate(
+                {
+                    "name": "daily_return",
+                    "version": 1,
+                    "dtype": "double",
+                    "frequency": "daily",
+                    "datasets": [
+                        {
+                            "name": "prices",
+                            "version": 1,
+                            "dataset_type": "market_data",
+                            "input_window": {"lookback_partitions": 0},
+                        }
+                    ],
+                    "transform": "ml_platform.transforms.DailyReturn",
+                    "description": "Daily return.",
+                    "parameters": {},
+                    "validations": [
+                        {
+                            "type": "minimum_rows",
+                            "minimum_rows": 1,
+                            "reason": "Require an output row.",
+                        },
+                        {
+                            "type": "minimum_rows",
+                            "minimum_rows": 2,
+                            "reason": "Duplicate configuration.",
+                        },
+                    ],
+                }
+            )
+
+    def test_completion_endpoint_rejects_duplicate_receipt_identifiers(
+        self,
+    ) -> None:
+        """Duplicate receipt IDs fail request validation before persistence."""
+        receipt = {
+            "partition_id": "00000000-0000-0000-0000-000000000001",
+            "resource_type": "dataset",
+            "row_count": 1,
+            "iceberg_schema": {"timestamp": "timestamp"},
+            "content_hash": "hash",
+            "snapshot_id": 1,
+            "callback_token": "token",
+        }
+        response = self.client.post(
+            "/partitions/complete", json=[receipt, receipt]
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("unique partition IDs", response.text)
+
     def test_dataset_partition_request_rejects_non_hour_timestamp(self) -> None:
         """Partition endpoints reject timestamps that are not aligned to the hour."""
         response = self.client.post(
@@ -136,10 +236,13 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         )
         spec = self.client.get("/openapi.json").json()
         self.assertIn("/partitions/complete", spec["paths"])
+        schema = spec["paths"]["/partitions/complete"]["post"]["requestBody"][
+            "content"
+        ]["application/json"]["schema"]
         self.assertEqual(
-            spec["paths"]["/partitions/complete"]["post"]["requestBody"][
-                "content"
-            ]["application/json"]["schema"]["type"],
+            spec["components"]["schemas"][
+                schema["$ref"].rsplit("/", maxsplit=1)[1]
+            ]["type"],
             "array",
         )
         self.assertNotIn(

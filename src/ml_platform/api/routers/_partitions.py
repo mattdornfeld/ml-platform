@@ -11,7 +11,7 @@ from ml_platform.api.routers._openapi import (
     error_responses,
 )
 from ml_platform.common.api.dtos import (
-    PartitionCompletionRequest,
+    PartitionCompletionBatch,
     PartitionResultResponse,
 )
 from ml_platform.common.api.routes import PartitionRoutes
@@ -26,7 +26,7 @@ router = APIRouter(tags=["partition completion"])
     tags=["partition completion"],
 )
 def complete_partitions(
-    payload: Annotated[list[PartitionCompletionRequest], Body(min_length=1)],
+    payload: Annotated[PartitionCompletionBatch, Body(min_length=1)],
     session: DatabaseSession,
 ) -> list[PartitionResultResponse]:
     """Record a batch of completed partition receipts atomically."""

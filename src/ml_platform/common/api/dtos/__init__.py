@@ -37,6 +37,7 @@ from ml_platform.common.api.dtos.labels import (
     LabelResponse,
 )
 from ml_platform.common.api.dtos.partitions import (
+    PartitionCompletionBatch,
     PartitionCompletionRequest,
     PartitionMaterializationRequest,
     PartitionResultResponse,
@@ -70,6 +71,7 @@ __all__ = [
     "LabelResponse",
     "MarketDataDatasetConfig",
     "MaterializationJobResponse",
+    "PartitionCompletionBatch",
     "PartitionCompletionRequest",
     "PartitionMaterializationRequest",
     "PartitionResultResponse",

@@ -2,8 +2,14 @@
 
 from datetime import timedelta
 from enum import StrEnum
+from typing import Annotated
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from ml_platform.common.api.dtos._base import _ApiModel
 from ml_platform.common.api.dtos.resources import ResourceType
@@ -134,6 +140,14 @@ class PartitionCompletionRequest(_ApiModel):
             )
         return iceberg_schema
 
+    @field_validator("content_hash", "callback_token")
+    @classmethod
+    def reject_blank_authentication_fields(cls, value: str) -> str:
+        """Reject whitespace-only receipt hashes and callback credentials."""
+        if not value.strip():
+            raise ValueError("Value must contain non-whitespace text.")
+        return value
+
     @model_validator(mode="after")
     def validate_dependencies(self) -> "PartitionCompletionRequest":
         """Derived resources must report their exact pinned dataset revisions."""
@@ -154,6 +168,22 @@ class PartitionCompletionRequest(_ApiModel):
             ):
                 raise ValueError("dataset_partition_ids must be unique.")
         return self
+
+
+def _validate_completion_batch(
+    receipts: list[PartitionCompletionRequest],
+) -> list[PartitionCompletionRequest]:
+    """Reject duplicate receipt identities before repository processing."""
+    partition_ids = [item.partition_id for item in receipts]
+    if len(set(partition_ids)) != len(partition_ids):
+        raise ValueError("Completion batches must use unique partition IDs.")
+    return receipts
+
+
+type PartitionCompletionBatch = Annotated[
+    list[PartitionCompletionRequest],
+    AfterValidator(_validate_completion_batch),
+]
 
 
 class PartitionResultResponse(_ApiModel):
