@@ -5,7 +5,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ml_platform.cli.materialization import sync_resources
+from ml_platform.cli.materialization import (
+    _dataset_payload,
+    _load_yaml,
+    sync_resources,
+)
 
 
 class ResourceSyncTest(unittest.TestCase):
@@ -41,6 +45,16 @@ validations:
     minimum_rows: 1
     reason: Each requested partition requires a row.
 """)
+
+    def test_dataset_payload_conforms_to_the_public_api_contract(self) -> None:
+        """Internal dataset settings never leak into the public request DTO."""
+        payload = _dataset_payload(
+            _load_yaml(self.root / "datasets" / "prices.yaml")
+        )
+
+        self.assertNotIn("run_frequency", payload["config"])
+        self.assertNotIn("num_lookback_partitions", payload["config"])
+        self.assertNotIn("id", payload)
 
     @patch("ml_platform.cli.materialization._api_request")
     def test_dataset_sync_creates_configured_and_deletes_removed(

@@ -21,7 +21,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json, Jsonb
 
 from ml_platform.api.database import get_connection
-from ml_platform.api.dtos import (
+from ml_platform.api.migrations import migrate_database
+from ml_platform.api.scheduler import JobScheduler
+from ml_platform.common.api.dtos import (
     DatasetCreateRequest,
     DatasetDescriptionUpdate,
     DatasetResponse,
@@ -40,8 +42,13 @@ from ml_platform.api.dtos import (
     PartitionResultResponse,
     ValidationErrorResponse,
 )
-from ml_platform.api.migrations import migrate_database
-from ml_platform.api.scheduler import JobScheduler
+from ml_platform.common.api.routes import (
+    DatasetRoutes,
+    FeatureRoutes,
+    JobRoutes,
+    LabelRoutes,
+    PartitionRoutes,
+)
 
 
 @asynccontextmanager
@@ -428,7 +435,7 @@ def _resource_jobs(
     return list(cursor.fetchall())
 
 
-@app.get("/datasets", tags=["datasets"])
+@app.get(DatasetRoutes.LIST.template, tags=["datasets"])
 def list_datasets(
     connection: DatabaseConnection, *, include_deleted: bool = False
 ) -> list[dict[str, Any]]:
@@ -453,7 +460,7 @@ def list_datasets(
     return datasets
 
 
-@app.get("/datasets/{name}/versions/{version}", tags=["datasets"])
+@app.get(DatasetRoutes.DETAIL.template, tags=["datasets"])
 def get_dataset(
     name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
 ) -> dict[str, Any]:
@@ -483,7 +490,7 @@ def get_dataset(
     return dataset
 
 
-@app.patch("/datasets/{name}/versions/{version}", tags=["datasets"])
+@app.patch(DatasetRoutes.UPDATE.template, tags=["datasets"])
 def update_dataset_description(
     name: ResourceName,
     version: ResourceVersion,
@@ -509,7 +516,7 @@ def update_dataset_description(
 
 
 @app.delete(
-    "/datasets/{name}/versions/{version}",
+    DatasetRoutes.DELETE.template,
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["datasets"],
 )
@@ -544,7 +551,7 @@ def delete_dataset(
 
 
 @app.post(
-    "/datasets",
+    DatasetRoutes.CREATE.template,
     response_model=DatasetResponse,
     status_code=201,
     responses=error_responses(DATASET_VALIDATION),
@@ -613,7 +620,7 @@ def _enqueue_dataset_job(
     return job_id
 
 
-@app.get("/features", tags=["features"])
+@app.get(FeatureRoutes.LIST.template, tags=["features"])
 def list_features(
     connection: DatabaseConnection, *, include_deleted: bool = False
 ) -> list[dict[str, Any]]:
@@ -636,7 +643,7 @@ def list_features(
         return list(cursor.fetchall())
 
 
-@app.get("/features/{name}/versions/{version}", tags=["features"])
+@app.get(FeatureRoutes.DETAIL.template, tags=["features"])
 def get_feature(
     name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
 ) -> dict[str, Any]:
@@ -689,7 +696,7 @@ def get_feature(
 
 
 @app.delete(
-    "/features/{name}/versions/{version}",
+    FeatureRoutes.DELETE.template,
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["features"],
 )
@@ -724,7 +731,7 @@ def delete_feature(
 
 
 @app.post(
-    "/features",
+    FeatureRoutes.CREATE.template,
     response_model=FeatureResponse,
     status_code=201,
     responses=error_responses(FEATURE_VALIDATION),
@@ -806,7 +813,7 @@ def create_feature(
 
 
 @app.post(
-    "/datasets/{name}/versions/{version}/partitions",
+    DatasetRoutes.MATERIALIZE.template,
     response_model=MaterializationJobResponse,
     status_code=202,
     responses=error_responses(PARTITION_VALIDATION),
@@ -992,7 +999,7 @@ def _feature_plan_ids(
 
 
 @app.post(
-    "/features/{name}/versions/{version}/partitions",
+    FeatureRoutes.MATERIALIZE.template,
     response_model=MaterializationJobResponse,
     status_code=202,
     responses=error_responses(PARTITION_VALIDATION),
@@ -1111,7 +1118,7 @@ def materialize_feature_partitions(
     )
 
 
-@app.get("/labels", tags=["labels"])
+@app.get(LabelRoutes.LIST.template, tags=["labels"])
 def list_labels(
     connection: DatabaseConnection, *, include_deleted: bool = False
 ) -> list[dict[str, Any]]:
@@ -1141,7 +1148,7 @@ def list_labels(
         return list(cursor.fetchall())
 
 
-@app.get("/labels/{name}/versions/{version}", tags=["labels"])
+@app.get(LabelRoutes.DETAIL.template, tags=["labels"])
 def get_label(
     name: ResourceName, version: ResourceVersion, connection: DatabaseConnection
 ) -> dict[str, Any]:
@@ -1209,7 +1216,7 @@ def get_label(
 
 
 @app.post(
-    "/labels",
+    LabelRoutes.CREATE.template,
     response_model=LabelResponse,
     status_code=201,
     responses=error_responses(FEATURE_VALIDATION),
@@ -1296,7 +1303,7 @@ def create_label(
 
 
 @app.delete(
-    "/labels/{name}/versions/{version}",
+    LabelRoutes.DELETE.template,
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["labels"],
 )
@@ -1431,7 +1438,7 @@ def _label_plan_ids(
 
 
 @app.post(
-    "/labels/{name}/versions/{version}/partitions",
+    LabelRoutes.MATERIALIZE.template,
     response_model=MaterializationJobResponse,
     status_code=202,
     responses=error_responses(PARTITION_VALIDATION),
@@ -1587,7 +1594,7 @@ def _completion_plan_ids(
 
 
 @app.post(
-    "/partitions/complete",
+    PartitionRoutes.COMPLETE.template,
     response_model=list[PartitionResultResponse],
     responses={
         422: error_responses(COMPLETION_VALIDATION)[422],
@@ -1885,7 +1892,7 @@ def complete_partitions(
     ]
 
 
-@app.get("/jobs", tags=["jobs"])
+@app.get(JobRoutes.LIST.template, tags=["jobs"])
 def list_jobs(connection: DatabaseConnection) -> list[dict[str, Any]]:
     """List materialization jobs and their versioned resource targets."""
     with connection.cursor(row_factory=dict_row) as cursor:
@@ -1899,7 +1906,7 @@ def list_jobs(connection: DatabaseConnection) -> list[dict[str, Any]]:
 
 
 @app.get(
-    "/jobs/{job_id}",
+    JobRoutes.DETAIL.template,
     response_model=JobResponse,
     responses=error_responses(JOB_VALIDATION),
     tags=["jobs"],

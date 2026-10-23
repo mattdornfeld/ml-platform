@@ -12,6 +12,18 @@ from urllib.request import Request, urlopen
 
 from omegaconf import OmegaConf
 
+from ml_platform.common.api.dtos import (
+    DatasetCreateRequest,
+    FeatureCreateRequest,
+    LabelCreateRequest,
+)
+from ml_platform.common.api.routes import (
+    DatasetRoutes,
+    FeatureRoutes,
+    HttpMethod,
+    JobRoutes,
+    LabelRoutes,
+)
 from ml_platform.data_sdk.configs import (
     FeatureConfig,
     LabelConfig,
@@ -23,7 +35,7 @@ DEFAULT_CONFIG_DIR = Path("configs")
 
 def _api_request(
     base_url: str,
-    method: str,
+    method: HttpMethod,
     path: str,
     payload: dict[str, Any] | None = None,
 ) -> Any:
@@ -73,7 +85,11 @@ def _describe_job(
 ) -> dict[str, Any]:
     """Fetch a job once, or poll it until the control plane reaches a terminal state."""
     while True:
-        result = _api_request(base_url, "GET", f"/jobs/{job_id}")
+        result = _api_request(
+            base_url,
+            JobRoutes.DETAIL.method,
+            JobRoutes.DETAIL.path(job_id=job_id),
+        )
         if not isinstance(result, dict):
             raise RuntimeError(f"Job {job_id} response must be a JSON object.")
         sys.stdout.write(json.dumps(result, default=str) + "\n")
@@ -93,12 +109,15 @@ def _dataset_payload(config: dict[str, Any]) -> dict[str, Any]:
     )
     values = definition.model_dump(mode="json")
     values.pop("num_lookback_partitions")
-    return {
-        "name": values.pop("name"),
-        "version": values.pop("version"),
-        "dataset_type": values.pop("dataset_type"),
-        "config": values,
-    }
+    values.pop("run_frequency")
+    return DatasetCreateRequest.model_validate(
+        {
+            "name": values.pop("name"),
+            "version": values.pop("version"),
+            "dataset_type": values.pop("dataset_type"),
+            "config": values,
+        }
+    ).model_dump(mode="json", exclude_computed_fields=True)
 
 
 def _dataset_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
@@ -117,9 +136,10 @@ def _dataset_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
 
 def _feature_payload(config: dict[str, Any]) -> dict[str, Any]:
     """Validate one feature YAML mapping and convert it to the API request shape."""
-    return FeatureConfig.model_validate_json(
+    values = FeatureConfig.model_validate_json(
         json.dumps(config, default=str)
     ).model_dump(mode="json")
+    return FeatureCreateRequest.model_validate(values).model_dump(mode="json")
 
 
 def _feature_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
@@ -138,9 +158,10 @@ def _feature_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
 
 def _label_payload(config: dict[str, Any]) -> dict[str, Any]:
     """Validate one label YAML mapping and convert it to the API request shape."""
-    return LabelConfig.model_validate_json(
+    values = LabelConfig.model_validate_json(
         json.dumps(config, default=str)
     ).model_dump(mode="json")
+    return LabelCreateRequest.model_validate(values).model_dump(mode="json")
 
 
 def _label_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
@@ -157,6 +178,21 @@ def _label_configs(config_dir: Path) -> dict[tuple[str, int], dict[str, Any]]:
     return resources
 
 
+def _resource_routes(
+    resource: str,
+) -> type[DatasetRoutes] | type[FeatureRoutes] | type[LabelRoutes]:
+    """Return the complete public route set for one resource kind."""
+    match resource:
+        case "dataset":
+            return DatasetRoutes
+        case "feature":
+            return FeatureRoutes
+        case "label":
+            return LabelRoutes
+        case _ as unsupported_resource:
+            raise ValueError(f"Unsupported resource {unsupported_resource!r}.")
+
+
 def sync_resources(
     base_url: str, resource: str, config_dir: Path = DEFAULT_CONFIG_DIR
 ) -> dict[str, list[str]]:
@@ -170,8 +206,11 @@ def sync_resources(
             desired = _label_configs(config_dir)
         case _ as unsupported_resource:
             raise ValueError(f"Unsupported resource {unsupported_resource!r}.")
+    routes = _resource_routes(resource)
     existing = _api_request(
-        base_url, "GET", f"/{resource}s?include_deleted=true"
+        base_url,
+        routes.LIST.method,
+        f"{routes.LIST.template}?include_deleted=true",
     )
     active = {
         (row["name"], int(row["version"])): row
@@ -183,22 +222,28 @@ def sync_resources(
     deleted: list[str] = []
     for identity, payload in desired.items():
         if identity not in active:
-            _api_request(base_url, "POST", f"/{resource}s", payload)
+            _api_request(
+                base_url, routes.CREATE.method, routes.CREATE.template, payload
+            )
             created.append(f"{identity[0]} v{identity[1]}")
         elif resource == "dataset" and active[identity].get("config", {}).get(
             "description"
         ) != payload["config"].get("description"):
             _api_request(
                 base_url,
-                "PATCH",
-                f"/datasets/{identity[0]}/versions/{identity[1]}",
+                DatasetRoutes.UPDATE.method,
+                DatasetRoutes.UPDATE.path(
+                    name=identity[0], version=identity[1]
+                ),
                 {"description": payload["config"]["description"]},
             )
             updated.append(f"{identity[0]} v{identity[1]}")
     for name, version in active:
         if (name, version) not in desired:
             _api_request(
-                base_url, "DELETE", f"/{resource}s/{name}/versions/{version}"
+                base_url,
+                routes.DELETE.method,
+                routes.DELETE.path(name=name, version=version),
             )
             deleted.append(f"{name} v{version}")
     result = {"created": created, "deleted": deleted}
@@ -272,26 +317,32 @@ def main() -> None:
             raise ValueError(
                 "Dataset --name and --version must match the config identity."
             )
-        result = _api_request(args.api_url, "POST", "/datasets", payload)
+        result = _api_request(
+            args.api_url,
+            DatasetRoutes.CREATE.method,
+            DatasetRoutes.CREATE.template,
+            payload,
+        )
     elif args.command == "create" and args.resource == "feature":
         result = _api_request(
             args.api_url,
-            "POST",
-            "/features",
+            FeatureRoutes.CREATE.method,
+            FeatureRoutes.CREATE.template,
             _feature_payload(_load_yaml(args.config)),
         )
     elif args.command == "create" and args.resource == "label":
         result = _api_request(
             args.api_url,
-            "POST",
-            "/labels",
+            LabelRoutes.CREATE.method,
+            LabelRoutes.CREATE.template,
             _label_payload(_load_yaml(args.config)),
         )
     elif args.command == "materialize":
+        route = _resource_routes(args.resource).MATERIALIZE
         result = _api_request(
             args.api_url,
-            "POST",
-            f"/{args.resource}s/{args.name}/versions/{args.version}/partitions",
+            route.method,
+            route.path(name=args.name, version=args.version),
             _timestamps(args.timestamp),
         )
     elif args.command in {"datasets", "features", "labels"}:

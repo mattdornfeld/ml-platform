@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 
 from ml_platform.api import main as api_main
 from ml_platform.api.database import get_connection
-from ml_platform.api.dtos import DatasetCreateRequest
 from ml_platform.api.main import app, create_dataset, get_job
+from ml_platform.common.api.dtos import DatasetCreateRequest
 
 
 class PartitionMaterializationRequestTest(unittest.TestCase):
@@ -340,8 +340,8 @@ class MaterializationBehaviorTest(unittest.TestCase):
 
     def test_dataset_request_returns_existing_completed_partition(self) -> None:
         """A create-missing dataset request does not enqueue another writer."""
-        from ml_platform.api.dtos import PartitionMaterializationRequest
         from ml_platform.api.main import materialize_dataset_partitions
+        from ml_platform.common.api.dtos import PartitionMaterializationRequest
 
         now = datetime.now(UTC)
         completed = {
@@ -374,8 +374,10 @@ class MaterializationBehaviorTest(unittest.TestCase):
 
     def test_feature_force_replaces_current_partition(self) -> None:
         """Force creates a new request even when recorded inputs still match."""
-        from ml_platform.api.dtos import FeaturePartitionMaterializationRequest
         from ml_platform.api.main import materialize_feature_partitions
+        from ml_platform.common.api.dtos import (
+            FeaturePartitionMaterializationRequest,
+        )
 
         now = datetime.now(UTC)
         completed = {
@@ -428,8 +430,8 @@ class MaterializationBehaviorTest(unittest.TestCase):
         """A worker cannot report a receipt for a different input plan."""
         from fastapi import HTTPException
 
-        from ml_platform.api.dtos import PartitionCompletionRequest
         from ml_platform.api.main import complete_partitions
+        from ml_platform.common.api.dtos import PartitionCompletionRequest
 
         partition_id = "00000000-0000-0000-0000-000000000002"
         connection, cursor = self._connection(
@@ -555,8 +557,8 @@ class ResourceDeletionTest(unittest.TestCase):
         """The partition endpoint rejects a resource that has been soft-deleted."""
         from fastapi import HTTPException
 
-        from ml_platform.api.dtos import PartitionMaterializationRequest
         from ml_platform.api.main import materialize_dataset_partitions
+        from ml_platform.common.api.dtos import PartitionMaterializationRequest
 
         connection, _ = self._connection([None])
         with self.assertRaises(HTTPException) as raised:

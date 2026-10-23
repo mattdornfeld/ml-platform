@@ -15,6 +15,7 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as spark_functions
 from pyspark.sql.column import Column
 
+from ml_platform.common.api.routes import PartitionRoutes
 from ml_platform.common.types import BaseConfig
 from ml_platform.data_sdk.materializers._constants import (
     materialization_api_url,
@@ -269,10 +270,10 @@ class Materializer[Config: MaterializerConfig](ABC):
                 }
             )
         request = Request(
-            f"{materialization_api_url()}/partitions/complete",
+            f"{materialization_api_url()}{PartitionRoutes.COMPLETE.template}",
             data=json.dumps(receipts).encode(),
             headers={"Content-Type": "application/json"},
-            method="POST",
+            method=PartitionRoutes.COMPLETE.method,
         )
         with urlopen(request, timeout=30):
             pass

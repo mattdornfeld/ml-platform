@@ -8,9 +8,9 @@ import psycopg
 from fastapi import HTTPException
 from psycopg.rows import dict_row
 
-from ml_platform.api.dtos import PartitionCompletionRequest
 from ml_platform.api.main import complete_partitions
 from ml_platform.api.migrations import migrate_database
+from ml_platform.common.api.dtos import PartitionCompletionRequest
 
 
 @unittest.skipUnless(
