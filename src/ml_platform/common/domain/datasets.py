@@ -1,8 +1,14 @@
 """Dataset definition models shared by API clients and Spark workers."""
 
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import (
+    Field,
+    JsonValue,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 
 from ml_platform.common.domain._base import DomainConfig
 from ml_platform.common.domain._exceptions import MarketSymbolConfigurationError
@@ -172,3 +178,29 @@ class MarketDataConfig(DatasetConfig):
                 "Market-data configuration requires at least one non-empty ticker symbol."
             )
         return normalized_symbols
+
+
+class MarketDataDatasetDefinitionConfig(MarketDataDatasetConfig):
+    """Persisted market-data definition tagged with its concrete dataset type."""
+
+    dataset_type: Literal[DatasetType.MARKET_DATA] = Field(
+        description="Discriminator selecting the market-data dataset configuration."
+    )
+
+
+type DatasetDefinitionConfig = Annotated[
+    MarketDataDatasetDefinitionConfig,
+    Field(discriminator="dataset_type"),
+]
+
+_DATASET_DEFINITION_CONFIG_ADAPTER = TypeAdapter(DatasetDefinitionConfig)
+
+
+def deserialize_dataset_definition_config(
+    dataset_type: DatasetType,
+    config: dict[str, JsonValue],
+) -> DatasetDefinitionConfig:
+    """Deserialize persisted configuration using the dataset-type discriminator."""
+    return _DATASET_DEFINITION_CONFIG_ADAPTER.validate_python(
+        {"dataset_type": dataset_type, **config}
+    )

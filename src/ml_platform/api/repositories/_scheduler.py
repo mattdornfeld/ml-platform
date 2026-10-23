@@ -273,7 +273,7 @@ class SchedulerRepository:
             "version": dataset.version,
             "dataset_type": dataset.dataset_type,
             "config": DatasetRepository.definition(dataset).config.model_dump(
-                mode="json"
+                mode="json", exclude={"dataset_type"}
             ),
             "callbacks": self._callbacks([request for request, _ in rows], {}),
         }

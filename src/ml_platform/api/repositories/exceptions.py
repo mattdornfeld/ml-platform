@@ -59,20 +59,6 @@ class DatasetVersionExistsError(_ApiError):
         )
 
 
-class DatasetPartitionTypeConfigurationError(_ApiError):
-    """A persisted dataset does not contain a valid partition cadence."""
-
-    def __init__(self, name: ResourceName, version: ResourceVersion) -> None:
-        """Build the persisted-configuration invariant response."""
-        super().__init__(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=(
-                f"Dataset {name}_v{version} has an invalid persisted "
-                "partition_type."
-            ),
-        )
-
-
 class FeatureDependencyDatasetTypeMismatchError(_ApiError):
     """A feature definition declares the wrong type for an input dataset."""
 

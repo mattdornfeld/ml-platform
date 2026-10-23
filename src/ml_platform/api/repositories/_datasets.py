@@ -39,12 +39,14 @@ from ml_platform.api.repositories._partition_validation import (
     validate_partition_timestamps,
 )
 from ml_platform.api.repositories.exceptions import (
-    DatasetPartitionTypeConfigurationError,
     DatasetVersionExistsError,
     UnsupportedDatasetStatusError,
 )
 from ml_platform.common.api.dtos import DatasetStatus
-from ml_platform.common.domain import MarketDataDatasetConfig
+from ml_platform.common.domain import (
+    MarketDataDatasetConfig,
+    deserialize_dataset_definition_config,
+)
 from ml_platform.common.types import (
     CreatedAt,
     DatasetType,
@@ -52,7 +54,6 @@ from ml_platform.common.types import (
     JobId,
     PartitionId,
     PartitionTimestamp,
-    PartitionType,
     ResourceName,
     ResourceVersion,
     SnapshotId,
@@ -65,21 +66,6 @@ class DatasetRepository:
     """Persist and read immutable datasets and their partition requests."""
 
     session: Session
-
-    @staticmethod
-    def _partition_type(dataset: Dataset) -> PartitionType:
-        """Deserialize the cadence needed by this private write workflow."""
-        raw_partition_type = dataset.config.get("partition_type")
-        if not isinstance(raw_partition_type, str):
-            raise DatasetPartitionTypeConfigurationError(
-                ResourceName(dataset.name), ResourceVersion(dataset.version)
-            )
-        try:
-            return PartitionType(raw_partition_type)
-        except ValueError as error:
-            raise DatasetPartitionTypeConfigurationError(
-                ResourceName(dataset.name), ResourceVersion(dataset.version)
-            ) from error
 
     @staticmethod
     def _status(dataset: Dataset) -> DatasetStatus:
@@ -97,7 +83,9 @@ class DatasetRepository:
             name=ResourceName(dataset.name),
             version=ResourceVersion(dataset.version),
             dataset_type=DatasetType(dataset.dataset_type),
-            config=MarketDataDatasetConfig.model_validate(dataset.config),
+            config=deserialize_dataset_definition_config(
+                DatasetType(dataset.dataset_type), dataset.config
+            ),
             created_at=CreatedAt(dataset.created_at),
             lifecycle=cls._status(dataset),
             deleted_at=dataset.deleted_at,
@@ -283,10 +271,10 @@ class DatasetRepository:
         dataset = self.session.get(Dataset, (name, version))
         if dataset is None:
             return None
-        configuration = MarketDataDatasetConfig.model_validate(dataset.config)
-        dataset.config = configuration.model_copy(
+        definition = self.definition(dataset)
+        dataset.config = definition.config.model_copy(
             update={"description": description}
-        ).model_dump(mode="json")
+        ).model_dump(mode="json", exclude={"dataset_type"})
         self.session.commit()
         self.session.refresh(dataset)
         return self.definition(dataset)
@@ -360,7 +348,7 @@ class DatasetRepository:
             name=name,
             version=version,
             resource_type=ResourceType.DATASET,
-            partition_type=self._partition_type(dataset),
+            partition_type=self.definition(dataset).config.partition_type,
             timestamps=timestamps,
         )
         existing: list[MaterializationPartition] = []

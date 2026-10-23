@@ -8,8 +8,11 @@ from ml_platform.common.domain._exceptions import (
 )
 from ml_platform.common.domain.datasets import (
     DatasetConfig,
+    DatasetDefinitionConfig,
     MarketDataConfig,
     MarketDataDatasetConfig,
+    MarketDataDatasetDefinitionConfig,
+    deserialize_dataset_definition_config,
 )
 from ml_platform.common.domain.dependencies import (
     DatasetDependency,
@@ -25,6 +28,7 @@ from ml_platform.common.domain.resources import DataConfig, TransformConfig
 __all__ = [
     "DataConfig",
     "DatasetConfig",
+    "DatasetDefinitionConfig",
     "DatasetDependency",
     "DomainConfig",
     "DomainConfigurationError",
@@ -36,8 +40,10 @@ __all__ = [
     "LabelInputWindow",
     "MarketDataConfig",
     "MarketDataDatasetConfig",
+    "MarketDataDatasetDefinitionConfig",
     "MarketSymbolConfigurationError",
     "TransformConfig",
     "TransformDependencyConfigurationError",
     "TripleBarrierConfig",
+    "deserialize_dataset_definition_config",
 ]

@@ -12,6 +12,8 @@ from ml_platform.common.domain import (
     LabelConfig,
     LabelDatasetDependency,
     LabelInputWindow,
+    MarketDataDatasetDefinitionConfig,
+    deserialize_dataset_definition_config,
 )
 from ml_platform.common.types import (
     DatasetType,
@@ -47,6 +49,23 @@ class DatasetConfigTest(unittest.TestCase):
             keys=[EntityKey.SYMBOL],
         )
 
+        self.assertIs(config.partition_type, PartitionType.DAILY)
+
+    def test_persisted_dataset_config_uses_dataset_type_discriminator(
+        self,
+    ) -> None:
+        """The persisted type column selects the concrete configuration model."""
+        config = deserialize_dataset_definition_config(
+            DatasetType.MARKET_DATA,
+            {
+                "keys": ["symbol"],
+                "partition_type": "daily",
+                "symbols": ["AAPL"],
+            },
+        )
+
+        self.assertIsInstance(config, MarketDataDatasetDefinitionConfig)
+        self.assertIs(config.dataset_type, DatasetType.MARKET_DATA)
         self.assertIs(config.partition_type, PartitionType.DAILY)
 
     def test_partition_validations_default_to_all_requested_partitions(

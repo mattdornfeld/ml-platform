@@ -46,7 +46,9 @@ def _definition_response(definition: DatasetDefinition) -> dict[str, object]:
         "name": definition.name,
         "version": definition.version,
         "dataset_type": definition.dataset_type,
-        "config": definition.config.model_dump(mode="json"),
+        "config": definition.config.model_dump(
+            mode="json", exclude={"dataset_type"}
+        ),
         "created_at": definition.created_at,
         "deleted_at": definition.deleted_at,
         "deprecated_at": definition.deprecated_at,
@@ -231,7 +233,9 @@ def create_dataset(
             "name": definition.name,
             "version": definition.version,
             "dataset_type": definition.dataset_type,
-            "config": definition.config.model_dump(mode="json"),
+            "config": definition.config.model_dump(
+                mode="json", exclude={"dataset_type"}
+            ),
             "created_at": definition.created_at,
         }
     )
