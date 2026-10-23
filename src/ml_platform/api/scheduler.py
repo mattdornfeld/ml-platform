@@ -12,6 +12,8 @@ from kubernetes.client.exceptions import ApiException
 from kubernetes.config.incluster_config import load_incluster_config
 from psycopg.rows import dict_row
 
+from ml_platform.common.types import JobId
+
 ADMISSION_GATE = "api.ml-control-plane.io/blocked"
 QUEUE_LABEL = "kueue.x-k8s.io/queue-name"
 QUEUE_NAME = "materialization"
@@ -35,7 +37,7 @@ class JobScheduler:
     def _reconcile_submitted_jobs(self) -> None:
         """Create, release, and observe every nonterminal materialization job in FIFO order."""
         for job in self._submitted_jobs():
-            job_id = UUID(str(job["id"]))
+            job_id = JobId(UUID(str(job["id"])))
             try:
                 job_type = job["type"]
                 application_name = self._application_name(job_id, job_type)
@@ -86,13 +88,13 @@ class JobScheduler:
             return list(cursor.fetchall())
 
     @staticmethod
-    def _application_name(job_id: UUID, job_type: str) -> str:
+    def _application_name(job_id: JobId, job_type: str) -> str:
         """Return the deterministic SparkApplication name for one API job."""
         prefix = job_type.removesuffix("_materialization")
         return f"{prefix}-{job_id}".lower()
 
     def _ensure_dataset_application(
-        self, job_id: UUID, application_name: str
+        self, job_id: JobId, application_name: str
     ) -> None:
         """Create a Kueue-gated SparkApplication, preserving a pre-existing one."""
         dataset = self._dataset_job(job_id)
@@ -188,7 +190,7 @@ class JobScheduler:
             if error.status != 409:
                 raise
 
-    def _dataset_job(self, job_id: UUID) -> dict[str, Any]:
+    def _dataset_job(self, job_id: JobId) -> dict[str, Any]:
         """Load the immutable dataset config and authenticated callbacks for one job."""
         with (
             psycopg.connect(
@@ -216,7 +218,7 @@ class JobScheduler:
         return dataset
 
     def _ensure_feature_application(
-        self, job_id: UUID, application_name: str
+        self, job_id: JobId, application_name: str
     ) -> None:
         """Create one Kueue-gated SparkApplication for a feature job."""
         feature = self._feature_job(job_id)
@@ -300,7 +302,7 @@ class JobScheduler:
                 raise
 
     def _ensure_label_application(
-        self, job_id: UUID, application_name: str
+        self, job_id: JobId, application_name: str
     ) -> None:
         """Create one Kueue-gated SparkApplication for a label job."""
         label = self._label_job(job_id)
@@ -383,7 +385,7 @@ class JobScheduler:
             if error.status != 409:
                 raise
 
-    def _feature_job(self, job_id: UUID) -> dict[str, Any]:
+    def _feature_job(self, job_id: JobId) -> dict[str, Any]:
         """Load immutable feature metadata, dependencies, and authenticated callbacks."""
         with (
             psycopg.connect(
@@ -441,7 +443,7 @@ class JobScheduler:
         }
         return {"config": config, "callbacks": row["callbacks"]}
 
-    def _label_job(self, job_id: UUID) -> dict[str, Any]:
+    def _label_job(self, job_id: JobId) -> dict[str, Any]:
         """Load immutable label metadata, dependencies, and authenticated callbacks."""
         with (
             psycopg.connect(
@@ -499,7 +501,7 @@ class JobScheduler:
         }
         return {"config": config, "callbacks": row["callbacks"]}
 
-    def _is_eligible(self, job_id: UUID, job_type: str) -> bool:
+    def _is_eligible(self, job_id: JobId, job_type: str) -> bool:
         """Allow only the oldest submitted job for every partition it targets."""
         with (
             psycopg.connect(
@@ -580,7 +582,7 @@ class JobScheduler:
         )
 
     def _observe_application(
-        self, job_id: UUID, application_name: str, job_type: str
+        self, job_id: JobId, application_name: str, job_type: str
     ) -> None:
         """Map terminal Spark states to the API's durable terminal status."""
         namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
@@ -614,7 +616,7 @@ class JobScheduler:
         elif state == "COMPLETED":
             self._finish(job_id, "succeeded", job_type)
 
-    def _finish(self, job_id: UUID, outcome: str, job_type: str) -> None:
+    def _finish(self, job_id: JobId, outcome: str, job_type: str) -> None:
         """Persist a terminal outcome after confirming all successful receipts exist."""
         with (
             psycopg.connect(self.database_url) as connection,

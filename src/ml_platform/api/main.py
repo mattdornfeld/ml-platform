@@ -63,7 +63,12 @@ from ml_platform.common.api.routes import (
     LabelRoutes,
     PartitionRoutes,
 )
-from ml_platform.common.types import ResourceName, ResourceVersion
+from ml_platform.common.types import (
+    JobId,
+    PartitionId,
+    ResourceName,
+    ResourceVersion,
+)
 
 
 @asynccontextmanager
@@ -106,6 +111,7 @@ def dashboard_ui(dashboard_path: str = "") -> FileResponse:
     return FileResponse(UI_DIRECTORY / "index.html")
 
 
+JobPathId = Annotated[JobId, Path()]
 ResourcePathName = Annotated[ResourceName, Path(min_length=1)]
 ResourcePathVersion = Annotated[ResourceVersion, Path(gt=0)]
 _NOT_IMPLEMENTED_DETAIL = (
@@ -377,7 +383,7 @@ JOB_VALIDATION = {
 }
 
 
-def _job_targets(cursor: Any, job_id: UUID) -> list[dict[str, Any]]:
+def _job_targets(cursor: Any, job_id: JobId) -> list[dict[str, Any]]:
     """Return each versioned resource whose partitions a job targets."""
     cursor.execute(
         """SELECT 'dataset' AS resource_type, dataset_name AS name, dataset_version AS version
@@ -397,7 +403,7 @@ def _job_targets(cursor: Any, job_id: UUID) -> list[dict[str, Any]]:
     return list(cursor.fetchall())
 
 
-def _job_partitions(cursor: Any, job_id: UUID) -> list[dict[str, Any]]:
+def _job_partitions(cursor: Any, job_id: JobId) -> list[dict[str, Any]]:
     """Return the partition requests targeted by one materialization job."""
     cursor.execute(
         """SELECT 'dataset' AS resource_type, dataset_name AS name, dataset_version AS version, timestamp, status
@@ -1742,7 +1748,7 @@ _COMPLETION_TABLES = {
 
 
 def _completion_plan_ids(
-    cursor: Any, resource_type: str, partition_id: UUID
+    cursor: Any, resource_type: str, partition_id: PartitionId
 ) -> set[UUID]:
     """Read the pinned input revisions from a derived partition request."""
     table = f"{resource_type}_partition_update_request_dataset_dependencies"
@@ -2072,7 +2078,7 @@ def list_jobs(connection: DatabaseConnection) -> list[dict[str, Any]]:
     responses=error_responses(JOB_VALIDATION),
     tags=["jobs"],
 )
-def get_job(job_id: UUID, connection: DatabaseConnection) -> JobResponse:
+def get_job(job_id: JobPathId, connection: DatabaseConnection) -> JobResponse:
     """Return aggregate status for one materialization job."""
     with connection.cursor(row_factory=dict_row) as cursor:
         cursor.execute(

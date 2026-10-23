@@ -1,9 +1,8 @@
 """HTTP request and response models for the materialization control plane."""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import StrEnum
 from typing import Any
-from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -28,12 +27,14 @@ from ml_platform.common.types import (
     FeatureId,
     FeatureName,
     IcebergSchema,
+    JobId,
     LabelId,
     LabelName,
     LookAheadPartitions,
     LookbackPartition,
     ParameterKey,
     ParameterValue,
+    PartitionId,
     PartitionTimestamp,
     PartitionType,
     ResourceName,
@@ -41,6 +42,7 @@ from ml_platform.common.types import (
     RunFrequency,
     Symbol,
     TransformName,
+    UpdatedAt,
 )
 
 
@@ -344,11 +346,11 @@ class KubernetesResourceLink(_ApiModel):
 class JobResponse(_ApiModel):
     """A materialization job, its targets, partitions, and aggregate lifecycle state."""
 
-    id: UUID
+    id: JobId
     type: JobType
     status: JobStatus
     created_at: CreatedAt
-    updated_at: datetime
+    updated_at: UpdatedAt
     targets: list[JobTarget] = Field(default_factory=list)
     partitions: list[JobPartition] = Field(default_factory=list)
     spark_application_name: str | None = None
@@ -361,15 +363,15 @@ class JobResponse(_ApiModel):
 class PartitionUpdateRequestResponse(_ApiModel):
     """A pending or terminal dataset or feature partition update request."""
 
-    partition_id: UUID
-    job_id: UUID
+    partition_id: PartitionId
+    job_id: JobId
     timestamp: PartitionTimestamp = Field(
         description="UTC timestamp aligned exactly to the start of an hour.",
         examples=["2026-10-20T18:00:00Z"],
     )
     status: PartitionStatus
     created_at: CreatedAt
-    updated_at: datetime
+    updated_at: UpdatedAt
 
 
 class MaterializationJobResponse(_ApiModel):
@@ -382,14 +384,14 @@ class MaterializationJobResponse(_ApiModel):
 class PartitionCompletionRequest(_ApiModel):
     """One authenticated receipt in an atomic Iceberg completion batch."""
 
-    partition_id: UUID
+    partition_id: PartitionId
     resource_type: ResourceType
     row_count: int = Field(ge=0)
     schema_: IcebergSchema = Field(alias="schema", min_length=1)
     content_hash: ContentHash = Field(min_length=1)
     snapshot_id: int = Field(ge=0)
     callback_token: CallbackToken = Field(min_length=1)
-    dataset_partition_ids: list[UUID] | None = None
+    dataset_partition_ids: list[PartitionId] | None = None
 
     @field_validator("schema_")
     @classmethod
@@ -431,7 +433,7 @@ class PartitionCompletionRequest(_ApiModel):
 class PartitionResultResponse(_ApiModel):
     """The recorded receipt for one successfully materialized partition."""
 
-    partition_id: UUID
+    partition_id: PartitionId
     resource_type: ResourceType
     row_count: int
     schema_: IcebergSchema = Field(alias="schema")

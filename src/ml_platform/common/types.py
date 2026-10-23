@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Literal, NewType, assert_never
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,7 +25,10 @@ ResourceVersion = NewType("ResourceVersion", int)
 Symbol = NewType("Symbol", str)
 TransformName = NewType("TransformName", str)
 IcebergSchema = NewType("IcebergSchema", dict[str, str])
+JobId = NewType("JobId", UUID)
+PartitionId = NewType("PartitionId", UUID)
 CreatedAt = NewType("CreatedAt", datetime)
+UpdatedAt = NewType("UpdatedAt", datetime)
 LookbackPartition = NewType("LookbackPartition", int)
 LookAheadPartitions = NewType("LookAheadPartitions", int)
 
