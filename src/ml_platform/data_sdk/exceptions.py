@@ -5,7 +5,6 @@ from ml_platform.data_sdk._exceptions import (
     MarketSymbolConfigurationError,
 )
 from ml_platform.data_sdk.configs._configs import (
-    InvalidTimeRangeError,
     TransformDependencyConfigurationError,
 )
 from ml_platform.data_sdk.dataset_transforms._market_data import (
@@ -53,7 +52,6 @@ __all__ = [
     "ExactColumnsValidationError",
     "FiniteValuesValidationError",
     "InputKeysValidationError",
-    "InvalidTimeRangeError",
     "MarketDataPartitionError",
     "MarketSymbolConfigurationError",
     "MaterializerError",

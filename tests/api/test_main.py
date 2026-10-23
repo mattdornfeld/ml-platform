@@ -4,7 +4,6 @@ import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import Select
@@ -12,7 +11,7 @@ from sqlalchemy import Select
 from ml_platform.api import main as api_main
 from ml_platform.api.database import get_connection
 from ml_platform.api.main import app, create_dataset, get_job
-from ml_platform.api.models import Dataset, DatasetPartitionRequest, Job
+from ml_platform.api.models import Dataset
 from ml_platform.common.api.dtos import DatasetCreateRequest
 
 
@@ -28,32 +27,23 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
         """Discard dependency overrides after each API test."""
         app.dependency_overrides.clear()
 
-    def test_create_dataset_enqueues_materialization_job(self) -> None:
-        """Registration creates the authoritative submitted materialization job."""
+    def test_create_dataset_registers_without_materialization_job(self) -> None:
+        """Dataset registration persists only the immutable resource definition."""
         now = datetime.now(UTC)
         models: list[object] = []
         session = MagicMock()
         session.add.side_effect = models.append
 
-        def flush() -> None:
-            """Assign the server-generated identifier used by partition requests."""
-            job = next(model for model in models if isinstance(model, Job))
-            job.id = uuid4()
-
         def refresh(model: object) -> None:
-            """Apply server defaults exposed by PostgreSQL RETURNING."""
+            """Apply the dataset creation timestamp supplied by PostgreSQL."""
             match model:
                 case Dataset():
                     model.created_at = now
-                case Job():
-                    model.created_at = now
-                    model.updated_at = now
                 case _ as unsupported_model:
                     raise TypeError(
                         f"Unsupported model refresh: {unsupported_model!r}."
                     )
 
-        session.flush.side_effect = flush
         session.refresh.side_effect = refresh
         payload = DatasetCreateRequest.model_validate(
             {
@@ -64,10 +54,6 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                     "keys": ["symbol"],
                     "partition_type": "daily",
                     "symbols": ["AAPL"],
-                    "time_range": {
-                        "start_date": "2026-01-01",
-                        "end_date": "2026-01-02",
-                    },
                 },
             }
         )
@@ -76,21 +62,9 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
 
         self.assertEqual(response.name, "sp500")
         self.assertEqual(response.id, "sp500_v1")
-        self.assertTrue(
-            any(
-                isinstance(model, Job)
-                and model.type == "dataset_materialization"
-                and model.status == "submitted"
-                for model in models
-            )
-        )
-        self.assertTrue(
-            any(
-                isinstance(model, DatasetPartitionRequest)
-                and model.status == "pending"
-                for model in models
-            )
-        )
+        self.assertEqual(models, [models[0]])
+        self.assertIsInstance(models[0], Dataset)
+        session.commit.assert_called_once()
 
     def test_dataset_validation_policy_includes_empty_partition_setting(
         self,
@@ -105,10 +79,6 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                     "keys": ["symbol"],
                     "partition_type": "daily",
                     "symbols": ["AAPL"],
-                    "time_range": {
-                        "start_date": "2026-01-01",
-                        "end_date": "2026-01-02",
-                    },
                     "validations": [
                         {
                             "type": "minimum_rows",

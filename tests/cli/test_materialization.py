@@ -26,7 +26,6 @@ dataset_type: market_data
 description: Test prices.
 keys: [symbol]
 symbols: [AAPL]
-time_range: {start_date: 2026-01-01, end_date: 2026-01-02}
 """)
         (self.root / "features" / "returns.yaml").write_text("""name: returns
 version: 1

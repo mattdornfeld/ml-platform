@@ -79,7 +79,6 @@ from ml_platform.data_sdk.configs import (
     ParameterKey,
     ParameterValue,
     TripleBarrierConfig,
-    TimeRange,
     TransformName,
 )
 
@@ -94,7 +93,6 @@ __all__ += [
     "MarketDataConfig",
     "ParameterKey",
     "ParameterValue",
-    "TimeRange",
     "TransformName",
     "TripleBarrierConfig",
 ]

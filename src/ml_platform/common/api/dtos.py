@@ -1,6 +1,6 @@
 """HTTP request and response models for the materialization control plane."""
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
@@ -83,13 +83,6 @@ class ResourceType(StrEnum):
     LABEL = "label"
 
 
-class DatasetTimeRange(_ApiModel):
-    """Inclusive start and exclusive end dates for a dataset definition."""
-
-    start_date: date
-    end_date: date
-
-
 class MarketDataDatasetConfig(_ApiModel):
     """Definition fields for a market-data dataset, excluding its derived ID."""
 
@@ -100,7 +93,6 @@ class MarketDataDatasetConfig(_ApiModel):
     keys: list[EntityKey] = Field(min_length=1)
     partition_type: Literal["hourly", "daily"]
     symbols: list[str] = Field(min_length=1)
-    time_range: DatasetTimeRange
 
 
 class DatasetCreateRequest(_ApiModel):
@@ -122,7 +114,6 @@ class DatasetResponse(DatasetCreateRequest):
     """A persisted dataset definition."""
 
     created_at: datetime
-    job_id: UUID | None = None
 
 
 class DatasetDescriptionUpdate(_ApiModel):

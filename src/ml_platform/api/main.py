@@ -5,7 +5,7 @@ import os
 import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path as FilePath
 from typing import Annotated, Any
 from urllib.parse import quote
@@ -636,7 +636,7 @@ def delete_dataset(
 def create_dataset(
     payload: DatasetCreateRequest, session: DatabaseSession
 ) -> DatasetResponse:
-    """Register an immutable dataset definition and its initial backfill job."""
+    """Register an immutable dataset definition without scheduling work."""
     dataset = Dataset(
         name=payload.name,
         version=payload.version,
@@ -645,12 +645,6 @@ def create_dataset(
     )
     try:
         session.add(dataset)
-        job = _enqueue_dataset_job(
-            session,
-            payload.name,
-            payload.version,
-            dataset.config,
-        )
         session.commit()
     except IntegrityError as error:
         session.rollback()
@@ -658,7 +652,6 @@ def create_dataset(
             status_code=409, detail="Dataset name and version already exist."
         ) from error
     session.refresh(dataset)
-    session.refresh(job)
     return DatasetResponse.model_validate(
         {
             "name": dataset.name,
@@ -666,42 +659,8 @@ def create_dataset(
             "dataset_type": dataset.dataset_type,
             "config": dataset.config,
             "created_at": dataset.created_at,
-            "job_id": job.id,
         }
     )
-
-
-def _enqueue_dataset_job(
-    session: Session, name: str, version: int, config: dict[str, Any]
-) -> Job:
-    """Create the initial job and every daily dataset partition request."""
-    start = datetime.combine(
-        datetime.fromisoformat(config["time_range"]["start_date"]).date(),
-        time.min,
-        UTC,
-    )
-    end = datetime.combine(
-        datetime.fromisoformat(config["time_range"]["end_date"]).date(),
-        time.min,
-        UTC,
-    )
-    job = Job(type="dataset_materialization", status="submitted")
-    session.add(job)
-    session.flush()
-    timestamp = start
-    while timestamp < end:
-        session.add(
-            DatasetPartitionRequest(
-                job_id=job.id,
-                dataset_name=name,
-                dataset_version=version,
-                timestamp=timestamp,
-                status="pending",
-                callback_token=secrets.token_urlsafe(32),
-            )
-        )
-        timestamp += timedelta(days=1)
-    return job
 
 
 @app.get(FeatureRoutes.LIST.template, tags=["features"])

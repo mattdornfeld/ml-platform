@@ -1,7 +1,6 @@
 """Strict Pydantic configuration ontology for data resources."""
 
 from collections.abc import Sequence
-from datetime import date
 from enum import StrEnum
 from typing import Literal, Self
 
@@ -40,7 +39,6 @@ __all__ = [
     "ParameterValue",
     "PartitionType",
     "RunFrequency",
-    "TimeRange",
     "TransformConfig",
     "TransformName",
     "TripleBarrierConfig",
@@ -56,35 +54,8 @@ class RunFrequency(StrEnum):
     DAILY = "daily"
 
 
-class InvalidTimeRangeError(DataSdkError):
-    """Raised when a dataset time range does not advance from start to end."""
-
-
 class TransformDependencyConfigurationError(DataSdkError):
     """Raised when transform input datasets or keys are ambiguous."""
-
-
-class TimeRange(BaseConfig):
-    """Inclusive start and exclusive end dates for a dataset definition."""
-
-    start_date: date = Field(description="First included UTC calendar date.")
-    end_date: date = Field(description="First excluded UTC calendar date.")
-
-    @field_validator("start_date", "end_date", mode="before")
-    @classmethod
-    def parse_yaml_date(cls, value: date | str) -> date:
-        """Parse ISO-8601 YAML date values before strict model validation."""
-        return date.fromisoformat(value) if isinstance(value, str) else value
-
-    @model_validator(mode="after")
-    def validate_date_range(self) -> "TimeRange":
-        """Require an end date after the required inclusive start date."""
-        if self.end_date <= self.start_date:
-            raise InvalidTimeRangeError(
-                f"Dataset time range end date {self.end_date.isoformat()} must be after "
-                f"start date {self.start_date.isoformat()}."
-            )
-        return self
 
 
 class DataConfig(BaseConfig):
@@ -241,9 +212,6 @@ class MarketDataConfig(DatasetConfig):
     )
     symbols: list[str] = Field(
         min_length=1, description="Yahoo Finance ticker symbols to download."
-    )
-    time_range: TimeRange = Field(
-        description="Inclusive and exclusive calendar bounds for source data retrieval."
     )
 
     @field_validator("symbols")

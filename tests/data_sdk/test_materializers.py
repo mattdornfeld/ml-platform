@@ -10,7 +10,6 @@ from ml_platform.data_sdk.configs import (
     FeatureConfig,
     LabelConfig,
     MarketDataConfig,
-    TimeRange,
     TripleBarrierConfig,
 )
 from ml_platform.data_sdk.materializers import (
@@ -110,7 +109,6 @@ class MaterializerContractTest(unittest.TestCase):
     def test_data_sdk_model_fields_have_schema_descriptions(self) -> None:
         """Pydantic models exposed by the data SDK document every field."""
         models = (
-            TimeRange,
             DataConfig,
             DatasetConfig,
             LabelConfig,
