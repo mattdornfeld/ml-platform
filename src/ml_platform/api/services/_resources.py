@@ -1,16 +1,17 @@
 """External read-only dashboard links for control-plane resources."""
 
-import os
 from datetime import datetime
 from urllib.parse import quote
 
 from kubernetes import client as kubernetes_client
 from kubernetes.client.exceptions import ApiException
 
+from ml_platform.api._configuration import Dependencies
+
 
 def minio_browser_url(object_path: str) -> str | None:
     """Build a MinIO Console object-browser URL for one warehouse object prefix."""
-    console_url = os.environ.get("MINIO_CONSOLE_URL")
+    console_url = Dependencies.from_environment().minio_console_url
     if not console_url:
         return None
     prefix = quote(f"{object_path.rstrip('/')}/", safe="")
@@ -28,10 +29,11 @@ def minio_partition_url(
 
 def headlamp_resource_url(resource_path: str, resource_name: str) -> str | None:
     """Build a direct Headlamp URL for one resource in the configured namespace."""
-    headlamp_url = os.environ.get("HEADLAMP_URL")
+    dependencies = Dependencies.from_environment()
+    headlamp_url = dependencies.headlamp_url
     if not headlamp_url:
         return None
-    namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+    namespace = dependencies.kubernetes_namespace
     return f"{headlamp_url.rstrip('/')}/c/main/{resource_path}/{namespace}/{resource_name}"
 
 
@@ -54,7 +56,7 @@ def job_kubernetes_resources(application_name: str) -> list[dict[str, str]]:
     )
     if not application_url:
         return resources
-    namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+    namespace = Dependencies.from_environment().kubernetes_namespace
     try:
         kubernetes_client.CustomObjectsApi().get_namespaced_custom_object(
             "sparkoperator.k8s.io",

@@ -229,6 +229,7 @@ def create_dataset(
         {
             "name": definition.name,
             "version": definition.version,
+            "id": f"{definition.name}_v{definition.version}",
             "dataset_type": definition.dataset_type,
             "config": definition.config.model_dump(mode="json"),
             "created_at": definition.created_at,

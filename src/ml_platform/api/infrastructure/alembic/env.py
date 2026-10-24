@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from alembic import context
 from sqlalchemy import engine_from_config, make_url, pool
 
+from ml_platform.api._configuration import Dependencies
 from ml_platform.api.repositories import Base
 
 if TYPE_CHECKING:
@@ -16,12 +16,9 @@ if TYPE_CHECKING:
 
 
 def _alembic_config() -> Config:
-    """Configure Alembic's process-local database URL when one is provided."""
+    """Configure Alembic from the control plane's typed dependencies."""
     config = context.config
-    database_url = os.environ.get("DATABASE_URL")
-    if database_url is None:
-        return config
-    url = make_url(database_url)
+    url = make_url(Dependencies.from_environment().database_url)
     if url.drivername in {"postgresql", "postgresql+psycopg2"}:
         url = url.set(drivername="postgresql+psycopg")
     config.set_main_option(

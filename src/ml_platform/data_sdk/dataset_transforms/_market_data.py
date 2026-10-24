@@ -1,6 +1,7 @@
-"""Yahoo Finance market-data dataset transform."""
+"""Market-data transform and deterministic or Yahoo-backed dataset providers."""
 
 import sys
+from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -52,46 +53,32 @@ class HourlyOhlcvRow:
     volume: int
 
 
-class MarketDataPartitionError(DataSdkError):
-    """Raised when a market-data transform is invoked without output partitions."""
-
-
-class YahooFinanceDataUnavailableError(DataSdkError):
-    """Raised when Yahoo Finance returns no hourly bars for a requested symbol or job."""
-
-
-class YahooFinancePayloadError(DataSdkError):
-    """Raised when Yahoo Finance returns a malformed or error chart payload."""
-
-
 @record
-class MarketDataTransform(DatasetTransform):
-    """Download configured Yahoo Finance bars and construct the OHLCV DataFrame."""
+class DatasetProvider(ABC):
+    """Construct a typed market-data DataFrame for requested partitions."""
 
     spark: SparkSession
     symbols: Sequence[Symbol]
-    partitions: list[datetime]
+    partitions: Sequence[datetime]
 
-    @property
-    def value_schema(self) -> dict[str, str]:
-        """Declare the OHLCV columns persisted beside the shared transform keys."""
-        return {
-            "market_session": "string",
-            "Open": "double",
-            "High": "double",
-            "Low": "double",
-            "Close": "double",
-            "Volume": "bigint",
-        }
+    @abstractmethod
+    def __call__(self) -> DataFrame:
+        """Return the provider's typed rows for all requested partitions."""
+
+
+@record
+class MarketDataDatasetProvider(DatasetProvider):
+    """Download Yahoo Finance market data for requested partitions."""
 
     def __call__(self) -> DataFrame:
-        """Fetch contiguous Yahoo ranges for the requested partition days."""
+        """Fetch contiguous Yahoo ranges and return typed market-data rows."""
         requested_days = sorted(
             {partition.date() for partition in self.partitions}
         )
         if not requested_days:
             raise MarketDataPartitionError(
-                "Market-data materialization requires at least one requested output partition."
+                "Market-data materialization requires at least one requested "
+                "output partition."
             )
         rows: list[HourlyOhlcvRow] = []
         for symbol in self.symbols:
@@ -110,14 +97,80 @@ class MarketDataTransform(DatasetTransform):
                     ) and error.response.status_code not in {404, 422}:
                         raise
                     sys.stdout.write(
-                        f"Skipping unavailable Yahoo Finance range for {symbol}: {error}\n"
+                        "Skipping unavailable Yahoo Finance range for "
+                        f"{symbol}: {error}\n"
                     )
         if not rows:
             raise YahooFinanceDataUnavailableError(
-                "Yahoo Finance returned no hourly data for any configured symbol "
-                f"({', '.join(self.symbols)})."
+                "Yahoo Finance returned no hourly data for any configured "
+                f"symbol ({', '.join(self.symbols)})."
             )
         return _with_market_session(_market_data_frame(self.spark, rows))
+
+
+@record
+class SyntheticDatasetProvider(DatasetProvider):
+    """Produce deterministic regular-session market data for test jobs."""
+
+    def __call__(self) -> DataFrame:
+        """Return one deterministic regular-session bar per symbol and day."""
+        requested_days = sorted(
+            {partition.date() for partition in self.partitions}
+        )
+        if not requested_days:
+            raise MarketDataPartitionError(
+                "Synthetic market-data materialization requires at least one "
+                "requested output partition."
+            )
+        rows = [
+            HourlyOhlcvRow(
+                timestamp=datetime.combine(requested_day, time(15), UTC),
+                symbol=symbol,
+                open_price=100.0,
+                high_price=101.0,
+                low_price=99.0,
+                close_price=100.5,
+                volume=1_000,
+            )
+            for symbol in self.symbols
+            for requested_day in requested_days
+        ]
+        return _with_market_session(_market_data_frame(self.spark, rows))
+
+
+class MarketDataPartitionError(DataSdkError):
+    """Raised when a market-data transform is invoked without output partitions."""
+
+
+class YahooFinanceDataUnavailableError(DataSdkError):
+    """Raised when Yahoo Finance returns no hourly bars for a requested symbol or job."""
+
+
+class YahooFinancePayloadError(DataSdkError):
+    """Raised when Yahoo Finance returns a malformed or error chart payload."""
+
+
+@record
+class MarketDataTransform(DatasetTransform):
+    """Construct market-data rows through one injected dataset provider."""
+
+    provider: DatasetProvider
+
+    @property
+    def value_schema(self) -> dict[str, str]:
+        """Declare OHLCV columns persisted beside shared transform keys."""
+        return {
+            "market_session": "string",
+            "Open": "double",
+            "High": "double",
+            "Low": "double",
+            "Close": "double",
+            "Volume": "bigint",
+        }
+
+    def __call__(self) -> DataFrame:
+        """Return the provider's typed and session-labeled market data."""
+        return self.provider()
 
 
 def _contiguous_date_ranges(partitions: list[date]) -> list[tuple[date, date]]:
@@ -169,7 +222,10 @@ def _request_yahoo_chart(
     """Request one Yahoo chart response and return decoded JSON."""
     start = int(datetime.combine(start_date, time.min, UTC).timestamp())
     end = int(datetime.combine(end_date, time.min, UTC).timestamp())
-    url = f"{YAHOO_CHART_URL}/{quote(symbol, safe='')}?period1={start}&period2={end}&interval=1h&includePrePost=true&events=history"
+    url = (
+        f"{YAHOO_CHART_URL}/{quote(symbol, safe='')}?period1={start}"
+        f"&period2={end}&interval=1h&includePrePost=true&events=history"
+    )
     response = httpx2.get(
         url,
         headers={"User-Agent": "ml-platform/0.1"},
@@ -239,8 +295,8 @@ def _yahoo_chart_rows(
         )
     ):
         raise YahooFinancePayloadError(
-            f"Yahoo Finance response for {symbol!r} has OHLCV arrays inconsistent with timestamp count "
-            f"{len(timestamps)}."
+            f"Yahoo Finance response for {symbol!r} has OHLCV arrays inconsistent "
+            f"with timestamp count {len(timestamps)}."
         )
     return [
         HourlyOhlcvRow(
@@ -286,13 +342,13 @@ def _market_data_frame(
     )
 
 
-def _with_market_session(frame: DataFrame) -> DataFrame:
+def _with_market_session(data_frame: DataFrame) -> DataFrame:
     """Add a pre-market, regular, or after-hours session label."""
     eastern = spark_functions.date_format(
         spark_functions.from_utc_timestamp("timestamp", "America/New_York"),
         "HH:mm:ss",
     )
-    return frame.withColumn(
+    return data_frame.withColumn(
         "market_session",
         spark_functions.when(
             (eastern >= "04:00:00") & (eastern < "09:30:00"), "pre_market"

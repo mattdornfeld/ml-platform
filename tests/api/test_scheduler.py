@@ -5,7 +5,25 @@ import unittest
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
+from ml_platform.api import Dependencies
 from ml_platform.api.services import ADMISSION_GATE, JobScheduler
+from ml_platform.common.types import Environment
+
+
+def _dependencies() -> Dependencies:
+    """Return fixed runtime dependencies for isolated scheduler tests."""
+    return Dependencies(
+        environment=Environment.LOCAL,
+        database_url="postgresql://unused",
+        kubernetes_namespace="ml-platform",
+        materialization_image="ml-platform:latest",
+        warehouse_dir="s3a://warehouse",
+        s3_endpoint="http://minio:9000",
+        minio_root_user="minio",
+        minio_root_password="miniosecret",
+        headlamp_url="",
+        minio_console_url="",
+    )
 
 
 class SchedulerTest(unittest.TestCase):
@@ -16,7 +34,7 @@ class SchedulerTest(unittest.TestCase):
         self, custom_objects: MagicMock
     ) -> None:
         """The API, rather than Kueue, owns initial partition eligibility."""
-        scheduler = JobScheduler("postgresql://unused")
+        scheduler = JobScheduler(_dependencies())
         job_id = UUID("00000000-0000-0000-0000-000000000001")
         scheduler._dataset_job = MagicMock(
             return_value={
@@ -61,6 +79,7 @@ class SchedulerTest(unittest.TestCase):
         self.assertEqual(config["dataset_type"], "market_data")
         self.assertEqual(config["name"], "sp500")
         self.assertEqual(config["version"], 3)
+        self.assertEqual(config["environment"], "local")
         self.assertEqual(config["warehouse_dir"], "s3a://warehouse")
         self.assertEqual(config["partitions"], [])
 
@@ -69,7 +88,7 @@ class SchedulerTest(unittest.TestCase):
         self, custom_objects: MagicMock
     ) -> None:
         """A Spark failure is persisted as a failed control-plane job."""
-        scheduler = JobScheduler("postgresql://unused")
+        scheduler = JobScheduler(_dependencies())
         custom_objects.return_value.get_namespaced_custom_object.return_value = {
             "status": {"applicationState": {"state": "FAILED"}}
         }

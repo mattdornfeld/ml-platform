@@ -14,10 +14,14 @@ from ml_platform.common.types import (
     DatasetType,
     DataType,
     EntityKey,
+    Environment,
     PartitionType,
     RunFrequency,
 )
-from ml_platform.data_sdk.dataset_transforms import MarketDataTransform
+from ml_platform.data_sdk.dataset_transforms import (
+    MarketDataTransform,
+    SyntheticDatasetProvider,
+)
 from ml_platform.data_sdk.exceptions import (
     FiniteValuesValidationError,
     InputKeysValidationError,
@@ -62,9 +66,11 @@ class MaterializerValidationTest(unittest.TestCase):
     def _daily_dataset_transform(self) -> MarketDataTransform:
         """Return the static transform layout required by dataset validation tests."""
         return MarketDataTransform(
-            spark=self.spark,
-            symbols=["AAA"],
-            partitions=[datetime(2026, 1, 1, tzinfo=UTC)],
+            provider=SyntheticDatasetProvider(
+                spark=self.spark,
+                symbols=["AAA"],
+                partitions=(datetime(2026, 1, 1, tzinfo=UTC),),
+            ),
             keys=["symbol"],
             partition_type="daily",
         )
@@ -133,6 +139,7 @@ class MaterializerValidationTest(unittest.TestCase):
         )
         worker = DatasetMaterializer(
             DatasetMaterializationConfig(
+                environment=Environment.LOCAL,
                 name="market",
                 version=1,
                 description="Test market data.",
@@ -197,6 +204,7 @@ class MaterializerValidationTest(unittest.TestCase):
         """Feature policy checks remain enforced after shared structural validation."""
         config = FeatureMaterializationConfig.model_validate(
             {
+                "environment": Environment.LOCAL,
                 "name": "returns",
                 "version": 1,
                 "description": "Test feature.",

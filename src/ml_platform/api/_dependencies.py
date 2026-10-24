@@ -11,6 +11,7 @@ from fastapi import Depends, Path
 from psycopg import Connection
 from sqlalchemy.orm import Session
 
+from ml_platform.api._configuration import Dependencies
 from ml_platform.api.infrastructure import get_connection, get_session
 from ml_platform.common.types import JobId, ResourceName, ResourceVersion
 
@@ -42,4 +43,14 @@ ResourcePathVersion = Annotated[
         gt=0,
         description="Positive immutable version of the addressed resource.",
     ),
+]
+
+
+__all__ = [
+    "DatabaseConnection",
+    "DatabaseSession",
+    "Dependencies",
+    "JobPathId",
+    "ResourcePathName",
+    "ResourcePathVersion",
 ]

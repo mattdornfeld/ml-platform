@@ -1,11 +1,13 @@
 """Public concrete exceptions raised by the ML Platform control-plane API."""
 
-from ml_platform.api._exceptions import UnsupportedScheduledJobTypeError
+from ml_platform.api._exceptions import (
+    DatabaseUrlNotConfiguredError,
+    UnsupportedScheduledJobTypeError,
+)
 from ml_platform.api.infrastructure.alembic.exceptions import (
     DowngradeNotImplementedError,
 )
 from ml_platform.api.infrastructure.exceptions import (
-    DatabaseUrlNotConfiguredError,
     MaterializationDatabaseUnavailableError,
 )
 from ml_platform.api.repositories.exceptions import (

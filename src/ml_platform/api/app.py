@@ -6,7 +6,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from ml_platform.api.infrastructure import database_url, upgrade_database
+from ml_platform.api._configuration import Dependencies
+from ml_platform.api.infrastructure import upgrade_database
 from ml_platform.api.routers import (
     datasets_router,
     features_router,
@@ -22,9 +23,10 @@ from ml_platform.api.services import JobScheduler
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     """Populate PostgreSQL then run the authoritative materialization scheduler."""
+    dependencies = Dependencies.from_environment()
     upgrade_database()
     stop = asyncio.Event()
-    scheduler = JobScheduler(database_url())
+    scheduler = JobScheduler(dependencies)
     scheduler_task = asyncio.create_task(scheduler.run(stop))
     try:
         yield

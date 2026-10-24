@@ -1,6 +1,5 @@
 """Synchronous SQLAlchemy session dependency for the materialization API."""
 
-import os
 from collections.abc import Generator
 from functools import lru_cache
 
@@ -11,8 +10,9 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from ml_platform.api._configuration import Dependencies
+from ml_platform.api._exceptions import DatabaseUrlNotConfiguredError
 from ml_platform.api.infrastructure.exceptions import (
-    DatabaseUrlNotConfiguredError,
     MaterializationDatabaseUnavailableError,
 )
 
@@ -27,11 +27,11 @@ def engine_for(database_url: str) -> Engine:
 
 
 def database_url() -> str:
-    """Read the required PostgreSQL endpoint from the process environment."""
-    database_url = os.environ.get("DATABASE_URL")
-    if database_url is None:
+    """Return the configured PostgreSQL endpoint from typed API dependencies."""
+    configured_database_url = Dependencies.from_environment().database_url
+    if not configured_database_url:
         raise DatabaseUrlNotConfiguredError
-    return database_url
+    return configured_database_url
 
 
 def get_session() -> Generator[Session, None, None]:

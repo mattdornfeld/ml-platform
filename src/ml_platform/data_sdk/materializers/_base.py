@@ -21,6 +21,7 @@ from ml_platform.common.types import (
     CallbackToken,
     DatasetName,
     Description,
+    Environment,
     PartitionTimestamp,
     PartitionType,
     ResourceName,
@@ -92,6 +93,9 @@ class MaterializerPartition(BaseConfig):
 class MaterializerConfig(BaseConfig):
     """Strict immutable API runtime contract shared by all materializers."""
 
+    environment: Environment = Field(
+        description="Runtime environment that selects injected data providers."
+    )
     name: ResourceName = Field(
         pattern=r"^[a-z][a-z0-9_]*$",
         description="Stable lowercase resource name.",

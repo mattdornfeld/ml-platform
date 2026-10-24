@@ -35,6 +35,13 @@ LookbackPartition = NewType("LookbackPartition", int)
 LookAheadPartitions = NewType("LookAheadPartitions", int)
 
 
+class Environment(StrEnum):
+    """Runtime environments supported by the control plane and workers."""
+
+    TEST = "test"
+    LOCAL = "local"
+
+
 class EntityKey(StrEnum):
     """Supported logical entity keys emitted by data transforms."""
 
