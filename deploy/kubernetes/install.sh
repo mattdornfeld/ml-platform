@@ -1,41 +1,29 @@
 #!/usr/bin/env bash
-# Install every cluster-scoped and namespace-scoped ML Platform service.
+# Install every versioned ML Platform Kubernetes resource with kubectl.
 set -euo pipefail
 
 KUBECTL="${KUBECTL:-kubectl}"
-HELM="${HELM:-helm}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEPLOY_DIR="$ROOT/deploy/kubernetes"
 
 "$KUBECTL" apply -f "$DEPLOY_DIR/namespace.yaml"
-
-"$HELM" repo add kubeflow https://kubeflow.github.io/spark-operator
-"$HELM" repo add headlamp https://kubernetes-sigs.github.io/headlamp/
-"$HELM" repo update
-
-"$HELM" upgrade --install spark-operator kubeflow/spark-operator \
-  --version 2.5.2 \
-  --namespace spark-operator \
-  --create-namespace \
-  --values "$DEPLOY_DIR/spark-operator-values.yaml" \
-  --wait
-
-"$HELM" upgrade --install kueue oci://registry.k8s.io/kueue/charts/kueue \
-  --version 0.20.1 \
-  --namespace kueue-system \
-  --create-namespace \
-  --values "$DEPLOY_DIR/kueue-values.yaml" \
-  --wait \
-  --timeout 300s
+"$KUBECTL" create namespace spark-operator --dry-run=client -o yaml | "$KUBECTL" apply -f -
+"$KUBECTL" --namespace spark-operator apply --server-side --force-conflicts \
+  -f "$DEPLOY_DIR/spark-operator.yaml"
+"$KUBECTL" apply --server-side --force-conflicts \
+  -f "$DEPLOY_DIR/spark-operator-ml-platform.yaml"
+"$KUBECTL" -n spark-operator rollout status \
+  deployment/spark-operator-controller --timeout=180s
 
 "$KUBECTL" create namespace headlamp --dry-run=client -o yaml | "$KUBECTL" apply -f -
 "$KUBECTL" apply -f "$DEPLOY_DIR/headlamp-rbac.yaml"
-"$HELM" upgrade --install headlamp headlamp/headlamp \
-  --version 0.46.0 \
-  --namespace headlamp \
-  --create-namespace \
-  --values "$DEPLOY_DIR/headlamp-values.yaml" \
-  --wait
+"$KUBECTL" create namespace kueue-system --dry-run=client -o yaml | "$KUBECTL" apply -f -
+"$KUBECTL" apply --server-side --force-conflicts \
+  -f "$DEPLOY_DIR/kueue-controller.yaml"
+"$KUBECTL" -n kueue-system rollout status \
+  deployment/kueue-controller-manager --timeout=180s
+"$KUBECTL" apply -f "$DEPLOY_DIR/headlamp.yaml"
+"$KUBECTL" -n headlamp rollout status deployment/headlamp --timeout=180s
 
 "$KUBECTL" apply -k "$DEPLOY_DIR"
 "$KUBECTL" -n ml-platform rollout status deployment/postgres --timeout=180s

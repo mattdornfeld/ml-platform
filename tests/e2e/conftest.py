@@ -3,6 +3,7 @@
 import os
 import subprocess
 import tempfile
+import time
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,11 +13,20 @@ from testcontainers.community.k3s import K3SContainer
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 K3S_IMAGE_DIRECTORY = "/var/lib/rancher/k3s/agent/images"
-DEPLOYMENT_SCRIPT = REPOSITORY_ROOT / "deploy/kubernetes/install.sh"
+K3S_IMAGE = "ml-platform-k3s:latest"
+K3S_DOCKERFILE = "deploy/docker/k3s/Dockerfile"
+K3S_E2E_COMMAND = (
+    "server --disable traefik --tls-san=localhost "
+    "--kubelet-arg=eviction-hard=imagefs.available<100Mi,nodefs.available<100Mi"
+)
 
 
 class E2eImageImportError(Exception):
     """Raised when K3s cannot import a required locally built image."""
+
+
+class E2eDeploymentTimeoutError(Exception):
+    """Raised when the K3s image does not create a required deployment."""
 
 
 @dataclass(frozen=True)
@@ -60,8 +70,23 @@ def _import_image(cluster: K3SContainer, image: str, archive: Path) -> None:
         raise E2eImageImportError(result.output.decode())
 
 
-def _build_and_import_images(cluster: K3SContainer) -> None:
-    """Build every local deployment image before applying Kubernetes resources."""
+def _build_k3s_image() -> None:
+    """Build the self-bootstrapping K3s image that owns deployment setup."""
+    _run(
+        [
+            "docker",
+            "build",
+            "--tag",
+            K3S_IMAGE,
+            "--file",
+            K3S_DOCKERFILE,
+            ".",
+        ]
+    )
+
+
+def _build_and_import_workload_images(cluster: K3SContainer) -> None:
+    """Build and import every local image required by deployed workloads."""
     _run(["docker", "build", "--tag", "ml-platform:latest", "."])
     _run(
         [
@@ -84,6 +109,49 @@ def _build_and_import_images(cluster: K3SContainer) -> None:
         )
 
 
+def _wait_for_platform(platform: DeployedPlatform) -> None:
+    """Wait until the image-managed cluster makes every workload ready."""
+    for namespace, deployment in (
+        ("ml-platform", "postgres"),
+        ("ml-platform", "minio"),
+        ("ml-platform", "ml-control-plane"),
+    ):
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            try:
+                platform.kubectl(
+                    "--namespace",
+                    namespace,
+                    "get",
+                    f"deployment/{deployment}",
+                )
+            except subprocess.CalledProcessError:
+                time.sleep(1)
+            else:
+                break
+        else:
+            raise E2eDeploymentTimeoutError(
+                f"The K3s image did not create deployment {namespace}/{deployment}."
+            )
+        platform.kubectl(
+            "--namespace",
+            namespace,
+            "rollout",
+            "status",
+            f"deployment/{deployment}",
+            "--timeout=180s",
+        )
+    for job in ("create-warehouse-bucket", "configure-public-warehouse"):
+        platform.kubectl(
+            "--namespace",
+            "ml-platform",
+            "wait",
+            "--for=condition=complete",
+            f"job/{job}",
+            "--timeout=180s",
+        )
+
+
 @pytest.fixture(scope="session")
 def deployed_platform() -> Generator[DeployedPlatform, None, None]:
     """Build images and deploy every required ML Platform service to K3s."""
@@ -92,19 +160,22 @@ def deployed_platform() -> Generator[DeployedPlatform, None, None]:
     previous_ryuk_setting = os.environ.get("TESTCONTAINERS_RYUK_DISABLED")
     os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
     try:
-        with K3SContainer(
-            "rancher/k3s:v1.31.4-k3s1", enable_cgroup_mount=False
-        ) as cluster:
-            _build_and_import_images(cluster)
+        _build_k3s_image()
+        cluster = K3SContainer(K3S_IMAGE, enable_cgroup_mount=False)
+        cluster.with_command(K3S_E2E_COMMAND)
+        with cluster:
+            _build_and_import_workload_images(cluster)
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".yaml", delete=False
             ) as kubeconfig_file:
                 kubeconfig_file.write(cluster.config_yaml())
                 kubeconfig = Path(kubeconfig_file.name)
             try:
-                environment = os.environ | {"KUBECONFIG": str(kubeconfig)}
-                _run([str(DEPLOYMENT_SCRIPT)], environment=environment)
-                yield DeployedPlatform(cluster=cluster, kubeconfig=kubeconfig)
+                platform = DeployedPlatform(
+                    cluster=cluster, kubeconfig=kubeconfig
+                )
+                _wait_for_platform(platform)
+                yield platform
             finally:
                 kubeconfig.unlink(missing_ok=True)
     finally:

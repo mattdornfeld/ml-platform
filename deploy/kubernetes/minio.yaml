@@ -47,7 +47,7 @@ spec:
         imagePullPolicy: IfNotPresent
         envFrom: [{secretRef: {name: minio-credentials}}]
         command: [/bin/sh, -ec]
-        args: ["mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD; mc mb --ignore-existing local/warehouse"]
+        args: ["until mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD; do sleep 2; done; mc mb --ignore-existing local/warehouse"]
 ---
 apiVersion: batch/v1
 kind: Job
@@ -63,4 +63,4 @@ spec:
         imagePullPolicy: IfNotPresent
         envFrom: [{secretRef: {name: minio-credentials}}]
         command: [/bin/sh, -ec]
-        args: ["mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD; mc mb --ignore-existing local/warehouse; mc anonymous set public local/warehouse"]
+        args: ["until mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD; do sleep 2; done; mc mb --ignore-existing local/warehouse; mc anonymous set public local/warehouse"]
