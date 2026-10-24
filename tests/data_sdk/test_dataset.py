@@ -50,10 +50,10 @@ class DatasetWorkerTest(unittest.TestCase):
         """The declared dataset type constructs MarketDataTransform with job partitions."""
         worker = DatasetMaterializer(self.config())
         worker._transform(MagicMock())
-        provider = transform.call_args.kwargs["provider"]
-        self.assertEqual(provider.symbols, ("AAPL",))
+        self.assertEqual(transform.call_args.kwargs["symbols"], ("AAPL",))
         self.assertEqual(
-            provider.partitions[0].date().isoformat(), "2026-01-01"
+            transform.call_args.kwargs["partitions"][0].date().isoformat(),
+            "2026-01-01",
         )
 
     @patch("ml_platform.data_sdk.materializers._dataset.MarketDataTransform")
@@ -65,23 +65,13 @@ class DatasetWorkerTest(unittest.TestCase):
             update={"environment": Environment.TEST}
         )
 
-        DatasetMaterializer(config)._transform(MagicMock())
+        dataset_transform = DatasetMaterializer(config)._transform(MagicMock())
 
-        provider = transform.call_args.kwargs["provider"]
-        self.assertEqual(type(provider).__name__, "SyntheticDatasetProvider")
-        self.assertEqual(provider.schema, provider.source_provider.schema)
         self.assertEqual(
-            tuple(column.name for column in provider.schema.columns),
-            (
-                "timestamp",
-                "symbol",
-                "market_session",
-                "Open",
-                "High",
-                "Low",
-                "Close",
-                "Volume",
-            ),
+            type(dataset_transform).__name__, "SyntheticDatasetTransform"
+        )
+        self.assertIs(
+            dataset_transform.source_transform, transform.return_value
         )
 
     def test_unsupported_dataset_type_is_rejected_by_configuration(

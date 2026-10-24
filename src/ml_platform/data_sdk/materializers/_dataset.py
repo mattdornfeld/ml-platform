@@ -16,10 +16,8 @@ from ml_platform.common.types import (
 )
 from ml_platform.data_sdk._exceptions import MarketSymbolConfigurationError
 from ml_platform.data_sdk.dataset_transforms import (
-    DatasetProvider,
-    MarketDataDatasetProvider,
     MarketDataTransform,
-    SyntheticDatasetProvider,
+    SyntheticDatasetTransform,
 )
 from ml_platform.data_sdk.materializers._base import (
     Materializer,
@@ -149,24 +147,23 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
         """Build the user-facing transform selected by the dataset definition."""
         match self.config.dataset_type:
             case DatasetType.MARKET_DATA:
-                provider: DatasetProvider
+                source_transform = MarketDataTransform(
+                    spark=spark,
+                    partitions=tuple(self.config.partition_timestamps),
+                    symbols=tuple(self.config.symbols),
+                    keys=self.config.keys,
+                    partition_type=self.config.partition_type,
+                )
                 match self.config.environment:
                     case Environment.LOCAL:
-                        provider = MarketDataDatasetProvider(
-                            spark=spark,
-                            symbols=tuple(self.config.symbols),
-                            partitions=tuple(self.config.partition_timestamps),
-                        )
+                        return source_transform
                     case Environment.TEST:
-                        source_provider = MarketDataDatasetProvider(
-                            spark=spark,
-                            symbols=tuple(self.config.symbols),
-                            partitions=tuple(self.config.partition_timestamps),
-                        )
-                        provider = SyntheticDatasetProvider(
+                        return SyntheticDatasetTransform(
                             spark=spark,
                             partitions=tuple(self.config.partition_timestamps),
-                            source_provider=source_provider,
+                            keys=self.config.keys,
+                            partition_type=self.config.partition_type,
+                            source_transform=source_transform,
                             synthetic_seed=0,
                         )
                     case _ as unsupported_environment:
@@ -174,11 +171,6 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
                             "Dataset materializer does not support environment "
                             f"{unsupported_environment!r}."
                         )
-                return MarketDataTransform(
-                    provider=provider,
-                    keys=self.config.keys,
-                    partition_type=self.config.partition_type,
-                )
             case _ as unsupported_type:
                 raise UnsupportedDatasetTypeError(
                     f"Dataset materializer does not support dataset type {unsupported_type!r}."

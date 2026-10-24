@@ -19,9 +19,8 @@ from ml_platform.common.types import (
     RunFrequency,
 )
 from ml_platform.data_sdk.dataset_transforms import (
-    MarketDataDatasetProvider,
     MarketDataTransform,
-    SyntheticDatasetProvider,
+    SyntheticDatasetTransform,
 )
 from ml_platform.data_sdk.exceptions import (
     FiniteValuesValidationError,
@@ -66,19 +65,19 @@ class MaterializerValidationTest(unittest.TestCase):
 
     def _daily_dataset_transform(self) -> MarketDataTransform:
         """Return the static transform layout required by dataset validation tests."""
-        return MarketDataTransform(
-            provider=SyntheticDatasetProvider(
-                spark=self.spark,
-                partitions=(datetime(2026, 1, 1, tzinfo=UTC),),
-                source_provider=MarketDataDatasetProvider(
-                    spark=self.spark,
-                    partitions=(datetime(2026, 1, 1, tzinfo=UTC),),
-                    symbols=("AAA",),
-                ),
-                synthetic_seed=0,
-            ),
+        return SyntheticDatasetTransform(
+            spark=self.spark,
+            partitions=(datetime(2026, 1, 1, tzinfo=UTC),),
             keys=["symbol"],
             partition_type="daily",
+            source_transform=MarketDataTransform(
+                spark=self.spark,
+                partitions=(datetime(2026, 1, 1, tzinfo=UTC),),
+                symbols=("AAA",),
+                keys=["symbol"],
+                partition_type="daily",
+            ),
+            synthetic_seed=0,
         )
 
     def test_xnys_regular_session_filter_selects_sessions_and_skips_closed_periods(
