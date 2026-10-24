@@ -12,21 +12,12 @@ import pytest
 from testcontainers.community.k3s import K3SContainer
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-K3S_IMAGE_DIRECTORY = "/var/lib/rancher/k3s/agent/images"
 K3S_IMAGE = "ml-platform-k3s:latest"
 K3S_DOCKERFILE = "deploy/docker/k3s/Dockerfile"
-K3S_E2E_COMMAND = (
-    "server --disable traefik --tls-san=localhost "
-    "--kubelet-arg=eviction-hard=imagefs.available<100Mi,nodefs.available<100Mi"
-)
 
 
-class E2eImageImportError(Exception):
-    """Raised when K3s cannot import a required locally built image."""
-
-
-class E2eDeploymentTimeoutError(Exception):
-    """Raised when the K3s image does not create a required deployment."""
+class E2eImageHealthTimeoutError(Exception):
+    """Raised when the self-contained K3s image does not become healthy."""
 
 
 @dataclass(frozen=True)
@@ -60,22 +51,13 @@ def _run(
     )
 
 
-def _import_image(cluster: K3SContainer, image: str, archive: Path) -> None:
-    """Build one host image archive and import it into K3s containerd."""
-    _run(["docker", "save", "--output", str(archive), image])
-    destination = f"{K3S_IMAGE_DIRECTORY}/{archive.name}"
-    cluster.copy_into_container(archive, destination)
-    result = cluster.exec(["ctr", "images", "import", destination])
-    if result.exit_code != 0:
-        raise E2eImageImportError(result.output.decode())
-
-
 def _build_k3s_image() -> None:
     """Build the self-bootstrapping K3s image that owns deployment setup."""
     _run(
         [
             "docker",
             "build",
+            "--quiet",
             "--tag",
             K3S_IMAGE,
             "--file",
@@ -85,71 +67,24 @@ def _build_k3s_image() -> None:
     )
 
 
-def _build_and_import_workload_images(cluster: K3SContainer) -> None:
-    """Build and import every local image required by deployed workloads."""
-    _run(["docker", "build", "--tag", "ml-platform:latest", "."])
-    _run(
-        [
-            "docker",
-            "build",
-            "--tag",
-            "ml-platform-minio:latest",
-            "--file",
-            "deploy/docker/minio/Dockerfile",
-            ".",
-        ]
-    )
-    with tempfile.TemporaryDirectory() as directory:
-        archives = Path(directory)
-        _import_image(cluster, "ml-platform:latest", archives / "platform.tar")
-        _import_image(
-            cluster,
-            "ml-platform-minio:latest",
-            archives / "minio.tar",
-        )
-
-
-def _wait_for_platform(platform: DeployedPlatform) -> None:
-    """Wait until the image-managed cluster makes every workload ready."""
-    for namespace, deployment in (
-        ("ml-platform", "postgres"),
-        ("ml-platform", "minio"),
-        ("ml-platform", "ml-control-plane"),
-    ):
-        deadline = time.monotonic() + 180
-        while time.monotonic() < deadline:
-            try:
-                platform.kubectl(
-                    "--namespace",
-                    namespace,
-                    "get",
-                    f"deployment/{deployment}",
-                )
-            except subprocess.CalledProcessError:
-                time.sleep(1)
-            else:
-                break
-        else:
-            raise E2eDeploymentTimeoutError(
-                f"The K3s image did not create deployment {namespace}/{deployment}."
+def _wait_for_healthy_image(cluster: K3SContainer) -> None:
+    """Wait until Docker reports the complete platform image as healthy."""
+    deadline = time.monotonic() + 180
+    container = cluster.get_wrapped_container()
+    while time.monotonic() < deadline:
+        container.reload()
+        health = container.attrs["State"].get("Health", {}).get("Status")
+        if health == "healthy":
+            return
+        if health == "unhealthy":
+            logs = container.logs().decode()
+            raise E2eImageHealthTimeoutError(
+                f"The K3s image became unhealthy while bootstrapping:\n{logs}"
             )
-        platform.kubectl(
-            "--namespace",
-            namespace,
-            "rollout",
-            "status",
-            f"deployment/{deployment}",
-            "--timeout=180s",
-        )
-    for job in ("create-warehouse-bucket", "configure-public-warehouse"):
-        platform.kubectl(
-            "--namespace",
-            "ml-platform",
-            "wait",
-            "--for=condition=complete",
-            f"job/{job}",
-            "--timeout=180s",
-        )
+        time.sleep(1)
+    raise E2eImageHealthTimeoutError(
+        "The self-contained K3s image did not become healthy within 180 seconds."
+    )
 
 
 @pytest.fixture(scope="session")
@@ -162,20 +97,15 @@ def deployed_platform() -> Generator[DeployedPlatform, None, None]:
     try:
         _build_k3s_image()
         cluster = K3SContainer(K3S_IMAGE, enable_cgroup_mount=False)
-        cluster.with_command(K3S_E2E_COMMAND)
         with cluster:
-            _build_and_import_workload_images(cluster)
+            _wait_for_healthy_image(cluster)
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".yaml", delete=False
             ) as kubeconfig_file:
                 kubeconfig_file.write(cluster.config_yaml())
                 kubeconfig = Path(kubeconfig_file.name)
             try:
-                platform = DeployedPlatform(
-                    cluster=cluster, kubeconfig=kubeconfig
-                )
-                _wait_for_platform(platform)
-                yield platform
+                yield DeployedPlatform(cluster=cluster, kubeconfig=kubeconfig)
             finally:
                 kubeconfig.unlink(missing_ok=True)
     finally:

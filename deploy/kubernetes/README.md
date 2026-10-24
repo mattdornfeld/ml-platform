@@ -6,9 +6,12 @@ This directory is the complete source of truth for the local and E2E deployment.
 this directory to an existing cluster. Helm is not required to deploy or
 operate the platform.
 
-[the K3s Dockerfile](../docker/k3s/Dockerfile) creates a self-bootstrapping
-single-node cluster for E2E tests. Its entrypoint applies the same resources in
-dependency order, so K3s tests do not invoke `install.sh`.
+[the K3s Dockerfile](../docker/k3s/Dockerfile) creates a self-contained,
+self-bootstrapping single-node cluster for E2E tests. It builds the local
+control-plane and MinIO images into K3s-importable archives, applies the same
+resources in dependency order, and reports Docker health only after all
+platform deployments and initialization jobs are ready. E2E tests therefore
+only start the image and wait for its health status.
 
 - Spark Operator `2.5.2`, rendered in `spark-operator.yaml`
 - Kueue `0.20.1`, rendered in `kueue-controller.yaml`

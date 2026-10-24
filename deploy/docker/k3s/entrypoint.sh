@@ -52,7 +52,18 @@ bootstrap() {
     job/create-warehouse-bucket --timeout=180s
   $KUBECTL -n ml-platform wait --for=condition=complete \
     job/configure-public-warehouse --timeout=180s
+
+  mkdir -p /run/ml-platform
+  touch /run/ml-platform/bootstrap-complete
 }
 
-bootstrap &
+(
+  if ! bootstrap; then
+    # K3s becomes PID 1 after this wrapper execs it. Terminate the cluster on
+    # bootstrap failure so Docker exposes a startup failure instead of a
+    # permanently unhealthy container.
+    kill 1
+  fi
+) &
+
 exec /bin/k3s "$@"

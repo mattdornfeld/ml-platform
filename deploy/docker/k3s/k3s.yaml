@@ -1,0 +1,7 @@
+disable:
+  - traefik
+tls-san:
+  - localhost
+kubelet-arg:
+  - eviction-hard=imagefs.available<100Mi,nodefs.available<100Mi
+  - eviction-minimum-reclaim=imagefs.available=0Mi,nodefs.available=0Mi
