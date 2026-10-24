@@ -1,4 +1,4 @@
-"""Market-data transform and deterministic or Yahoo-backed dataset providers."""
+"""Yahoo Finance market-data dataset transformation."""
 
 import sys
 from dataclasses import dataclass
@@ -52,84 +52,6 @@ OHLCV_SCHEMA = StructType(
         StructField("Volume", LongType(), nullable=False),
     ]
 )
-MARKET_DATA_SCHEMA = DatasetSchema(
-    columns=(
-        DatasetColumn(
-            name=DatasetColumnName("timestamp"),
-            column_type=DatasetColumnType.TIMESTAMP,
-            nullable=False,
-            distribution=PartitionTimestampDistribution(),
-        ),
-        DatasetColumn(
-            name=DatasetColumnName("symbol"),
-            column_type=DatasetColumnType.STRING,
-            nullable=False,
-            distribution=EntityValueDistribution(key=EntityKey.SYMBOL),
-        ),
-        DatasetColumn(
-            name=DatasetColumnName("market_session"),
-            column_type=DatasetColumnType.STRING,
-            nullable=False,
-            distribution=ConstantDistribution(value="regular"),
-        ),
-        DatasetColumn(
-            name=DatasetColumnName("Open"),
-            column_type=DatasetColumnType.DOUBLE,
-            nullable=False,
-            distribution=NormalDistribution(mean=100.0, standard_deviation=8.0),
-        ),
-        DatasetColumn(
-            name=DatasetColumnName("High"),
-            column_type=DatasetColumnType.DOUBLE,
-            nullable=False,
-            distribution=NormalDistribution(mean=106.0, standard_deviation=8.0),
-        ),
-        DatasetColumn(
-            name=DatasetColumnName("Low"),
-            column_type=DatasetColumnType.DOUBLE,
-            nullable=False,
-            distribution=NormalDistribution(mean=94.0, standard_deviation=8.0),
-        ),
-        DatasetColumn(
-            name=DatasetColumnName("Close"),
-            column_type=DatasetColumnType.DOUBLE,
-            nullable=False,
-            distribution=NormalDistribution(mean=100.0, standard_deviation=8.0),
-        ),
-        DatasetColumn(
-            name=DatasetColumnName("Volume"),
-            column_type=DatasetColumnType.BIGINT,
-            nullable=False,
-            distribution=UniformDistribution(
-                minimum=100_000.0,
-                maximum=5_000_000.0,
-            ),
-        ),
-    ),
-    invariants=(
-        *(
-            PositiveInvariant(column=DatasetColumnName(column))
-            for column in ("Open", "High", "Low", "Close", "Volume")
-        ),
-        LessThanOrEqualInvariant(
-            lower_column=DatasetColumnName("Low"),
-            upper_column=DatasetColumnName("Open"),
-        ),
-        LessThanOrEqualInvariant(
-            lower_column=DatasetColumnName("Low"),
-            upper_column=DatasetColumnName("Close"),
-        ),
-        LessThanOrEqualInvariant(
-            lower_column=DatasetColumnName("Open"),
-            upper_column=DatasetColumnName("High"),
-        ),
-        LessThanOrEqualInvariant(
-            lower_column=DatasetColumnName("Close"),
-            upper_column=DatasetColumnName("High"),
-        ),
-    ),
-    partition_type=PartitionType.DAILY,
-)
 
 
 @dataclass(frozen=True)
@@ -153,8 +75,89 @@ class MarketDataTransform(DatasetTransform):
 
     @property
     def schema(self) -> DatasetSchema:
-        """Return the fixed market-data output contract."""
-        return MARKET_DATA_SCHEMA
+        """Return the market-data output contract and synthetic constraints."""
+        return DatasetSchema(
+            columns=(
+                DatasetColumn(
+                    name=DatasetColumnName("timestamp"),
+                    column_type=DatasetColumnType.TIMESTAMP,
+                    synthetic_distribution=PartitionTimestampDistribution(),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("symbol"),
+                    column_type=DatasetColumnType.STRING,
+                    synthetic_distribution=EntityValueDistribution(
+                        key=EntityKey.SYMBOL
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("market_session"),
+                    column_type=DatasetColumnType.STRING,
+                    synthetic_distribution=ConstantDistribution(
+                        value="regular"
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("Open"),
+                    column_type=DatasetColumnType.DOUBLE,
+                    synthetic_distribution=NormalDistribution(
+                        mean=100.0, standard_deviation=8.0
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("High"),
+                    column_type=DatasetColumnType.DOUBLE,
+                    synthetic_distribution=NormalDistribution(
+                        mean=106.0, standard_deviation=8.0
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("Low"),
+                    column_type=DatasetColumnType.DOUBLE,
+                    synthetic_distribution=NormalDistribution(
+                        mean=94.0, standard_deviation=8.0
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("Close"),
+                    column_type=DatasetColumnType.DOUBLE,
+                    synthetic_distribution=NormalDistribution(
+                        mean=100.0, standard_deviation=8.0
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("Volume"),
+                    column_type=DatasetColumnType.BIGINT,
+                    synthetic_distribution=UniformDistribution(
+                        minimum=100_000.0,
+                        maximum=5_000_000.0,
+                    ),
+                ),
+            ),
+            partition_type=PartitionType.DAILY,
+            synthetic_distribution_invariants=(
+                *(
+                    PositiveInvariant(column=DatasetColumnName(column))
+                    for column in ("Open", "High", "Low", "Close", "Volume")
+                ),
+                LessThanOrEqualInvariant(
+                    lower_column=DatasetColumnName("Low"),
+                    upper_column=DatasetColumnName("Open"),
+                ),
+                LessThanOrEqualInvariant(
+                    lower_column=DatasetColumnName("Low"),
+                    upper_column=DatasetColumnName("Close"),
+                ),
+                LessThanOrEqualInvariant(
+                    lower_column=DatasetColumnName("Open"),
+                    upper_column=DatasetColumnName("High"),
+                ),
+                LessThanOrEqualInvariant(
+                    lower_column=DatasetColumnName("Close"),
+                    upper_column=DatasetColumnName("High"),
+                ),
+            ),
+        )
 
     @property
     def entity_value_sets(self) -> tuple[EntityValueSet, ...]:

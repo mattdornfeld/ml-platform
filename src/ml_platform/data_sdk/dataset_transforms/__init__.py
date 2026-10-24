@@ -19,6 +19,8 @@ from ml_platform.data_sdk.transforms._dataset_schema import (
     NormalDistribution,
     PartitionTimestampDistribution,
     PositiveInvariant,
+    SyntheticDistribution,
+    SyntheticDistributionInvariant,
     UniformDistribution,
 )
 
@@ -37,5 +39,7 @@ __all__ = [
     "PartitionTimestampDistribution",
     "PositiveInvariant",
     "SyntheticDatasetTransform",
+    "SyntheticDistribution",
+    "SyntheticDistributionInvariant",
     "UniformDistribution",
 ]

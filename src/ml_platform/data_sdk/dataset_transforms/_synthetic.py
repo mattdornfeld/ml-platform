@@ -15,8 +15,8 @@ from ml_platform.data_sdk.transforms._dataset_schema import (
     NormalDistribution,
     PartitionTimestampDistribution,
     PositiveInvariant,
-    SchemaInvariant,
     SyntheticDistribution,
+    SyntheticDistributionInvariant,
     SyntheticSeed,
     UniformDistribution,
 )
@@ -92,7 +92,9 @@ class SyntheticDatasetTransform(DatasetTransform):
         for column_index, column in enumerate(self.schema.columns):
             data_frame = data_frame.withColumn(
                 column.name,
-                _sample_distribution(column.distribution, seed + column_index),
+                _sample_distribution(
+                    column.synthetic_distribution, seed + column_index
+                ),
             )
         return data_frame
 
@@ -145,7 +147,7 @@ class SyntheticDatasetTransform(DatasetTransform):
     def _validity_expression(self, data_frame: DataFrame) -> Column:
         """Build the conjunction of every declared row-level invariant."""
         validity = spark_functions.expr("true")
-        for invariant in self.schema.invariants:
+        for invariant in self.schema.synthetic_distribution_invariants:
             validity = validity & _invariant_expression(invariant, data_frame)
         return validity
 
@@ -173,7 +175,7 @@ def _sample_distribution(
 
 
 def _invariant_expression(
-    invariant: SchemaInvariant,
+    invariant: SyntheticDistributionInvariant,
     data_frame: DataFrame,
 ) -> Column:
     """Build a boolean Spark expression for one declared schema invariant."""
