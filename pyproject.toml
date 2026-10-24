@@ -46,7 +46,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-ruff>=0.5",
     "ruff>=0.17.2",
-    "testcontainers[postgres]>=4.13,<5",
+    "testcontainers[k3s,postgres]>=4.13,<5",
     "types-requests>=2.33.0.20261006",
 ]
 
@@ -72,6 +72,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 pythonpath = [".", "src"]
 addopts = "--ruff --ruff-format"
+markers = [
+    "e2e: deploy the complete platform to an isolated K3s cluster",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -100,7 +103,9 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 # Google does not require docstrings for test modules; pytest assertions are
 # intentional and tests exercise private implementation contracts directly.
+# E2E setup executes only fixed local Docker, kubectl, and deployment commands.
 "tests/**/*.py" = ["ANN", "ARG", "D", "S101", "S106", "SLF001", "T201"]
+"tests/e2e/**/*.py" = ["S603", "S607"]
 
 [tool.ruff.format]
 docstring-code-format = true

@@ -13,7 +13,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 RUN uv python install 3.12 --install-dir /opt/python \
- && uv venv --python /opt/python/cpython-3.12.12-linux-aarch64-gnu/bin/python3.12 /opt/venv \
+ && python_path="$(find /opt/python -path '*/bin/python3.12' -type f -print -quit)" \
+ && uv venv --python "$python_path" /opt/venv \
  && uv pip install --python /opt/venv/bin/python --no-deps . \
  && uv pip install --python /opt/venv/bin/python \
       'fastapi>=0.115' 'uvicorn[standard]>=0.30' 'psycopg[binary]>=3.2' \

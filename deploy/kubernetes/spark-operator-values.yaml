@@ -1,0 +1,4 @@
+# Spark Operator watches only the ML Platform workload namespace.
+spark:
+  jobNamespaces:
+    - ml-platform

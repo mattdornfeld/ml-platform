@@ -1,3 +1,0 @@
-# Spark Operator is installed reproducibly by scripts/bootstrap-minikube.sh.
-# The chart release is named spark-operator in namespace spark-operator.
-# SparkApplication resources are created dynamically by src/ml_platform/api/scheduler.py.
