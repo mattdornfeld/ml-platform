@@ -7,23 +7,35 @@ from ml_platform.data_sdk.dataset_transforms._synthetic import (
     SyntheticDatasetTransform,
 )
 from ml_platform.data_sdk.transforms._dataset_schema import (
+    ConstantDistribution,
     DatasetColumn,
     DatasetColumnName,
     DatasetColumnType,
     DatasetSchema,
     EntityValue,
+    EntityValueDistribution,
     EntityValueSet,
-    SyntheticValueStrategy,
+    LessThanOrEqualInvariant,
+    NormalDistribution,
+    PartitionTimestampDistribution,
+    PositiveInvariant,
+    UniformDistribution,
 )
 
 __all__ = [
+    "ConstantDistribution",
     "DatasetColumn",
     "DatasetColumnName",
     "DatasetColumnType",
     "DatasetSchema",
     "EntityValue",
+    "EntityValueDistribution",
     "EntityValueSet",
+    "LessThanOrEqualInvariant",
     "MarketDataTransform",
+    "NormalDistribution",
+    "PartitionTimestampDistribution",
+    "PositiveInvariant",
     "SyntheticDatasetTransform",
-    "SyntheticValueStrategy",
+    "UniformDistribution",
 ]

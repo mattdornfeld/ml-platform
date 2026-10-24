@@ -1,4 +1,4 @@
-"""Strongly typed schema declarations for dataset transforms."""
+"""Strongly typed synthetic-data schema declarations for dataset transforms."""
 
 from datetime import datetime
 from enum import StrEnum
@@ -14,10 +14,16 @@ type EntityValues = tuple[EntityValue, ...]
 type MarketSymbols = tuple[Symbol, ...]
 type IsNullable = bool
 type SyntheticSeed = int
+type DistributionValue = float
+type DistributionMinimum = float
+type DistributionMaximum = float
+type DistributionMean = float
+type DistributionStandardDeviation = float
+type SyntheticConstant = str | int | float | bool
 
 
 class DatasetColumnType(StrEnum):
-    """Spark-compatible column types supported by synthetic data generation."""
+    """Spark-compatible types emitted by dataset transforms."""
 
     TIMESTAMP = "timestamp"
     STRING = "string"
@@ -25,14 +31,48 @@ class DatasetColumnType(StrEnum):
     BIGINT = "bigint"
 
 
-class SyntheticValueStrategy(StrEnum):
-    """Declared deterministic generator for one synthetic dataset column."""
+@record
+class ConstantDistribution:
+    """Emit one deterministic constant for every generated row."""
 
-    PARTITION_TIMESTAMP = "partition_timestamp"
-    ENTITY_VALUE = "entity_value"
-    MARKET_SESSION = "market_session"
-    POSITIVE_FLOAT = "positive_float"
-    NONNEGATIVE_INTEGER = "nonnegative_integer"
+    value: SyntheticConstant
+
+
+@record
+class UniformDistribution:
+    """Sample a numeric value uniformly over an inclusive range."""
+
+    minimum: DistributionMinimum
+    maximum: DistributionMaximum
+
+
+@record
+class NormalDistribution:
+    """Sample a numeric value from a normal distribution."""
+
+    mean: DistributionMean
+    standard_deviation: DistributionStandardDeviation
+
+
+@record
+class EntityValueDistribution:
+    """Emit an entity value supplied by the configured transform."""
+
+    key: EntityKey
+
+
+@record
+class PartitionTimestampDistribution:
+    """Emit the timestamp of the partition being materialized."""
+
+
+type SyntheticDistribution = (
+    ConstantDistribution
+    | UniformDistribution
+    | NormalDistribution
+    | EntityValueDistribution
+    | PartitionTimestampDistribution
+)
 
 
 @record
@@ -45,17 +85,36 @@ class EntityValueSet:
 
 @record
 class DatasetColumn:
-    """One declared dataset column and its deterministic synthetic generator."""
+    """One output column with a type and deterministic sampling distribution."""
 
     name: DatasetColumnName
     column_type: DatasetColumnType
     nullable: IsNullable
-    synthetic_value_strategy: SyntheticValueStrategy
+    distribution: SyntheticDistribution
+
+
+@record
+class PositiveInvariant:
+    """Require every value in one numeric column to be strictly positive."""
+
+    column: DatasetColumnName
+
+
+@record
+class LessThanOrEqualInvariant:
+    """Require every lower-column value to be at most its upper-column value."""
+
+    lower_column: DatasetColumnName
+    upper_column: DatasetColumnName
+
+
+type SchemaInvariant = PositiveInvariant | LessThanOrEqualInvariant
 
 
 @record
 class DatasetSchema:
-    """Static dataset output contract shared by real and synthetic transforms."""
+    """Static output contract for real and synthetic dataset transforms."""
 
     columns: tuple[DatasetColumn, ...]
+    invariants: tuple[SchemaInvariant, ...]
     partition_type: PartitionType

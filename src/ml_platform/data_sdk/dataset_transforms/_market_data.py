@@ -21,14 +21,20 @@ from pyspark.sql.types import (
 from ml_platform.common.types import EntityKey, PartitionType, Symbol
 from ml_platform.data_sdk._exceptions import DataSdkError
 from ml_platform.data_sdk.transforms._dataset_schema import (
+    ConstantDistribution,
     DatasetColumn,
     DatasetColumnName,
     DatasetColumnType,
     DatasetSchema,
     EntityValue,
+    EntityValueDistribution,
     EntityValueSet,
+    LessThanOrEqualInvariant,
     MarketSymbols,
-    SyntheticValueStrategy,
+    NormalDistribution,
+    PartitionTimestampDistribution,
+    PositiveInvariant,
+    UniformDistribution,
 )
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.utils import record
@@ -52,34 +58,74 @@ MARKET_DATA_SCHEMA = DatasetSchema(
             name=DatasetColumnName("timestamp"),
             column_type=DatasetColumnType.TIMESTAMP,
             nullable=False,
-            synthetic_value_strategy=SyntheticValueStrategy.PARTITION_TIMESTAMP,
+            distribution=PartitionTimestampDistribution(),
         ),
         DatasetColumn(
             name=DatasetColumnName("symbol"),
             column_type=DatasetColumnType.STRING,
             nullable=False,
-            synthetic_value_strategy=SyntheticValueStrategy.ENTITY_VALUE,
+            distribution=EntityValueDistribution(key=EntityKey.SYMBOL),
         ),
         DatasetColumn(
             name=DatasetColumnName("market_session"),
             column_type=DatasetColumnType.STRING,
             nullable=False,
-            synthetic_value_strategy=SyntheticValueStrategy.MARKET_SESSION,
+            distribution=ConstantDistribution(value="regular"),
         ),
-        *(
-            DatasetColumn(
-                name=DatasetColumnName(column),
-                column_type=DatasetColumnType.DOUBLE,
-                nullable=False,
-                synthetic_value_strategy=SyntheticValueStrategy.POSITIVE_FLOAT,
-            )
-            for column in OHLCV_COLUMNS[:-1]
+        DatasetColumn(
+            name=DatasetColumnName("Open"),
+            column_type=DatasetColumnType.DOUBLE,
+            nullable=False,
+            distribution=NormalDistribution(mean=100.0, standard_deviation=8.0),
+        ),
+        DatasetColumn(
+            name=DatasetColumnName("High"),
+            column_type=DatasetColumnType.DOUBLE,
+            nullable=False,
+            distribution=NormalDistribution(mean=106.0, standard_deviation=8.0),
+        ),
+        DatasetColumn(
+            name=DatasetColumnName("Low"),
+            column_type=DatasetColumnType.DOUBLE,
+            nullable=False,
+            distribution=NormalDistribution(mean=94.0, standard_deviation=8.0),
+        ),
+        DatasetColumn(
+            name=DatasetColumnName("Close"),
+            column_type=DatasetColumnType.DOUBLE,
+            nullable=False,
+            distribution=NormalDistribution(mean=100.0, standard_deviation=8.0),
         ),
         DatasetColumn(
             name=DatasetColumnName("Volume"),
             column_type=DatasetColumnType.BIGINT,
             nullable=False,
-            synthetic_value_strategy=SyntheticValueStrategy.NONNEGATIVE_INTEGER,
+            distribution=UniformDistribution(
+                minimum=100_000.0,
+                maximum=5_000_000.0,
+            ),
+        ),
+    ),
+    invariants=(
+        *(
+            PositiveInvariant(column=DatasetColumnName(column))
+            for column in ("Open", "High", "Low", "Close", "Volume")
+        ),
+        LessThanOrEqualInvariant(
+            lower_column=DatasetColumnName("Low"),
+            upper_column=DatasetColumnName("Open"),
+        ),
+        LessThanOrEqualInvariant(
+            lower_column=DatasetColumnName("Low"),
+            upper_column=DatasetColumnName("Close"),
+        ),
+        LessThanOrEqualInvariant(
+            lower_column=DatasetColumnName("Open"),
+            upper_column=DatasetColumnName("High"),
+        ),
+        LessThanOrEqualInvariant(
+            lower_column=DatasetColumnName("Close"),
+            upper_column=DatasetColumnName("High"),
         ),
     ),
     partition_type=PartitionType.DAILY,
