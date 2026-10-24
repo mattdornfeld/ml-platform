@@ -61,6 +61,7 @@ class MaterializerContractTest(unittest.TestCase):
         config = DatasetMaterializer._config_from_json(
             json.dumps(
                 {
+                    "environment": "local",
                     "name": "sp500",
                     "version": 3,
                     "dataset_type": "market_data",
@@ -158,6 +159,7 @@ class TransformMaterializerContractTest(unittest.TestCase):
     ) -> None:
         """Only static table values differ between the two transform resource kinds."""
         common = {
+            "environment": "local",
             "name": "signal",
             "version": 1,
             "description": "Synthetic transform output.",
