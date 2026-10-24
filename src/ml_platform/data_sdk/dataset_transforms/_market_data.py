@@ -1,15 +1,13 @@
 """Yahoo Finance market-data dataset transform."""
 
-import json
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
-from urllib.error import HTTPError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 
+import httpx2
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as spark_functions
 from pyspark.sql.types import (
@@ -106,11 +104,10 @@ class MarketDataTransform(DatasetTransform):
                             end_date=end_date,
                         )
                     )
-                except (HTTPError, ValueError) as error:
-                    if isinstance(error, HTTPError) and error.code not in {
-                        404,
-                        422,
-                    }:
+                except (httpx2.HTTPStatusError, ValueError) as error:
+                    if isinstance(
+                        error, httpx2.HTTPStatusError
+                    ) and error.response.status_code not in {404, 422}:
                         raise
                     sys.stdout.write(
                         f"Skipping unavailable Yahoo Finance range for {symbol}: {error}\n"
@@ -173,10 +170,13 @@ def _request_yahoo_chart(
     start = int(datetime.combine(start_date, time.min, UTC).timestamp())
     end = int(datetime.combine(end_date, time.min, UTC).timestamp())
     url = f"{YAHOO_CHART_URL}/{quote(symbol, safe='')}?period1={start}&period2={end}&interval=1h&includePrePost=true&events=history"
-    with urlopen(
-        Request(url, headers={"User-Agent": "ml-platform/0.1"}), timeout=30
-    ) as response:
-        payload = json.load(response)
+    response = httpx2.get(
+        url,
+        headers={"User-Agent": "ml-platform/0.1"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
     if not isinstance(payload, dict):
         raise YahooFinancePayloadError(
             f"Yahoo Finance response for {symbol!r} is not a JSON object."

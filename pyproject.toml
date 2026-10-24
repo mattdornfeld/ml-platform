@@ -19,6 +19,7 @@ dependencies = [
     "exchange-calendars>=4.13,<5",
     "sqlalchemy>=2.0,<2.1",
     "alembic>=1.16,<2",
+    "httpx2>=2.15,<3",
 ]
 
 [project.scripts]
@@ -37,7 +38,6 @@ where = ["src"]
 
 [dependency-groups]
 dev = [
-    "httpx2>=0.28",
     "kubernetes-stubs>=22.6.0.post1",
     "mypy>=2.4.0",
     "pandas-stubs>=3.0.5.260914",

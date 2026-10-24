@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
-from urllib.request import Request, urlopen
 
+import httpx2
 from pydantic import Field, field_validator
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as spark_functions
@@ -279,14 +279,17 @@ class Materializer[Config: MaterializerConfig](ABC):
                     ),
                 }
             )
-        request = Request(
-            f"{materialization_api_url()}{PartitionRoutes.COMPLETE.template}",
-            data=json.dumps(receipts).encode(),
-            headers={"Content-Type": "application/json"},
+        response = httpx2.request(
             method=PartitionRoutes.COMPLETE.method,
+            url=(
+                f"{materialization_api_url()}"
+                f"{PartitionRoutes.COMPLETE.template}"
+            ),
+            content=json.dumps(receipts),
+            headers={"Content-Type": "application/json"},
+            timeout=30,
         )
-        with urlopen(request, timeout=30):
-            pass
+        response.raise_for_status()
 
     @abstractmethod
     def _row_digest(self) -> Column:

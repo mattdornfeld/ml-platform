@@ -94,3 +94,21 @@ validations:
                 }
             ],
         )
+
+
+class HttpClientTest(unittest.TestCase):
+    """Verify the CLI preserves JSON response shapes from the API."""
+
+    @patch("ml_platform.cli.materialization.httpx2.request")
+    def test_api_request_accepts_list_responses(self, request: object) -> None:
+        """Resource-list endpoints return JSON arrays rather than objects."""
+        response = request.return_value
+        response.content = b'[{"name":"prices"}]'
+        response.json.return_value = [{"name": "prices"}]
+
+        result = materialization._api_request(
+            "http://api", materialization.HttpMethod.GET, "/datasets"
+        )
+
+        self.assertEqual(result, [{"name": "prices"}])
+        response.raise_for_status.assert_called_once_with()

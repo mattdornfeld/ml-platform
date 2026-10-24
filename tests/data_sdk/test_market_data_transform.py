@@ -2,6 +2,7 @@
 
 import unittest
 from datetime import UTC, date, datetime
+from unittest.mock import patch
 
 import ml_platform.data_sdk.dataset_transforms as dataset_transforms
 from ml_platform.data_sdk.exceptions import YahooFinancePayloadError
@@ -104,4 +105,28 @@ class MarketDataRangeTest(unittest.TestCase):
         )
         self.assertEqual(
             dataset_transforms._market_data._contiguous_date_ranges([]), []
+        )
+
+
+class YahooHttpClientTest(unittest.TestCase):
+    """Verify the transform's provider client preserves its request contract."""
+
+    @patch("ml_platform.data_sdk.dataset_transforms._market_data.httpx2.get")
+    def test_request_chart_uses_timeout_and_user_agent(
+        self, request: object
+    ) -> None:
+        """Yahoo requests identify the client and fail on non-success responses."""
+        response = request.return_value
+        response.json.return_value = {"chart": {"result": []}}
+
+        payload = dataset_transforms._market_data._request_yahoo_chart(
+            "AAPL", date(2026, 1, 2), date(2026, 1, 3)
+        )
+
+        self.assertEqual(payload, {"chart": {"result": []}})
+        response.raise_for_status.assert_called_once_with()
+        self.assertEqual(request.call_args.kwargs["timeout"], 30)
+        self.assertEqual(
+            request.call_args.kwargs["headers"],
+            {"User-Agent": "ml-platform/0.1"},
         )

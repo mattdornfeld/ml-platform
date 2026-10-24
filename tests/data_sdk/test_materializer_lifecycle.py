@@ -158,6 +158,40 @@ class MaterializerLifecycleTest(unittest.TestCase):
         complete.assert_called_once_with(spark, 42)
         spark.stop.assert_called_once_with()
 
+    @patch("ml_platform.data_sdk.materializers._base.httpx2.request")
+    def test_partition_completion_posts_all_partition_receipts(
+        self, request: MagicMock
+    ) -> None:
+        """Workers complete Iceberg partitions through the shared callback endpoint."""
+        spark = MagicMock()
+        table = MagicMock()
+        table.resource_type = "dataset"
+        table.partition_keys.return_value = ["2026-01-01"]
+        table.partition_content_hashes.return_value = {"2026-01-01": "digest"}
+        table.partition_row_counts.return_value = {"2026-01-01": 5}
+        table.schema_fields.return_value = {"timestamp": "timestamp"}
+        table.empty_content_hash.return_value = "empty"
+        materializer = DatasetMaterializer(dataset_config())
+        with (
+            patch.object(
+                DatasetMaterializer,
+                "iceberg_table",
+                new_callable=PropertyMock,
+                return_value=table,
+            ),
+            patch.object(
+                DatasetMaterializer, "_row_digest", return_value=MagicMock()
+            ),
+        ):
+            materializer._complete_partitions(spark, 42)
+
+        response = request.return_value
+        response.raise_for_status.assert_called_once_with()
+        receipt = json.loads(request.call_args.kwargs["content"])[0]
+        self.assertEqual(receipt["partition_id"], "dataset-partition")
+        self.assertEqual(receipt["snapshot_id"], 42)
+        self.assertEqual(receipt["row_count"], 5)
+
     def test_dataset_materializer_declares_market_data_table(self) -> None:
         """Dataset-specific metadata is injected into the table declaration."""
         table = DatasetMaterializer(dataset_config()).iceberg_table
