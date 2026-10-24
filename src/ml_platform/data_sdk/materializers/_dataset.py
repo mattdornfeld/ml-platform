@@ -154,14 +154,20 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
                     case Environment.LOCAL:
                         provider = MarketDataDatasetProvider(
                             spark=spark,
-                            symbols=self.config.symbols,
-                            partitions=self.config.partition_timestamps,
+                            symbols=tuple(self.config.symbols),
+                            partitions=tuple(self.config.partition_timestamps),
                         )
                     case Environment.TEST:
+                        source_provider = MarketDataDatasetProvider(
+                            spark=spark,
+                            symbols=tuple(self.config.symbols),
+                            partitions=tuple(self.config.partition_timestamps),
+                        )
                         provider = SyntheticDatasetProvider(
                             spark=spark,
-                            symbols=self.config.symbols,
-                            partitions=self.config.partition_timestamps,
+                            partitions=tuple(self.config.partition_timestamps),
+                            source_provider=source_provider,
+                            synthetic_seed=0,
                         )
                     case _ as unsupported_environment:
                         raise UnsupportedMaterializationEnvironmentError(

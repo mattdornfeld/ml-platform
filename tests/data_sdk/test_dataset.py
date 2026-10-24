@@ -51,7 +51,7 @@ class DatasetWorkerTest(unittest.TestCase):
         worker = DatasetMaterializer(self.config())
         worker._transform(MagicMock())
         provider = transform.call_args.kwargs["provider"]
-        self.assertEqual(provider.symbols, ["AAPL"])
+        self.assertEqual(provider.symbols, ("AAPL",))
         self.assertEqual(
             provider.partitions[0].date().isoformat(), "2026-01-01"
         )
@@ -69,6 +69,20 @@ class DatasetWorkerTest(unittest.TestCase):
 
         provider = transform.call_args.kwargs["provider"]
         self.assertEqual(type(provider).__name__, "SyntheticDatasetProvider")
+        self.assertEqual(provider.schema, provider.source_provider.schema)
+        self.assertEqual(
+            tuple(column.name for column in provider.schema.columns),
+            (
+                "timestamp",
+                "symbol",
+                "market_session",
+                "Open",
+                "High",
+                "Low",
+                "Close",
+                "Volume",
+            ),
+        )
 
     def test_unsupported_dataset_type_is_rejected_by_configuration(
         self,

@@ -2,14 +2,14 @@
 
 import sys
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any
+from enum import StrEnum
+from typing import Any, NewType
 from urllib.parse import quote
 
 import httpx2
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as spark_functions
 from pyspark.sql.types import (
     DoubleType,
@@ -20,7 +20,11 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from ml_platform.common.types import Symbol
+from ml_platform.common.types import (
+    EntityKey,
+    PartitionType,
+    Symbol,
+)
 from ml_platform.data_sdk._exceptions import DataSdkError
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.utils import record
@@ -53,13 +57,116 @@ class HourlyOhlcvRow:
     volume: int
 
 
+DatasetColumnName = NewType("DatasetColumnName", str)
+type DatasetPartitions = tuple[datetime, ...]
+EntityValue = NewType("EntityValue", str)
+type EntityValues = tuple[EntityValue, ...]
+type MarketSymbols = tuple[Symbol, ...]
+type IsNullable = bool
+type SyntheticSeed = int
+
+
+class DatasetColumnType(StrEnum):
+    """Spark-compatible column types supported by synthetic data generation."""
+
+    TIMESTAMP = "timestamp"
+    STRING = "string"
+    DOUBLE = "double"
+    BIGINT = "bigint"
+
+
+class SyntheticValueStrategy(StrEnum):
+    """Declared deterministic generator for one synthetic dataset column."""
+
+    PARTITION_TIMESTAMP = "partition_timestamp"
+    ENTITY_VALUE = "entity_value"
+    MARKET_SESSION = "market_session"
+    POSITIVE_FLOAT = "positive_float"
+    NONNEGATIVE_INTEGER = "nonnegative_integer"
+
+
+@record
+class EntityValueSet:
+    """Configured values emitted for one entity-key column."""
+
+    key: EntityKey
+    values: EntityValues
+
+
+@record
+class DatasetColumn:
+    """One declared dataset column and its deterministic synthetic generator."""
+
+    name: DatasetColumnName
+    column_type: DatasetColumnType
+    nullable: IsNullable
+    synthetic_value_strategy: SyntheticValueStrategy
+
+
+@record
+class DatasetSchema:
+    """Static dataset output contract shared by real and synthetic providers."""
+
+    columns: tuple[DatasetColumn, ...]
+    partition_type: PartitionType
+
+
+MARKET_DATA_SCHEMA = DatasetSchema(
+    columns=(
+        DatasetColumn(
+            name=DatasetColumnName("timestamp"),
+            column_type=DatasetColumnType.TIMESTAMP,
+            nullable=False,
+            synthetic_value_strategy=SyntheticValueStrategy.PARTITION_TIMESTAMP,
+        ),
+        DatasetColumn(
+            name=DatasetColumnName("symbol"),
+            column_type=DatasetColumnType.STRING,
+            nullable=False,
+            synthetic_value_strategy=SyntheticValueStrategy.ENTITY_VALUE,
+        ),
+        DatasetColumn(
+            name=DatasetColumnName("market_session"),
+            column_type=DatasetColumnType.STRING,
+            nullable=False,
+            synthetic_value_strategy=SyntheticValueStrategy.MARKET_SESSION,
+        ),
+        *tuple(
+            DatasetColumn(
+                name=DatasetColumnName(column),
+                column_type=DatasetColumnType.DOUBLE,
+                nullable=False,
+                synthetic_value_strategy=SyntheticValueStrategy.POSITIVE_FLOAT,
+            )
+            for column in OHLCV_COLUMNS[:-1]
+        ),
+        DatasetColumn(
+            name=DatasetColumnName("Volume"),
+            column_type=DatasetColumnType.BIGINT,
+            nullable=False,
+            synthetic_value_strategy=SyntheticValueStrategy.NONNEGATIVE_INTEGER,
+        ),
+    ),
+    partition_type=PartitionType.DAILY,
+)
+
+
 @record
 class DatasetProvider(ABC):
-    """Construct a typed market-data DataFrame for requested partitions."""
+    """Construct a typed dataset DataFrame for requested partitions."""
 
     spark: SparkSession
-    symbols: Sequence[Symbol]
-    partitions: Sequence[datetime]
+    partitions: DatasetPartitions
+
+    @property
+    @abstractmethod
+    def schema(self) -> DatasetSchema:
+        """Return this provider's statically declared output schema."""
+
+    @property
+    @abstractmethod
+    def entity_value_sets(self) -> tuple[EntityValueSet, ...]:
+        """Return configured entity values used by synthetic generation."""
 
     @abstractmethod
     def __call__(self) -> DataFrame:
@@ -69,6 +176,23 @@ class DatasetProvider(ABC):
 @record
 class MarketDataDatasetProvider(DatasetProvider):
     """Download Yahoo Finance market data for requested partitions."""
+
+    symbols: MarketSymbols
+
+    @property
+    def schema(self) -> DatasetSchema:
+        """Return the market-data table contract."""
+        return MARKET_DATA_SCHEMA
+
+    @property
+    def entity_value_sets(self) -> tuple[EntityValueSet, ...]:
+        """Return the symbols configured for this market-data provider."""
+        return (
+            EntityValueSet(
+                key=EntityKey.SYMBOL,
+                values=tuple(EntityValue(symbol) for symbol in self.symbols),
+            ),
+        )
 
     def __call__(self) -> DataFrame:
         """Fetch contiguous Yahoo ranges and return typed market-data rows."""
@@ -110,32 +234,64 @@ class MarketDataDatasetProvider(DatasetProvider):
 
 @record
 class SyntheticDatasetProvider(DatasetProvider):
-    """Produce deterministic regular-session market data for test jobs."""
+    """Generate deterministic rows from another provider's declared schema."""
+
+    source_provider: DatasetProvider
+    synthetic_seed: SyntheticSeed
+
+    @property
+    def schema(self) -> DatasetSchema:
+        """Return the exact schema declared by the wrapped real provider."""
+        return self.source_provider.schema
+
+    @property
+    def entity_value_sets(self) -> tuple[EntityValueSet, ...]:
+        """Return the entity values declared by the wrapped real provider."""
+        return self.source_provider.entity_value_sets
 
     def __call__(self) -> DataFrame:
-        """Return one deterministic regular-session bar per symbol and day."""
-        requested_days = sorted(
-            {partition.date() for partition in self.partitions}
-        )
-        if not requested_days:
+        """Generate rows for every requested partition and provider entity."""
+        if not self.partitions:
             raise MarketDataPartitionError(
-                "Synthetic market-data materialization requires at least one "
+                "Synthetic dataset materialization requires at least one "
                 "requested output partition."
             )
-        rows = [
-            HourlyOhlcvRow(
-                timestamp=datetime.combine(requested_day, time(15), UTC),
-                symbol=symbol,
-                open_price=100.0,
-                high_price=101.0,
-                low_price=99.0,
-                close_price=100.5,
-                volume=1_000,
+        data_frame = self.spark.createDataFrame(
+            [(timestamp,) for timestamp in self.partitions],
+            "requested_timestamp timestamp",
+        )
+        for entity_values in self.entity_value_sets:
+            data_frame = data_frame.crossJoin(
+                self.spark.createDataFrame(
+                    [(value,) for value in entity_values.values],
+                    f"{entity_values.key.value} string",
+                )
             )
-            for symbol in self.symbols
-            for requested_day in requested_days
-        ]
-        return _with_market_session(_market_data_frame(self.spark, rows))
+        for column in self.schema.columns:
+            data_frame = data_frame.withColumn(
+                column.name,
+                _synthetic_column_value(column, self.synthetic_seed),
+            )
+        return data_frame.select(
+            *(column.name for column in self.schema.columns)
+        )
+
+
+def _synthetic_column_value(
+    column: DatasetColumn, synthetic_seed: SyntheticSeed
+) -> Column:
+    """Build a deterministic Spark expression for one declared schema column."""
+    match column.synthetic_value_strategy:
+        case SyntheticValueStrategy.PARTITION_TIMESTAMP:
+            return spark_functions.col("requested_timestamp")
+        case SyntheticValueStrategy.ENTITY_VALUE:
+            return spark_functions.col(column.name)
+        case SyntheticValueStrategy.MARKET_SESSION:
+            return spark_functions.lit("regular")
+        case SyntheticValueStrategy.POSITIVE_FLOAT:
+            return spark_functions.lit(100.0 + synthetic_seed)
+        case SyntheticValueStrategy.NONNEGATIVE_INTEGER:
+            return spark_functions.lit(1_000 + synthetic_seed)
 
 
 class MarketDataPartitionError(DataSdkError):

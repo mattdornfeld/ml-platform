@@ -19,6 +19,7 @@ from ml_platform.common.types import (
     RunFrequency,
 )
 from ml_platform.data_sdk.dataset_transforms import (
+    MarketDataDatasetProvider,
     MarketDataTransform,
     SyntheticDatasetProvider,
 )
@@ -68,8 +69,13 @@ class MaterializerValidationTest(unittest.TestCase):
         return MarketDataTransform(
             provider=SyntheticDatasetProvider(
                 spark=self.spark,
-                symbols=["AAA"],
                 partitions=(datetime(2026, 1, 1, tzinfo=UTC),),
+                source_provider=MarketDataDatasetProvider(
+                    spark=self.spark,
+                    partitions=(datetime(2026, 1, 1, tzinfo=UTC),),
+                    symbols=("AAA",),
+                ),
+                synthetic_seed=0,
             ),
             keys=["symbol"],
             partition_type="daily",
