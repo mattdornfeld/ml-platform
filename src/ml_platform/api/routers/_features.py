@@ -3,6 +3,7 @@
 from fastapi import APIRouter, status
 
 from ml_platform.api._dependencies import (
+    ApiDependencies,
     DatabaseSession,
     ResourcePathName,
     ResourcePathVersion,
@@ -77,6 +78,7 @@ def list_features(
 def get_feature(
     name: ResourcePathName,
     version: ResourcePathVersion,
+    dependencies: ApiDependencies,
     session: DatabaseSession,
 ) -> dict[str, object]:
     """Return one feature, its dependencies, and logical partitions."""
@@ -86,7 +88,7 @@ def get_feature(
     table_path = f"features/{name}-v{version}"
     return {
         **_definition_response(detail.definition),
-        "minio_table_url": minio_browser_url(table_path),
+        "minio_table_url": minio_browser_url(dependencies, table_path),
         "datasets": [
             {
                 "name": dependency.name,
@@ -108,7 +110,7 @@ def get_feature(
                 "content_hash": partition.content_hash,
                 "snapshot_id": partition.snapshot_id,
                 "minio_url": minio_partition_url(
-                    table_path, partition.timestamp
+                    dependencies, table_path, partition.timestamp
                 ),
             }
             for partition in detail.partitions

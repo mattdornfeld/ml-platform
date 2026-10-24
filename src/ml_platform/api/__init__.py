@@ -1,6 +1,13 @@
-"""Public FastAPI control-plane entry points."""
+"""Public API composition and request dependency interfaces."""
 
 from ml_platform.api._configuration import Dependencies
-from ml_platform.api.app import app, main
+from ml_platform.api._dependencies import (
+    get_database_connection,
+    get_database_session,
+)
 
-__all__ = ["Dependencies", "app", "main"]
+__all__ = [
+    "Dependencies",
+    "get_database_connection",
+    "get_database_session",
+]

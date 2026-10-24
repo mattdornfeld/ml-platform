@@ -10,9 +10,11 @@ from fastapi import HTTPException
 from sqlalchemy.exc import DataError
 from sqlalchemy.orm import Session
 
+from ml_platform.api import Dependencies
 from ml_platform.api.infrastructure import engine_for, upgrade_database
 from ml_platform.api.routers import complete_partitions
 from ml_platform.common.api.dtos import PartitionCompletionRequest
+from ml_platform.common.types import Environment
 
 
 @pytest.mark.usefixtures("postgres_database")
@@ -25,7 +27,20 @@ class PartitionCompletionDatabaseTest(unittest.TestCase):
         previous = os.environ.get("DATABASE_URL")
         os.environ["DATABASE_URL"] = cls.database_url
         try:
-            upgrade_database()
+            upgrade_database(
+                Dependencies(
+                    environment=Environment.TEST,
+                    database_url=cls.database_url,
+                    kubernetes_namespace="ml-platform",
+                    materialization_image="ml-platform:latest",
+                    warehouse_dir="s3a://warehouse",
+                    s3_endpoint="http://minio:9000",
+                    minio_root_user="minio",
+                    minio_root_password="miniosecret",
+                    headlamp_url="http://127.0.0.1:8002",
+                    minio_console_url="http://127.0.0.1:9003",
+                )
+            )
         finally:
             if previous is None:
                 os.environ.pop("DATABASE_URL", None)

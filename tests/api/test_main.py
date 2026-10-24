@@ -9,7 +9,11 @@ from uuid import UUID
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from ml_platform.api import app
+from ml_platform.api import (
+    Dependencies,
+    get_database_session,
+)
+from ml_platform.api.app import create_app
 from ml_platform.api.domain import (
     DatasetDefinition,
     DatasetSummary,
@@ -24,7 +28,6 @@ from ml_platform.api.domain import (
     PartitionStatus,
     ResourceType,
 )
-from ml_platform.api.infrastructure import get_session
 from ml_platform.api.routers import create_dataset, get_job, list_datasets
 from ml_platform.api.services import minio_browser_url, minio_partition_url
 from ml_platform.common.api.dtos import (
@@ -36,6 +39,7 @@ from ml_platform.common.domain import MarketDataDatasetConfig
 from ml_platform.common.types import (
     CreatedAt,
     EntityKey,
+    Environment,
     JobId,
     PartitionTimestamp,
     PartitionType,
@@ -45,18 +49,39 @@ from ml_platform.common.types import (
     UpdatedAt,
 )
 
+TEST_DEPENDENCIES = Dependencies(
+    environment=Environment.TEST,
+    database_url="postgresql://unused",
+    kubernetes_namespace="ml-platform",
+    materialization_image="ml-platform:latest",
+    warehouse_dir="s3a://warehouse",
+    s3_endpoint="http://minio:9000",
+    minio_root_user="minio",
+    minio_root_password="miniosecret",
+    headlamp_url="http://127.0.0.1:8002",
+    minio_console_url="http://127.0.0.1:9003",
+)
+
+
+def _application():
+    """Build an isolated application for route-validation unit tests."""
+    return create_app(TEST_DEPENDENCIES)
+
 
 class PartitionMaterializationRequestTest(unittest.TestCase):
     """Verify API validation for partition request timestamps."""
 
     def setUp(self) -> None:
         """Create an isolated in-process API client."""
-        app.dependency_overrides[get_session] = lambda: MagicMock()
-        self.client = TestClient(app)
+        self.application = _application()
+        self.application.dependency_overrides[get_database_session] = lambda: (
+            MagicMock()
+        )
+        self.client = TestClient(self.application)
 
     def tearDown(self) -> None:
         """Discard dependency overrides after each API test."""
-        app.dependency_overrides.clear()
+        self.application.dependency_overrides.clear()
 
     def test_create_dataset_registers_without_materialization_job(self) -> None:
         """Dataset registration persists only the immutable resource definition."""
@@ -351,7 +376,13 @@ class PartitionMaterializationRequestTest(unittest.TestCase):
                     )
                 ),
             ]
-            response = get_job(job_id, session)
+            response = get_job(
+                job_id,
+                TEST_DEPENDENCIES.model_copy(
+                    update={"environment": Environment.LOCAL}
+                ),
+                session,
+            )
 
         self.assertEqual(str(response.id), str(job_id))
         self.assertEqual(response.status, "submitted")
@@ -525,7 +556,7 @@ class DashboardReadApiTest(unittest.TestCase):
 
     def test_static_dashboard_is_served(self) -> None:
         """The browser UI is available without a separate frontend deployment."""
-        client = TestClient(app)
+        client = TestClient(_application())
         response = client.get("/ui/datasets/sp500/3")
         self.assertEqual(response.status_code, 200)
         self.assertIn("ML Platform", response.text)
@@ -582,12 +613,14 @@ class ResourceDeletionTest(unittest.TestCase):
 
     def test_dataset_list_rejects_an_empty_status_filter(self) -> None:
         """Reject an empty lifecycle-status query before repository access."""
-        app.dependency_overrides[get_session] = lambda: MagicMock()
+        application = _application()
+        application.dependency_overrides[get_database_session] = lambda: (
+            MagicMock()
+        )
         try:
-            client = TestClient(app)
-            response = client.get("/datasets?statuses=")
+            response = TestClient(application).get("/datasets?statuses=")
         finally:
-            app.dependency_overrides.clear()
+            application.dependency_overrides.clear()
 
         self.assertEqual(response.status_code, 422)
 
@@ -614,17 +647,20 @@ class MinioLocationTest(unittest.TestCase):
             {"MINIO_CONSOLE_URL": "http://minio.test:9003"},
             clear=False,
         ):
-            table_url = minio_browser_url("features/trailing_volatility_1d-v1")
+            table_url = minio_browser_url(
+                TEST_DEPENDENCIES, "features/trailing_volatility_1d-v1"
+            )
             partition_url = minio_partition_url(
+                TEST_DEPENDENCIES,
                 "features/trailing_volatility_1d-v1",
                 datetime(2026, 10, 20, tzinfo=UTC),
             )
 
         self.assertEqual(
             table_url,
-            "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d-v1%2F",
+            "http://127.0.0.1:9003/browser/warehouse/features%2Ftrailing_volatility_1d-v1%2F",
         )
         self.assertEqual(
             partition_url,
-            "http://minio.test:9003/browser/warehouse/features%2Ftrailing_volatility_1d-v1%2Fdata%2Ftimestamp_day%3D2026-10-20%2F",
+            "http://127.0.0.1:9003/browser/warehouse/features%2Ftrailing_volatility_1d-v1%2Fdata%2Ftimestamp_day%3D2026-10-20%2F",
         )

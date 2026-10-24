@@ -18,7 +18,10 @@ if TYPE_CHECKING:
 def _alembic_config() -> Config:
     """Configure Alembic from the control plane's typed dependencies."""
     config = context.config
-    url = make_url(Dependencies.from_environment().database_url)
+    dependencies = config.attributes.get("dependencies")
+    if not isinstance(dependencies, Dependencies):
+        dependencies = Dependencies.from_environment()
+    url = make_url(dependencies.database_url)
     if url.drivername in {"postgresql", "postgresql+psycopg2"}:
         url = url.set(drivername="postgresql+psycopg")
     config.set_main_option(

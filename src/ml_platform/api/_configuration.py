@@ -1,38 +1,81 @@
-"""Runtime dependencies used by the control-plane API and its scheduler."""
+"""Validated runtime dependencies for the control-plane API."""
 
 import os
-from dataclasses import dataclass
 
-from ml_platform.api._exceptions import InvalidRuntimeEnvironmentError
-from ml_platform.common.types import Environment
+from pydantic import Field, model_validator
+
+from ml_platform.api._exceptions import (
+    DatabaseUrlNotConfiguredError,
+    InvalidDependencyConfigurationError,
+    InvalidRuntimeEnvironmentError,
+)
+from ml_platform.common.types import BaseConfig, Environment
 
 
-@dataclass(frozen=True)
-class Dependencies:
-    """Typed operational dependencies configured for one API process."""
+class Dependencies(BaseConfig):
+    """Immutable operational dependencies for one API call path."""
 
-    environment: Environment
-    database_url: str
-    kubernetes_namespace: str
-    materialization_image: str
-    warehouse_dir: str
-    s3_endpoint: str
-    minio_root_user: str
-    minio_root_password: str
-    headlamp_url: str
-    minio_console_url: str
+    environment: Environment = Field(description="Runtime environment.")
+    database_url: str = Field(
+        min_length=1, description="PostgreSQL connection URL."
+    )
+    kubernetes_namespace: str = Field(
+        min_length=1, description="Kubernetes namespace."
+    )
+    materialization_image: str = Field(
+        min_length=1, description="Spark job image."
+    )
+    warehouse_dir: str = Field(
+        min_length=1, description="Iceberg warehouse URI."
+    )
+    s3_endpoint: str = Field(
+        min_length=1, description="S3-compatible endpoint URL."
+    )
+    minio_root_user: str = Field(min_length=1, description="MinIO access key.")
+    minio_root_password: str = Field(
+        min_length=1, description="MinIO secret key."
+    )
+    headlamp_url: str = Field(min_length=1, description="Headlamp base URL.")
+    minio_console_url: str = Field(
+        min_length=1, description="MinIO Console base URL."
+    )
+
+    @model_validator(mode="after")
+    def _validate_non_blank_values(self) -> "Dependencies":
+        """Reject whitespace-only runtime values after model parsing."""
+        values = {
+            "database_url": self.database_url,
+            "kubernetes_namespace": self.kubernetes_namespace,
+            "materialization_image": self.materialization_image,
+            "warehouse_dir": self.warehouse_dir,
+            "s3_endpoint": self.s3_endpoint,
+            "minio_root_user": self.minio_root_user,
+            "minio_root_password": self.minio_root_password,
+            "headlamp_url": self.headlamp_url,
+            "minio_console_url": self.minio_console_url,
+        }
+        for dependency_name, value in values.items():
+            if not value.strip():
+                raise InvalidDependencyConfigurationError(dependency_name)
+        return self
 
     @classmethod
     def from_environment(cls) -> "Dependencies":
-        """Load the API process's explicit runtime dependency configuration."""
-        database_url = os.environ.get("DATABASE_URL", "")
-        environment_value = os.environ.get(
-            "ML_PLATFORM_ENVIRONMENT", Environment.LOCAL
-        )
+        """Read and validate this process's runtime dependencies once."""
         try:
-            environment = Environment(environment_value)
+            environment = Environment(
+                os.environ.get("ML_PLATFORM_ENVIRONMENT", Environment.LOCAL)
+            )
         except ValueError as error:
-            raise InvalidRuntimeEnvironmentError(environment_value) from error
+            raise InvalidRuntimeEnvironmentError(
+                os.environ.get("ML_PLATFORM_ENVIRONMENT", "")
+            ) from error
+        try:
+            database_url = os.environ["DATABASE_URL"]
+        except KeyError as error:
+            raise DatabaseUrlNotConfiguredError from error
+        if not database_url.strip():
+            raise DatabaseUrlNotConfiguredError
         return cls(
             environment=environment,
             database_url=database_url,
@@ -50,6 +93,10 @@ class Dependencies:
             minio_root_password=os.environ.get(
                 "MINIO_ROOT_PASSWORD", "miniosecret"
             ),
-            headlamp_url=os.environ.get("HEADLAMP_URL", ""),
-            minio_console_url=os.environ.get("MINIO_CONSOLE_URL", ""),
+            headlamp_url=os.environ.get(
+                "HEADLAMP_URL", "http://127.0.0.1:8002"
+            ),
+            minio_console_url=os.environ.get(
+                "MINIO_CONSOLE_URL", "http://127.0.0.1:9003"
+            ),
         )

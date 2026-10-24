@@ -1,4 +1,4 @@
-"""Synchronous SQLAlchemy session dependency for the materialization API."""
+"""Synchronous database access primitives for the materialization API."""
 
 from collections.abc import Generator
 from functools import lru_cache
@@ -11,7 +11,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from ml_platform.api._configuration import Dependencies
-from ml_platform.api._exceptions import DatabaseUrlNotConfiguredError
 from ml_platform.api.infrastructure.exceptions import (
     MaterializationDatabaseUnavailableError,
 )
@@ -26,27 +25,21 @@ def engine_for(database_url: str) -> Engine:
     return create_engine(url, pool_pre_ping=True)
 
 
-def database_url() -> str:
-    """Return the configured PostgreSQL endpoint from typed API dependencies."""
-    configured_database_url = Dependencies.from_environment().database_url
-    if not configured_database_url:
-        raise DatabaseUrlNotConfiguredError
-    return configured_database_url
-
-
-def get_session() -> Generator[Session, None, None]:
-    """Yield a synchronous SQLAlchemy session for one API request."""
+def get_session(dependencies: Dependencies) -> Generator[Session, None, None]:
+    """Yield a synchronous SQLAlchemy session for one dependency context."""
     try:
-        with Session(engine_for(database_url())) as session:
+        with Session(engine_for(dependencies.database_url)) as session:
             yield session
     except OperationalError as error:
         raise MaterializationDatabaseUnavailableError from error
 
 
-def get_connection() -> Generator[Connection, None, None]:
-    """Yield a Psycopg connection until every route has migrated to a session."""
+def get_connection(
+    dependencies: Dependencies,
+) -> Generator[Connection, None, None]:
+    """Yield a Psycopg connection for one dependency context."""
     try:
-        with psycopg.connect(database_url()) as connection:
+        with psycopg.connect(dependencies.database_url) as connection:
             yield connection
     except psycopg.OperationalError as error:
         raise MaterializationDatabaseUnavailableError from error
