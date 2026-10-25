@@ -10,10 +10,15 @@ from pyspark.sql.column import Column
 from ml_platform.common.types import (
     DatasetType,
     EntityKey,
+    Environment,
     PartitionType,
     Symbol,
 )
 from ml_platform.data_sdk._exceptions import MarketSymbolConfigurationError
+from ml_platform.data_sdk.dataset_transforms import (
+    MarketDataTransform,
+    SyntheticDatasetTransform,
+)
 from ml_platform.data_sdk.materializers._base import (
     Materializer,
     MaterializerConfig,
@@ -30,7 +35,9 @@ from ml_platform.data_sdk.materializers._materialization_validator import (
 )
 from ml_platform.data_sdk.materializers.exceptions import (
     UnsupportedDatasetTypeError,
+    UnsupportedMaterializationEnvironmentError,
 )
+from ml_platform.data_sdk.transforms._dataset_schema import SyntheticSeed
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 
 _OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
@@ -141,20 +148,30 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
         """Build the user-facing transform selected by the dataset definition."""
         match self.config.dataset_type:
             case DatasetType.MARKET_DATA:
-                from ml_platform.data_sdk.dataset_transforms._market_data import (
-                    MarketDataTransform,
-                )
-
-                return MarketDataTransform(
+                source_transform = MarketDataTransform(
                     spark=spark,
-                    symbols=self.config.symbols,
-                    partitions=[
-                        partition.timestamp
-                        for partition in self.config.partitions
-                    ],
+                    partitions=tuple(self.config.partition_timestamps),
+                    symbols=tuple(self.config.symbols),
                     keys=self.config.keys,
                     partition_type=self.config.partition_type,
                 )
+                match self.config.environment:
+                    case Environment.LOCAL:
+                        return source_transform
+                    case Environment.TEST:
+                        return SyntheticDatasetTransform(
+                            spark=spark,
+                            partitions=tuple(self.config.partition_timestamps),
+                            keys=self.config.keys,
+                            partition_type=self.config.partition_type,
+                            source_transform=source_transform,
+                            synthetic_seed=SyntheticSeed(0),
+                        )
+                    case _ as unsupported_environment:
+                        raise UnsupportedMaterializationEnvironmentError(
+                            "Dataset materializer does not support environment "
+                            f"{unsupported_environment!r}."
+                        )
             case _ as unsupported_type:
                 raise UnsupportedDatasetTypeError(
                     f"Dataset materializer does not support dataset type {unsupported_type!r}."

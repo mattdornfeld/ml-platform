@@ -35,3 +35,5 @@
 - API exceptions must carry an explicit HTTP status code so the API boundary can render the intended response consistently.
 - Put imports at module scope. Do not place imports inside methods or functions unless an unavoidable, documented import cycle requires it.
 - When a function requires only a shared subset of properties, define a typed structural interface or protocol for that contract instead of accepting a union of concrete model types. Prefer this approach in future designs.
+- Use `typing.NewType` for semantic primitive domain values that require nominal type safety. Use Python 3.12's `type` statement only for structural unions and parameterized collection shapes.
+- Document dataclass and `@record` properties in an `Attributes:` section of the class docstring. Do not use inline comments to document those properties.

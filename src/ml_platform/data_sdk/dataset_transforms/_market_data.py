@@ -1,7 +1,6 @@
-"""Yahoo Finance market-data dataset transform."""
+"""Yahoo Finance market-data dataset transformation."""
 
 import sys
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -19,8 +18,28 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from ml_platform.common.types import Symbol
+from ml_platform.common.types import EntityKey, PartitionType, Symbol
 from ml_platform.data_sdk._exceptions import DataSdkError
+from ml_platform.data_sdk.transforms._dataset_schema import (
+    ConstantDistribution,
+    DatasetColumn,
+    DatasetColumnName,
+    DatasetColumnType,
+    DatasetSchema,
+    DistributionMaximum,
+    DistributionMean,
+    DistributionMinimum,
+    DistributionStandardDeviation,
+    EntityValue,
+    EntityValueDistribution,
+    EntityValueSet,
+    LessThanOrEqualInvariant,
+    MarketSymbols,
+    NormalDistribution,
+    PartitionTimestampDistribution,
+    PositiveInvariant,
+    UniformDistribution,
+)
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 from ml_platform.data_sdk.utils import record
 
@@ -52,29 +71,116 @@ class HourlyOhlcvRow:
     volume: int
 
 
-class MarketDataPartitionError(DataSdkError):
-    """Raised when a market-data transform is invoked without output partitions."""
-
-
-class YahooFinanceDataUnavailableError(DataSdkError):
-    """Raised when Yahoo Finance returns no hourly bars for a requested symbol or job."""
-
-
-class YahooFinancePayloadError(DataSdkError):
-    """Raised when Yahoo Finance returns a malformed or error chart payload."""
-
-
 @record
 class MarketDataTransform(DatasetTransform):
-    """Download configured Yahoo Finance bars and construct the OHLCV DataFrame."""
+    """Download Yahoo Finance OHLCV rows for the requested partitions."""
 
-    spark: SparkSession
-    symbols: Sequence[Symbol]
-    partitions: list[datetime]
+    symbols: MarketSymbols
+
+    @property
+    def schema(self) -> DatasetSchema:
+        """Return the market-data output contract and synthetic constraints."""
+        return DatasetSchema(
+            columns=(
+                DatasetColumn(
+                    name=DatasetColumnName("timestamp"),
+                    column_type=DatasetColumnType.TIMESTAMP,
+                    synthetic_distribution=PartitionTimestampDistribution(),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("symbol"),
+                    column_type=DatasetColumnType.STRING,
+                    synthetic_distribution=EntityValueDistribution(
+                        key=EntityKey.SYMBOL
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("market_session"),
+                    column_type=DatasetColumnType.STRING,
+                    synthetic_distribution=ConstantDistribution(
+                        value="regular"
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("Open"),
+                    column_type=DatasetColumnType.DOUBLE,
+                    synthetic_distribution=NormalDistribution(
+                        mean=DistributionMean(100.0),
+                        standard_deviation=DistributionStandardDeviation(8.0),
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("High"),
+                    column_type=DatasetColumnType.DOUBLE,
+                    synthetic_distribution=NormalDistribution(
+                        mean=DistributionMean(106.0),
+                        standard_deviation=DistributionStandardDeviation(8.0),
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("Low"),
+                    column_type=DatasetColumnType.DOUBLE,
+                    synthetic_distribution=NormalDistribution(
+                        mean=DistributionMean(94.0),
+                        standard_deviation=DistributionStandardDeviation(8.0),
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("Close"),
+                    column_type=DatasetColumnType.DOUBLE,
+                    synthetic_distribution=NormalDistribution(
+                        mean=DistributionMean(100.0),
+                        standard_deviation=DistributionStandardDeviation(8.0),
+                    ),
+                ),
+                DatasetColumn(
+                    name=DatasetColumnName("Volume"),
+                    column_type=DatasetColumnType.BIGINT,
+                    synthetic_distribution=UniformDistribution(
+                        minimum=DistributionMinimum(100_000.0),
+                        maximum=DistributionMaximum(5_000_000.0),
+                    ),
+                ),
+            ),
+            partition_type=PartitionType.DAILY,
+            synthetic_distribution_invariants=(
+                PositiveInvariant(column=DatasetColumnName("Open")),
+                PositiveInvariant(column=DatasetColumnName("High")),
+                PositiveInvariant(column=DatasetColumnName("Low")),
+                PositiveInvariant(column=DatasetColumnName("Close")),
+                PositiveInvariant(column=DatasetColumnName("Volume")),
+                LessThanOrEqualInvariant(
+                    lower_column=DatasetColumnName("Low"),
+                    upper_column=DatasetColumnName("Open"),
+                ),
+                LessThanOrEqualInvariant(
+                    lower_column=DatasetColumnName("Low"),
+                    upper_column=DatasetColumnName("Close"),
+                ),
+                LessThanOrEqualInvariant(
+                    lower_column=DatasetColumnName("Open"),
+                    upper_column=DatasetColumnName("High"),
+                ),
+                LessThanOrEqualInvariant(
+                    lower_column=DatasetColumnName("Close"),
+                    upper_column=DatasetColumnName("High"),
+                ),
+            ),
+        )
+
+    @property
+    def entity_value_sets(self) -> tuple[EntityValueSet, ...]:
+        """Return the configured symbols as the transform's entity values."""
+        return (
+            EntityValueSet(
+                key=EntityKey.SYMBOL,
+                values=tuple(EntityValue(symbol) for symbol in self.symbols),
+            ),
+        )
 
     @property
     def value_schema(self) -> dict[str, str]:
-        """Declare the OHLCV columns persisted beside the shared transform keys."""
+        """Declare OHLCV columns persisted beside shared transform keys."""
         return {
             "market_session": "string",
             "Open": "double",
@@ -85,13 +191,14 @@ class MarketDataTransform(DatasetTransform):
         }
 
     def __call__(self) -> DataFrame:
-        """Fetch contiguous Yahoo ranges for the requested partition days."""
+        """Fetch contiguous Yahoo ranges and return typed market-data rows."""
         requested_days = sorted(
             {partition.date() for partition in self.partitions}
         )
         if not requested_days:
             raise MarketDataPartitionError(
-                "Market-data materialization requires at least one requested output partition."
+                "Market-data materialization requires at least one requested "
+                "output partition."
             )
         rows: list[HourlyOhlcvRow] = []
         for symbol in self.symbols:
@@ -110,14 +217,27 @@ class MarketDataTransform(DatasetTransform):
                     ) and error.response.status_code not in {404, 422}:
                         raise
                     sys.stdout.write(
-                        f"Skipping unavailable Yahoo Finance range for {symbol}: {error}\n"
+                        "Skipping unavailable Yahoo Finance range for "
+                        f"{symbol}: {error}\n"
                     )
         if not rows:
             raise YahooFinanceDataUnavailableError(
-                "Yahoo Finance returned no hourly data for any configured symbol "
-                f"({', '.join(self.symbols)})."
+                "Yahoo Finance returned no hourly data for any configured "
+                f"symbol ({', '.join(self.symbols)})."
             )
         return _with_market_session(_market_data_frame(self.spark, rows))
+
+
+class MarketDataPartitionError(DataSdkError):
+    """Raised when a market-data transform is invoked without output partitions."""
+
+
+class YahooFinanceDataUnavailableError(DataSdkError):
+    """Raised when Yahoo Finance returns no hourly bars for a requested symbol or job."""
+
+
+class YahooFinancePayloadError(DataSdkError):
+    """Raised when Yahoo Finance returns a malformed or error chart payload."""
 
 
 def _contiguous_date_ranges(partitions: list[date]) -> list[tuple[date, date]]:
@@ -169,7 +289,10 @@ def _request_yahoo_chart(
     """Request one Yahoo chart response and return decoded JSON."""
     start = int(datetime.combine(start_date, time.min, UTC).timestamp())
     end = int(datetime.combine(end_date, time.min, UTC).timestamp())
-    url = f"{YAHOO_CHART_URL}/{quote(symbol, safe='')}?period1={start}&period2={end}&interval=1h&includePrePost=true&events=history"
+    url = (
+        f"{YAHOO_CHART_URL}/{quote(symbol, safe='')}?period1={start}"
+        f"&period2={end}&interval=1h&includePrePost=true&events=history"
+    )
     response = httpx2.get(
         url,
         headers={"User-Agent": "ml-platform/0.1"},
@@ -239,8 +362,8 @@ def _yahoo_chart_rows(
         )
     ):
         raise YahooFinancePayloadError(
-            f"Yahoo Finance response for {symbol!r} has OHLCV arrays inconsistent with timestamp count "
-            f"{len(timestamps)}."
+            f"Yahoo Finance response for {symbol!r} has OHLCV arrays inconsistent "
+            f"with timestamp count {len(timestamps)}."
         )
     return [
         HourlyOhlcvRow(
@@ -286,13 +409,13 @@ def _market_data_frame(
     )
 
 
-def _with_market_session(frame: DataFrame) -> DataFrame:
+def _with_market_session(data_frame: DataFrame) -> DataFrame:
     """Add a pre-market, regular, or after-hours session label."""
     eastern = spark_functions.date_format(
         spark_functions.from_utc_timestamp("timestamp", "America/New_York"),
         "HH:mm:ss",
     )
-    return frame.withColumn(
+    return data_frame.withColumn(
         "market_session",
         spark_functions.when(
             (eastern >= "04:00:00") & (eastern < "09:30:00"), "pre_market"

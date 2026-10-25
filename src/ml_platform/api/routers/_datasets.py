@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from ml_platform.api._dependencies import (
+    ApiDependencies,
     DatabaseSession,
     ResourcePathName,
     ResourcePathVersion,
@@ -55,6 +56,7 @@ def _definition_response(definition: DatasetDefinition) -> dict[str, object]:
 
 
 def _partition_response(
+    dependencies: ApiDependencies,
     partition: ResourcePartition,
     table_path: str,
 ) -> dict[str, object]:
@@ -67,7 +69,9 @@ def _partition_response(
         "updated_at": partition.updated_at,
         "content_hash": partition.content_hash,
         "snapshot_id": partition.snapshot_id,
-        "minio_url": minio_partition_url(table_path, partition.timestamp),
+        "minio_url": minio_partition_url(
+            dependencies, table_path, partition.timestamp
+        ),
     }
 
 
@@ -148,6 +152,7 @@ def list_datasets(
 def get_dataset(
     name: ResourcePathName,
     version: ResourcePathVersion,
+    dependencies: ApiDependencies,
     session: DatabaseSession,
 ) -> dict[str, object]:
     """Return one dataset and its latest logical partition receipts."""
@@ -158,9 +163,9 @@ def get_dataset(
     table_path = f"market_data/{name}-v{version}"
     return {
         **_definition_response(definition),
-        "minio_table_url": minio_browser_url(table_path),
+        "minio_table_url": minio_browser_url(dependencies, table_path),
         "partitions": [
-            _partition_response(partition, table_path)
+            _partition_response(dependencies, partition, table_path)
             for partition in repository.partitions(name, version)
         ],
         "jobs": [
@@ -229,6 +234,7 @@ def create_dataset(
         {
             "name": definition.name,
             "version": definition.version,
+            "id": f"{definition.name}_v{definition.version}",
             "dataset_type": definition.dataset_type,
             "config": definition.config.model_dump(mode="json"),
             "created_at": definition.created_at,

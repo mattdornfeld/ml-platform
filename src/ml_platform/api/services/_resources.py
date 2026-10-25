@@ -1,60 +1,62 @@
 """External read-only dashboard links for control-plane resources."""
 
-import os
 from datetime import datetime
 from urllib.parse import quote
 
 from kubernetes import client as kubernetes_client
 from kubernetes.client.exceptions import ApiException
 
+from ml_platform.api._configuration import Dependencies
+from ml_platform.common.types import Environment
 
-def minio_browser_url(object_path: str) -> str | None:
+
+def minio_browser_url(dependencies: Dependencies, object_path: str) -> str:
     """Build a MinIO Console object-browser URL for one warehouse object prefix."""
-    console_url = os.environ.get("MINIO_CONSOLE_URL")
-    if not console_url:
-        return None
+    console_url = dependencies.minio_console_url
     prefix = quote(f"{object_path.rstrip('/')}/", safe="")
     return f"{console_url.rstrip('/')}/browser/warehouse/{prefix}"
 
 
 def minio_partition_url(
+    dependencies: Dependencies,
     table_path: str,
     timestamp: datetime,
-) -> str | None:
+) -> str:
     """Build a MinIO Console URL for one Iceberg day-partition prefix."""
     partition_day = timestamp.date().isoformat()
-    return minio_browser_url(f"{table_path}/data/timestamp_day={partition_day}")
+    return minio_browser_url(
+        dependencies, f"{table_path}/data/timestamp_day={partition_day}"
+    )
 
 
-def headlamp_resource_url(resource_path: str, resource_name: str) -> str | None:
+def headlamp_resource_url(
+    dependencies: Dependencies, resource_path: str, resource_name: str
+) -> str:
     """Build a direct Headlamp URL for one resource in the configured namespace."""
-    headlamp_url = os.environ.get("HEADLAMP_URL")
-    if not headlamp_url:
-        return None
-    namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+    headlamp_url = dependencies.headlamp_url
+    namespace = dependencies.kubernetes_namespace
     return f"{headlamp_url.rstrip('/')}/c/main/{resource_path}/{namespace}/{resource_name}"
 
 
-def job_kubernetes_resources(application_name: str) -> list[dict[str, str]]:
+def job_kubernetes_resources(
+    dependencies: Dependencies, application_name: str
+) -> list[dict[str, str]]:
     """Return Headlamp links for the application and any extant Spark driver or executors."""
     application_url = headlamp_resource_url(
+        dependencies,
         "customresources/sparkapplications.sparkoperator.k8s.io",
         application_name,
     )
-    resources = (
-        [
-            {
-                "resource_type": "Spark Application",
-                "resource_id": application_name,
-                "url": application_url,
-            }
-        ]
-        if application_url
-        else []
-    )
-    if not application_url:
+    resources = [
+        {
+            "resource_type": "Spark Application",
+            "resource_id": application_name,
+            "url": application_url,
+        }
+    ]
+    namespace = dependencies.kubernetes_namespace
+    if dependencies.environment is Environment.TEST:
         return resources
-    namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
     try:
         kubernetes_client.CustomObjectsApi().get_namespaced_custom_object(
             "sparkoperator.k8s.io",
@@ -90,13 +92,12 @@ def job_kubernetes_resources(application_name: str) -> list[dict[str, str]]:
         role = (metadata.labels or {}).get("spark-role")
         if role not in {"driver", "executor"}:
             continue
-        url = headlamp_resource_url("pods", name)
-        if url:
-            resources.append(
-                {
-                    "resource_type": f"{role.title()} Pod",
-                    "resource_id": name,
-                    "url": url,
-                }
-            )
+        url = headlamp_resource_url(dependencies, "pods", name)
+        resources.append(
+            {
+                "resource_type": f"{role.title()} Pod",
+                "resource_id": name,
+                "url": url,
+            }
+        )
     return resources

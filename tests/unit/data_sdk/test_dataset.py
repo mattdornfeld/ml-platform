@@ -4,6 +4,7 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
+from ml_platform.common.types import Environment
 from ml_platform.data_sdk.materializers import (
     DatasetMaterializationConfig,
     DatasetMaterializer,
@@ -21,6 +22,7 @@ class DatasetWorkerTest(unittest.TestCase):
         return DatasetMaterializationConfig.model_validate_json(
             json.dumps(
                 {
+                    "environment": "local",
                     "name": "sp500",
                     "version": 3,
                     "description": "Test market data.",
@@ -41,19 +43,35 @@ class DatasetWorkerTest(unittest.TestCase):
             )
         )
 
-    @patch(
-        "ml_platform.data_sdk.dataset_transforms._market_data.MarketDataTransform"
-    )
+    @patch("ml_platform.data_sdk.materializers._dataset.MarketDataTransform")
     def test_market_data_dispatches_to_transform(
         self, transform: MagicMock
     ) -> None:
         """The declared dataset type constructs MarketDataTransform with job partitions."""
         worker = DatasetMaterializer(self.config())
         worker._transform(MagicMock())
-        self.assertEqual(transform.call_args.kwargs["symbols"], ["AAPL"])
+        self.assertEqual(transform.call_args.kwargs["symbols"], ("AAPL",))
         self.assertEqual(
             transform.call_args.kwargs["partitions"][0].date().isoformat(),
             "2026-01-01",
+        )
+
+    @patch("ml_platform.data_sdk.materializers._dataset.MarketDataTransform")
+    def test_test_environment_uses_the_synthetic_dataset_provider(
+        self, transform: MagicMock
+    ) -> None:
+        """The materializer selects deterministic data only through Environment.TEST."""
+        config = self.config().model_copy(
+            update={"environment": Environment.TEST}
+        )
+
+        dataset_transform = DatasetMaterializer(config)._transform(MagicMock())
+
+        self.assertEqual(
+            type(dataset_transform).__name__, "SyntheticDatasetTransform"
+        )
+        self.assertIs(
+            dataset_transform.source_transform, transform.return_value
         )
 
     def test_unsupported_dataset_type_is_rejected_by_configuration(

@@ -39,6 +39,10 @@ class TransformParameterError(MaterializerError):
     """Raised when transform parameters do not match its constructor contract."""
 
 
+class UnsupportedMaterializationEnvironmentError(MaterializerError):
+    """Raised when no provider supports the requested runtime environment."""
+
+
 class UnsupportedDatasetTypeError(MaterializerError):
     """Raised when no dataset transform supports the requested dataset type."""
 

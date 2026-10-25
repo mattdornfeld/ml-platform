@@ -2,7 +2,7 @@
 
 from enum import StrEnum
 
-from pydantic import Field, computed_field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from ml_platform.common.api.dtos._base import _ApiModel
 from ml_platform.common.domain import (
@@ -55,18 +55,13 @@ class DatasetCreateRequest(_ApiModel):
             )
         return self
 
-    @computed_field(  # type: ignore[prop-decorator]
-        description="Immutable ID derived from the name and version."
-    )
-    @property
-    def id(self) -> DatasetId:
-        """Return the immutable dataset ID derived from name and version."""
-        return DatasetId(f"{self.name}_v{self.version}")
-
 
 class DatasetResponse(DatasetCreateRequest):
     """A persisted dataset definition."""
 
+    id: DatasetId = Field(
+        description="Immutable ID derived from the persisted name and version."
+    )
     created_at: CreatedAt = Field(
         description="UTC time at which the dataset definition was registered.",
     )

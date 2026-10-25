@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 from typing import Any
 from uuid import UUID
 
@@ -10,6 +9,7 @@ from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.incluster_config import load_incluster_config
 
+from ml_platform.api._configuration import Dependencies
 from ml_platform.api._exceptions import UnsupportedScheduledJobTypeError
 from ml_platform.api.repositories import SchedulerRepository
 from ml_platform.common.types import JobId
@@ -22,11 +22,10 @@ QUEUE_NAME = "materialization"
 class JobScheduler:
     """Create gated SparkApplications, release eligible jobs, and observe outcomes."""
 
-    def __init__(self, database_url: str, max_concurrency: int = 2) -> None:
-        """Initialize a scheduler with its database connection and concurrency cap."""
-        self.database_url = database_url
-        self.max_concurrency = max_concurrency
-        self._repository = SchedulerRepository(database_url)
+    def __init__(self, dependencies: Dependencies) -> None:
+        """Initialize the scheduler with all typed API runtime dependencies."""
+        self.dependencies = dependencies
+        self._repository = SchedulerRepository(dependencies.database_url)
 
     async def run(self, stop: asyncio.Event) -> None:
         """Continuously reconcile submitted jobs without duplicating Kueue states."""
@@ -88,7 +87,7 @@ class JobScheduler:
     ) -> None:
         """Create a Kueue-gated SparkApplication, preserving a pre-existing one."""
         dataset = self._dataset_job(job_id)
-        namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+        namespace = self.dependencies.kubernetes_namespace
         application = {
             "apiVersion": "sparkoperator.k8s.io/v1beta2",
             "kind": "SparkApplication",
@@ -107,9 +106,7 @@ class JobScheduler:
                 "type": "Python",
                 "mode": "cluster",
                 "suspend": True,
-                "image": os.environ.get(
-                    "MATERIALIZATION_IMAGE", "ml-platform:latest"
-                ),
+                "image": self.dependencies.materialization_image,
                 "imagePullPolicy": "IfNotPresent",
                 "mainApplicationFile": "local:///app/src/ml_platform/data_sdk/materializers/_dataset.py",
                 "arguments": [
@@ -129,9 +126,8 @@ class JobScheduler:
                             "name": dataset["name"],
                             "version": dataset["version"],
                             "dataset_type": dataset["dataset_type"],
-                            "warehouse_dir": os.environ.get(
-                                "DATA_WAREHOUSE_DIR", "s3a://warehouse"
-                            ),
+                            "environment": self.dependencies.environment,
+                            "warehouse_dir": self.dependencies.warehouse_dir,
                             "partitions": dataset["callbacks"],
                         },
                         default=str,
@@ -141,17 +137,11 @@ class JobScheduler:
                 "restartPolicy": {"type": "Never"},
                 "sparkConf": {
                     "spark.sql.session.timeZone": "UTC",
-                    "spark.hadoop.fs.s3a.endpoint": os.environ.get(
-                        "S3_ENDPOINT", "http://minio:9000"
-                    ),
+                    "spark.hadoop.fs.s3a.endpoint": self.dependencies.s3_endpoint,
                     "spark.hadoop.fs.s3a.path.style.access": "true",
                     "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
-                    "spark.hadoop.fs.s3a.access.key": os.environ.get(
-                        "MINIO_ROOT_USER", "minio"
-                    ),
-                    "spark.hadoop.fs.s3a.secret.key": os.environ.get(
-                        "MINIO_ROOT_PASSWORD", "miniosecret"
-                    ),
+                    "spark.hadoop.fs.s3a.access.key": self.dependencies.minio_root_user,
+                    "spark.hadoop.fs.s3a.secret.key": self.dependencies.minio_root_password,
                 },
                 "driver": {
                     "cores": 1,
@@ -161,7 +151,7 @@ class JobScheduler:
                         {
                             "name": "MATERIALIZATION_API_URL",
                             "value": "http://ml-control-plane:8000",
-                        }
+                        },
                     ],
                 },
                 "executor": {"instances": 2, "cores": 1, "memory": "2g"},
@@ -185,7 +175,7 @@ class JobScheduler:
     ) -> None:
         """Create one Kueue-gated SparkApplication for a feature job."""
         feature = self._feature_job(job_id)
-        namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+        namespace = self.dependencies.kubernetes_namespace
         application = {
             "apiVersion": "sparkoperator.k8s.io/v1beta2",
             "kind": "SparkApplication",
@@ -204,9 +194,7 @@ class JobScheduler:
                 "type": "Python",
                 "mode": "cluster",
                 "suspend": True,
-                "image": os.environ.get(
-                    "MATERIALIZATION_IMAGE", "ml-platform:latest"
-                ),
+                "image": self.dependencies.materialization_image,
                 "imagePullPolicy": "IfNotPresent",
                 "mainApplicationFile": "local:///app/src/ml_platform/data_sdk/materializers/_feature.py",
                 "arguments": [
@@ -214,9 +202,8 @@ class JobScheduler:
                     json.dumps(
                         {
                             **feature["config"],
-                            "warehouse_dir": os.environ.get(
-                                "DATA_WAREHOUSE_DIR", "s3a://warehouse"
-                            ),
+                            "environment": self.dependencies.environment,
+                            "warehouse_dir": self.dependencies.warehouse_dir,
                             "partitions": feature["callbacks"],
                         },
                         default=str,
@@ -226,17 +213,11 @@ class JobScheduler:
                 "restartPolicy": {"type": "Never"},
                 "sparkConf": {
                     "spark.sql.session.timeZone": "UTC",
-                    "spark.hadoop.fs.s3a.endpoint": os.environ.get(
-                        "S3_ENDPOINT", "http://minio:9000"
-                    ),
+                    "spark.hadoop.fs.s3a.endpoint": self.dependencies.s3_endpoint,
                     "spark.hadoop.fs.s3a.path.style.access": "true",
                     "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
-                    "spark.hadoop.fs.s3a.access.key": os.environ.get(
-                        "MINIO_ROOT_USER", "minio"
-                    ),
-                    "spark.hadoop.fs.s3a.secret.key": os.environ.get(
-                        "MINIO_ROOT_PASSWORD", "miniosecret"
-                    ),
+                    "spark.hadoop.fs.s3a.access.key": self.dependencies.minio_root_user,
+                    "spark.hadoop.fs.s3a.secret.key": self.dependencies.minio_root_password,
                 },
                 "driver": {
                     "cores": 1,
@@ -269,7 +250,7 @@ class JobScheduler:
     ) -> None:
         """Create one Kueue-gated SparkApplication for a label job."""
         label = self._label_job(job_id)
-        namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+        namespace = self.dependencies.kubernetes_namespace
         application = {
             "apiVersion": "sparkoperator.k8s.io/v1beta2",
             "kind": "SparkApplication",
@@ -288,9 +269,7 @@ class JobScheduler:
                 "type": "Python",
                 "mode": "cluster",
                 "suspend": True,
-                "image": os.environ.get(
-                    "MATERIALIZATION_IMAGE", "ml-platform:latest"
-                ),
+                "image": self.dependencies.materialization_image,
                 "imagePullPolicy": "IfNotPresent",
                 "mainApplicationFile": "local:///app/src/ml_platform/data_sdk/materializers/_label.py",
                 "arguments": [
@@ -298,9 +277,8 @@ class JobScheduler:
                     json.dumps(
                         {
                             **label["config"],
-                            "warehouse_dir": os.environ.get(
-                                "DATA_WAREHOUSE_DIR", "s3a://warehouse"
-                            ),
+                            "environment": self.dependencies.environment,
+                            "warehouse_dir": self.dependencies.warehouse_dir,
                             "partitions": label["callbacks"],
                         },
                         default=str,
@@ -310,17 +288,11 @@ class JobScheduler:
                 "restartPolicy": {"type": "Never"},
                 "sparkConf": {
                     "spark.sql.session.timeZone": "UTC",
-                    "spark.hadoop.fs.s3a.endpoint": os.environ.get(
-                        "S3_ENDPOINT", "http://minio:9000"
-                    ),
+                    "spark.hadoop.fs.s3a.endpoint": self.dependencies.s3_endpoint,
                     "spark.hadoop.fs.s3a.path.style.access": "true",
                     "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
-                    "spark.hadoop.fs.s3a.access.key": os.environ.get(
-                        "MINIO_ROOT_USER", "minio"
-                    ),
-                    "spark.hadoop.fs.s3a.secret.key": os.environ.get(
-                        "MINIO_ROOT_PASSWORD", "miniosecret"
-                    ),
+                    "spark.hadoop.fs.s3a.access.key": self.dependencies.minio_root_user,
+                    "spark.hadoop.fs.s3a.secret.key": self.dependencies.minio_root_password,
                 },
                 "driver": {
                     "cores": 1,
@@ -350,7 +322,7 @@ class JobScheduler:
 
     def _remove_admission_gate(self, application_name: str) -> None:
         """Release an API-eligible SparkApplication into Kueue resource admission."""
-        namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+        namespace = self.dependencies.kubernetes_namespace
         client.CustomObjectsApi().patch_namespaced_custom_object(
             "sparkoperator.k8s.io",
             "v1beta2",
@@ -368,7 +340,7 @@ class JobScheduler:
         self, job_id: JobId, application_name: str, job_type: str
     ) -> None:
         """Map terminal Spark states to the API's durable terminal status."""
-        namespace = os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
+        namespace = self.dependencies.kubernetes_namespace
         try:
             application = (
                 client.CustomObjectsApi().get_namespaced_custom_object(

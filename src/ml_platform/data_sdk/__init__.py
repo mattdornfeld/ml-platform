@@ -16,8 +16,9 @@ from ml_platform.data_sdk.transforms._base import DataTransform
 from ml_platform.data_sdk.transforms._feature_transform import FeatureTransform
 from ml_platform.data_sdk.transforms._label_transform import LabelTransform
 from ml_platform.data_sdk.transforms._types import Dataset, DatasetReference
-from ml_platform.data_sdk.dataset_transforms._market_data import (
+from ml_platform.data_sdk.dataset_transforms import (
     MarketDataTransform,
+    SyntheticDatasetTransform,
 )
 from ml_platform.data_sdk.feature_transforms._log_return import (
     LogReturnTransform,
@@ -52,6 +53,7 @@ __all__ = [
     "Materializer",
     "MaterializerConfig",
     "RelativeVolumeTransform",
+    "SyntheticDatasetTransform",
     "TrailingVolatilityTransform",
     "TripleBarrierLabelTransform",
 ]

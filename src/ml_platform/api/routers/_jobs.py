@@ -2,7 +2,11 @@
 
 from fastapi import APIRouter
 
-from ml_platform.api._dependencies import DatabaseSession, JobPathId
+from ml_platform.api._dependencies import (
+    ApiDependencies,
+    DatabaseSession,
+    JobPathId,
+)
 from ml_platform.api.domain import JobPartition, JobTarget
 from ml_platform.api.repositories import JobRepository
 from ml_platform.api.routers._openapi import JOB_VALIDATION, error_responses
@@ -64,7 +68,9 @@ def list_jobs(session: DatabaseSession) -> list[dict[str, object]]:
     responses=error_responses(JOB_VALIDATION),
     tags=["jobs"],
 )
-def get_job(job_id: JobPathId, session: DatabaseSession) -> JobResponse:
+def get_job(
+    job_id: JobPathId, dependencies: ApiDependencies, session: DatabaseSession
+) -> JobResponse:
     """Return aggregate status for one materialization job."""
     repository = JobRepository(session)
     job = repository.get(job_id)
@@ -89,9 +95,12 @@ def get_job(job_id: JobPathId, session: DatabaseSession) -> JobResponse:
             ],
             "spark_application_name": application_name,
             "headlamp_url": headlamp_resource_url(
+                dependencies,
                 "customresources/sparkapplications.sparkoperator.k8s.io",
                 application_name,
             ),
-            "kubernetes_resources": job_kubernetes_resources(application_name),
+            "kubernetes_resources": job_kubernetes_resources(
+                dependencies, application_name
+            ),
         }
     )

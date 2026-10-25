@@ -42,14 +42,14 @@ if TYPE_CHECKING:
 
     from sqlalchemy.engine import Engine
 
-    from ml_platform.common.types import JobId
+    from ml_platform.common.types import DatabaseUrl, JobId
 
 
 @dataclass(frozen=True)
 class SchedulerRepository:
     """Read schedulable jobs and persist observed job outcomes."""
 
-    database_url: str
+    database_url: DatabaseUrl
 
     @property
     def _engine(self) -> Engine:

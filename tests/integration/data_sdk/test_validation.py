@@ -14,10 +14,14 @@ from ml_platform.common.types import (
     DatasetType,
     DataType,
     EntityKey,
+    Environment,
     PartitionType,
     RunFrequency,
 )
-from ml_platform.data_sdk.dataset_transforms import MarketDataTransform
+from ml_platform.data_sdk.dataset_transforms import (
+    MarketDataTransform,
+    SyntheticDatasetTransform,
+)
 from ml_platform.data_sdk.exceptions import (
     FiniteValuesValidationError,
     InputKeysValidationError,
@@ -61,12 +65,19 @@ class MaterializerValidationTest(unittest.TestCase):
 
     def _daily_dataset_transform(self) -> MarketDataTransform:
         """Return the static transform layout required by dataset validation tests."""
-        return MarketDataTransform(
+        return SyntheticDatasetTransform(
             spark=self.spark,
-            symbols=["AAA"],
-            partitions=[datetime(2026, 1, 1, tzinfo=UTC)],
+            partitions=(datetime(2026, 1, 1, tzinfo=UTC),),
             keys=["symbol"],
             partition_type="daily",
+            source_transform=MarketDataTransform(
+                spark=self.spark,
+                partitions=(datetime(2026, 1, 1, tzinfo=UTC),),
+                symbols=("AAA",),
+                keys=["symbol"],
+                partition_type="daily",
+            ),
+            synthetic_seed=0,
         )
 
     def test_xnys_regular_session_filter_selects_sessions_and_skips_closed_periods(
@@ -133,6 +144,7 @@ class MaterializerValidationTest(unittest.TestCase):
         )
         worker = DatasetMaterializer(
             DatasetMaterializationConfig(
+                environment=Environment.LOCAL,
                 name="market",
                 version=1,
                 description="Test market data.",
@@ -197,6 +209,7 @@ class MaterializerValidationTest(unittest.TestCase):
         """Feature policy checks remain enforced after shared structural validation."""
         config = FeatureMaterializationConfig.model_validate(
             {
+                "environment": Environment.LOCAL,
                 "name": "returns",
                 "version": 1,
                 "description": "Test feature.",

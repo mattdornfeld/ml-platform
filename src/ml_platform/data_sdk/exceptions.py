@@ -26,6 +26,7 @@ from ml_platform.data_sdk.materializers.exceptions import (
     TransformTypeError,
     UniqueKeyValidationError,
     UnsupportedDatasetTypeError,
+    UnsupportedMaterializationEnvironmentError,
     UnsupportedValidationOverrideError,
 )
 from ml_platform.data_sdk.transforms._base import DataTransformSchemaError
@@ -63,6 +64,7 @@ __all__ = [
     "TransformTypeError",
     "UniqueKeyValidationError",
     "UnsupportedDatasetTypeError",
+    "UnsupportedMaterializationEnvironmentError",
     "UnsupportedValidationOverrideError",
     "YahooFinanceDataUnavailableError",
     "YahooFinancePayloadError",
