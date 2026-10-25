@@ -23,7 +23,6 @@ def dataset_config() -> DatasetMaterializationConfig:
                 "name": "sp500",
                 "version": 3,
                 "description": "Hourly market bars.",
-                "environment": "local",
                 "dataset_type": "market_data",
                 "keys": ["symbol"],
                 "partition_type": "daily",
