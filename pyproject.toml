@@ -73,6 +73,8 @@ ignore_missing_imports = true
 pythonpath = [".", "src"]
 addopts = "--ruff --ruff-format"
 markers = [
+    "unit: run a fast, isolated Python test",
+    "integration: verify behavior against a local external dependency",
     "e2e: deploy the complete platform to an isolated K3s cluster",
 ]
 

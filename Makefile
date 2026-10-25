@@ -6,7 +6,7 @@ WORKON_HOME ?= $(HOME)/.virtualenvs
 VENV_PATH := $(WORKON_HOME)/$(VENV_NAME)
 SPARK_JAVA_HOME ?= $(shell brew --prefix openjdk@21 2>/dev/null || /usr/libexec/java_home 2>/dev/null)
 
-.PHONY: configure venv lock test ui headlamp minio minio-console
+.PHONY: configure venv lock k3s-image test test-unit test-integration test-e2e test-all ui headlamp minio minio-console
 
 ## Create the named environment with mkvirtualenv, then install locked dependencies.
 configure: venv
@@ -21,9 +21,27 @@ venv:
 lock: venv
 	UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) lock
 
-## Run pytest, including production mypy checks and available Spark/Iceberg integration tests.
-test: configure
-	JAVA_HOME="$(SPARK_JAVA_HOME)" UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) run --locked pytest -v
+## Run fast unit and local integration tests. End-to-end tests are opt-in.
+test: test-unit test-integration
+
+## Run fast tests without Docker, PostgreSQL, or a local Spark session.
+test-unit: configure
+	UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) run --locked pytest -v tests/unit
+
+## Run tests requiring disposable PostgreSQL or a local Spark session.
+test-integration: configure
+	JAVA_HOME="$(SPARK_JAVA_HOME)" UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) run --locked pytest -v tests/integration
+
+## Build the self-contained K3s image used by end-to-end tests.
+k3s-image:
+	docker build --tag ml-platform-k3s:latest --file deploy/docker/k3s/Dockerfile .
+
+## Deploy and verify the complete platform in an isolated K3s container.
+test-e2e: configure k3s-image
+	UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) run --locked pytest -v tests/e2e
+
+## Run every test tier, including the complete K3s deployment.
+test-all: test test-e2e
 
 ## Serve the control-plane dashboard from the local Minikube cluster.
 ui:

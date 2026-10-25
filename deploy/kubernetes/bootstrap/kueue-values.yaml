@@ -1,5 +1,5 @@
 # Helm values for the local Kueue installation. SparkApplication support is alpha
-# upstream, so pin the chart version in scripts/bootstrap-minikube.sh.
+# upstream; the rendered controller manifest pins the deployed version.
 controllerManager:
   featureGates:
     - name: SparkApplicationIntegration

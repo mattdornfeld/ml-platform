@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ml-platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spark-operator
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kueue-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: headlamp

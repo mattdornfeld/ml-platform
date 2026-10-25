@@ -6,10 +6,20 @@ Create the shared uv-managed virtual environment and install the project:
 make configure
 ```
 
-Run the complete test suite:
+Run fast unit and integration tests:
 
 ```bash
 make test
+```
+
+The suite is organized by required infrastructure:
+
+```bash
+make test-unit         # pure Python tests
+make test-integration  # disposable PostgreSQL and local Spark tests
+make k3s-image         # build the self-contained deployment image
+make test-e2e           # complete K3s deployment
+make test-all          # every tier
 ```
 
 The reusable `MNISTDataModule` and `MNISTClassifier` live in
@@ -95,10 +105,9 @@ API pod filesystem. The API creates `SparkApplication` custom resources with
 the Kubernetes Python client and waits for the Spark Operator to report a
 terminal state.
 
-Run `scripts/bootstrap-minikube.sh` from the repository root to create the
-Minikube cluster, install the Spark Operator, build `ml-platform:latest`
-in Minikube's image store, and apply the versioned manifests. Access the API
-locally with `kubectl -n ml-platform port-forward service/ml-control-plane 8000:8000`.
+`make test-e2e` builds the self-contained K3s image, which creates the local
+cluster and deploys the versioned manifests. Access the API from a running
+cluster with `kubectl -n ml-platform port-forward service/ml-control-plane 8000:8000`.
 
 The control-plane client is available as the `ml_platform.cli` module:
 
@@ -106,6 +115,6 @@ The control-plane client is available as the `ml_platform.cli` module:
 python -m ml_platform.cli --help
 ```
 
-The MinIO credentials in `deploy/kubernetes/minio.yaml` are development-only.
+The MinIO credentials in `deploy/kubernetes/platform/minio.yaml` are development-only.
 Replace that Secret through the deployment environment before using a shared
 cluster.

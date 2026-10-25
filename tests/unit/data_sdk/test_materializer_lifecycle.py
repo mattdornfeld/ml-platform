@@ -19,6 +19,7 @@ def dataset_config() -> DatasetMaterializationConfig:
     return DatasetMaterializationConfig.model_validate_json(
         json.dumps(
             {
+                "environment": "local",
                 "name": "sp500",
                 "version": 3,
                 "description": "Hourly market bars.",
