@@ -107,6 +107,8 @@ convention = "google"
 # intentional and tests exercise private implementation contracts directly.
 # E2E setup executes only fixed local Docker, kubectl, and deployment commands.
 "tests/**/*.py" = ["ANN", "ARG", "D", "S101", "S106", "SLF001", "T201"]
+# The CLI contract suite invokes the public module entrypoint with sys.executable.
+"tests/integration/cli/**/*.py" = ["S603"]
 "tests/e2e/**/*.py" = ["S603", "S607"]
 
 [tool.ruff.format]

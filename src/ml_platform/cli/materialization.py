@@ -10,6 +10,7 @@ from typing import assert_never
 
 import httpx2
 from omegaconf import OmegaConf
+from pydantic import ValidationError
 
 from ml_platform.common.api.dtos import (
     DatasetCreateRequest,
@@ -39,16 +40,24 @@ type JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 type JsonObject = dict[str, JsonValue]
 
 
-class CliRequestError(Exception):
+class CliError(Exception):
+    """Base error raised by the ML Platform command-line client."""
+
+
+class CliRequestError(CliError):
     """Raised when a control-plane API request cannot be completed."""
 
 
-class CliResponseError(Exception):
+class CliResponseError(CliError):
     """Raised when a control-plane API response has an unexpected JSON shape."""
 
 
-class CliConfigurationError(Exception):
+class CliConfigurationError(CliError):
     """Raised when a local CLI configuration is invalid."""
+
+
+class CliTerminalJobError(CliError):
+    """Raised when a monitored materialization job reaches an error state."""
 
 
 def _json_value(value: object) -> JsonValue:
@@ -153,9 +162,14 @@ def _describe_job(
 
 def _dataset_payload(config: JsonObject) -> JsonObject:
     """Validate one dataset YAML mapping and convert it to the API request shape."""
-    definition = MarketDataConfig.model_validate_json(
-        json.dumps(config, default=str)
-    )
+    try:
+        definition = MarketDataConfig.model_validate_json(
+            json.dumps(config, default=str)
+        )
+    except ValidationError as error:
+        raise CliConfigurationError(
+            f"Invalid dataset configuration: {error}"
+        ) from error
     values = definition.model_dump(mode="json")
     values.pop("num_lookback_partitions")
     values.pop("run_frequency")
@@ -188,9 +202,14 @@ def _dataset_configs(config_dir: Path) -> dict[tuple[str, int], JsonObject]:
 
 def _feature_payload(config: JsonObject) -> JsonObject:
     """Validate one feature YAML mapping and convert it to the API request shape."""
-    values = FeatureConfig.model_validate_json(
-        json.dumps(config, default=str)
-    ).model_dump(mode="json")
+    try:
+        values = FeatureConfig.model_validate_json(
+            json.dumps(config, default=str)
+        ).model_dump(mode="json")
+    except ValidationError as error:
+        raise CliConfigurationError(
+            f"Invalid feature configuration: {error}"
+        ) from error
     return FeatureCreateRequest.model_validate(values).model_dump(mode="json")
 
 
@@ -213,9 +232,14 @@ def _feature_configs(config_dir: Path) -> dict[tuple[str, int], JsonObject]:
 
 def _label_payload(config: JsonObject) -> JsonObject:
     """Validate one label YAML mapping and convert it to the API request shape."""
-    values = LabelConfig.model_validate_json(
-        json.dumps(config, default=str)
-    ).model_dump(mode="json")
+    try:
+        values = LabelConfig.model_validate_json(
+            json.dumps(config, default=str)
+        ).model_dump(mode="json")
+    except ValidationError as error:
+        raise CliConfigurationError(
+            f"Invalid label configuration: {error}"
+        ) from error
     return LabelCreateRequest.model_validate(values).model_dump(mode="json")
 
 
@@ -490,34 +514,43 @@ def _job_id(result: JsonValue) -> str | None:
 
 def main() -> None:
     """Run the materialization API command-line client."""
-    arguments = _parser().parse_args()
-    match arguments.command:
-        case "create":
-            result = _create_resource(arguments)
-        case "materialize":
-            result = _materialize_resource(arguments)
-        case "datasets" | "features" | "labels":
-            result = sync_resources(
-                arguments.api_url,
-                arguments.sync_resource,
-                arguments.config_dir,
-            )
-        case "describe":
-            _describe_job(arguments.api_url, arguments.job_id)
-            return
-        case unsupported_command:
-            raise CliConfigurationError(
-                f"Unsupported command {unsupported_command!r}."
-            )
-    sys.stdout.write(json.dumps(result, default=str) + "\n")
-    if arguments.command == "materialize" and arguments.monitor:
-        submitted_job_id = _job_id(result)
-        if submitted_job_id is not None:
-            _describe_job(
-                arguments.api_url,
-                submitted_job_id,
-                arguments.poll_seconds,
-            )
+    try:
+        arguments = _parser().parse_args()
+        match arguments.command:
+            case "create":
+                result = _create_resource(arguments)
+            case "materialize":
+                result = _materialize_resource(arguments)
+            case "datasets" | "features" | "labels":
+                result = sync_resources(
+                    arguments.api_url,
+                    arguments.sync_resource,
+                    arguments.config_dir,
+                )
+            case "describe":
+                _describe_job(arguments.api_url, arguments.job_id)
+                return
+            case unsupported_command:
+                raise CliConfigurationError(
+                    f"Unsupported command {unsupported_command!r}."
+                )
+        sys.stdout.write(json.dumps(result, default=str) + "\n")
+        if arguments.command == "materialize" and arguments.monitor:
+            submitted_job_id = _job_id(result)
+            if submitted_job_id is not None:
+                job = _describe_job(
+                    arguments.api_url,
+                    submitted_job_id,
+                    arguments.poll_seconds,
+                )
+                status = _string(job["status"], context="Job status")
+                if status in {"failed", "cancelled"}:
+                    raise CliTerminalJobError(
+                        f"Materialization job {submitted_job_id} {status}."
+                    )
+    except CliError as error:
+        sys.stderr.write(f"{error}\n")
+        raise SystemExit(1) from error
 
 
 if __name__ == "__main__":
