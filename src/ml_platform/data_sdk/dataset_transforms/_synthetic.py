@@ -69,7 +69,7 @@ class SyntheticDatasetTransform(DatasetTransform):
         for attempt in range(1, _MAXIMUM_SAMPLING_ATTEMPTS):
             candidate_data_frame = self._sample(
                 base_data_frame,
-                self.synthetic_seed + attempt,
+                SyntheticSeed(self.synthetic_seed + attempt),
             )
             data_frame = self._replace_invalid_rows(
                 data_frame,
@@ -93,7 +93,8 @@ class SyntheticDatasetTransform(DatasetTransform):
             data_frame = data_frame.withColumn(
                 column.name,
                 _sample_distribution(
-                    column.synthetic_distribution, seed + column_index
+                    column.synthetic_distribution,
+                    SyntheticSeed(seed + column_index),
                 ),
             )
         return data_frame

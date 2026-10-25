@@ -14,10 +14,11 @@ from ml_platform.api._configuration import Dependencies
 from ml_platform.api.infrastructure.exceptions import (
     MaterializationDatabaseUnavailableError,
 )
+from ml_platform.common.types import DatabaseUrl
 
 
 @lru_cache
-def engine_for(database_url: str) -> Engine:
+def engine_for(database_url: DatabaseUrl) -> Engine:
     """Create the synchronous Psycopg-backed engine for one configured URL."""
     url = make_url(database_url)
     if url.drivername == "postgresql":

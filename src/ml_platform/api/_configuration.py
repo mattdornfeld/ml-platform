@@ -9,34 +9,50 @@ from ml_platform.api._exceptions import (
     InvalidDependencyConfigurationError,
     InvalidRuntimeEnvironmentError,
 )
-from ml_platform.common.types import BaseConfig, Environment
+from ml_platform.common.types import (
+    BaseConfig,
+    DatabaseUrl,
+    Environment,
+    HeadlampUrl,
+    KubernetesNamespace,
+    MaterializationImage,
+    MinioAccessKey,
+    MinioConsoleUrl,
+    MinioSecretKey,
+    S3Endpoint,
+    WarehouseDirectory,
+)
 
 
 class Dependencies(BaseConfig):
     """Immutable operational dependencies for one API call path."""
 
     environment: Environment = Field(description="Runtime environment.")
-    database_url: str = Field(
+    database_url: DatabaseUrl = Field(
         min_length=1, description="PostgreSQL connection URL."
     )
-    kubernetes_namespace: str = Field(
+    kubernetes_namespace: KubernetesNamespace = Field(
         min_length=1, description="Kubernetes namespace."
     )
-    materialization_image: str = Field(
+    materialization_image: MaterializationImage = Field(
         min_length=1, description="Spark job image."
     )
-    warehouse_dir: str = Field(
+    warehouse_dir: WarehouseDirectory = Field(
         min_length=1, description="Iceberg warehouse URI."
     )
-    s3_endpoint: str = Field(
+    s3_endpoint: S3Endpoint = Field(
         min_length=1, description="S3-compatible endpoint URL."
     )
-    minio_root_user: str = Field(min_length=1, description="MinIO access key.")
-    minio_root_password: str = Field(
+    minio_root_user: MinioAccessKey = Field(
+        min_length=1, description="MinIO access key."
+    )
+    minio_root_password: MinioSecretKey = Field(
         min_length=1, description="MinIO secret key."
     )
-    headlamp_url: str = Field(min_length=1, description="Headlamp base URL.")
-    minio_console_url: str = Field(
+    headlamp_url: HeadlampUrl = Field(
+        min_length=1, description="Headlamp base URL."
+    )
+    minio_console_url: MinioConsoleUrl = Field(
         min_length=1, description="MinIO Console base URL."
     )
 
@@ -71,7 +87,7 @@ class Dependencies(BaseConfig):
                 os.environ.get("ML_PLATFORM_ENVIRONMENT", "")
             ) from error
         try:
-            database_url = os.environ["DATABASE_URL"]
+            database_url = DatabaseUrl(os.environ["DATABASE_URL"])
         except KeyError as error:
             raise DatabaseUrlNotConfiguredError from error
         if not database_url.strip():
@@ -79,24 +95,28 @@ class Dependencies(BaseConfig):
         return cls(
             environment=environment,
             database_url=database_url,
-            kubernetes_namespace=os.environ.get(
-                "KUBERNETES_NAMESPACE", "ml-platform"
+            kubernetes_namespace=KubernetesNamespace(
+                os.environ.get("KUBERNETES_NAMESPACE", "ml-platform")
             ),
-            materialization_image=os.environ.get(
-                "MATERIALIZATION_IMAGE", "ml-platform:latest"
+            materialization_image=MaterializationImage(
+                os.environ.get("MATERIALIZATION_IMAGE", "ml-platform:latest")
             ),
-            warehouse_dir=os.environ.get(
-                "DATA_WAREHOUSE_DIR", "s3a://warehouse"
+            warehouse_dir=WarehouseDirectory(
+                os.environ.get("DATA_WAREHOUSE_DIR", "s3a://warehouse")
             ),
-            s3_endpoint=os.environ.get("S3_ENDPOINT", "http://minio:9000"),
-            minio_root_user=os.environ.get("MINIO_ROOT_USER", "minio"),
-            minio_root_password=os.environ.get(
-                "MINIO_ROOT_PASSWORD", "miniosecret"
+            s3_endpoint=S3Endpoint(
+                os.environ.get("S3_ENDPOINT", "http://minio:9000")
             ),
-            headlamp_url=os.environ.get(
-                "HEADLAMP_URL", "http://127.0.0.1:8002"
+            minio_root_user=MinioAccessKey(
+                os.environ.get("MINIO_ROOT_USER", "minio")
             ),
-            minio_console_url=os.environ.get(
-                "MINIO_CONSOLE_URL", "http://127.0.0.1:9003"
+            minio_root_password=MinioSecretKey(
+                os.environ.get("MINIO_ROOT_PASSWORD", "miniosecret")
+            ),
+            headlamp_url=HeadlampUrl(
+                os.environ.get("HEADLAMP_URL", "http://127.0.0.1:8002")
+            ),
+            minio_console_url=MinioConsoleUrl(
+                os.environ.get("MINIO_CONSOLE_URL", "http://127.0.0.1:9003")
             ),
         )

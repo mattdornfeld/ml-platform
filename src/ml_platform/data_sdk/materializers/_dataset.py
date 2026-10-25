@@ -37,6 +37,7 @@ from ml_platform.data_sdk.materializers.exceptions import (
     UnsupportedDatasetTypeError,
     UnsupportedMaterializationEnvironmentError,
 )
+from ml_platform.data_sdk.transforms._dataset_schema import SyntheticSeed
 from ml_platform.data_sdk.transforms._dataset_transform import DatasetTransform
 
 _OHLCV_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
@@ -164,7 +165,7 @@ class DatasetMaterializer(Materializer[DatasetMaterializationConfig]):
                             keys=self.config.keys,
                             partition_type=self.config.partition_type,
                             source_transform=source_transform,
-                            synthetic_seed=0,
+                            synthetic_seed=SyntheticSeed(0),
                         )
                     case _ as unsupported_environment:
                         raise UnsupportedMaterializationEnvironmentError(

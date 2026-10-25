@@ -26,6 +26,10 @@ from ml_platform.data_sdk.transforms._dataset_schema import (
     DatasetColumnName,
     DatasetColumnType,
     DatasetSchema,
+    DistributionMaximum,
+    DistributionMean,
+    DistributionMinimum,
+    DistributionStandardDeviation,
     EntityValue,
     EntityValueDistribution,
     EntityValueSet,
@@ -101,36 +105,40 @@ class MarketDataTransform(DatasetTransform):
                     name=DatasetColumnName("Open"),
                     column_type=DatasetColumnType.DOUBLE,
                     synthetic_distribution=NormalDistribution(
-                        mean=100.0, standard_deviation=8.0
+                        mean=DistributionMean(100.0),
+                        standard_deviation=DistributionStandardDeviation(8.0),
                     ),
                 ),
                 DatasetColumn(
                     name=DatasetColumnName("High"),
                     column_type=DatasetColumnType.DOUBLE,
                     synthetic_distribution=NormalDistribution(
-                        mean=106.0, standard_deviation=8.0
+                        mean=DistributionMean(106.0),
+                        standard_deviation=DistributionStandardDeviation(8.0),
                     ),
                 ),
                 DatasetColumn(
                     name=DatasetColumnName("Low"),
                     column_type=DatasetColumnType.DOUBLE,
                     synthetic_distribution=NormalDistribution(
-                        mean=94.0, standard_deviation=8.0
+                        mean=DistributionMean(94.0),
+                        standard_deviation=DistributionStandardDeviation(8.0),
                     ),
                 ),
                 DatasetColumn(
                     name=DatasetColumnName("Close"),
                     column_type=DatasetColumnType.DOUBLE,
                     synthetic_distribution=NormalDistribution(
-                        mean=100.0, standard_deviation=8.0
+                        mean=DistributionMean(100.0),
+                        standard_deviation=DistributionStandardDeviation(8.0),
                     ),
                 ),
                 DatasetColumn(
                     name=DatasetColumnName("Volume"),
                     column_type=DatasetColumnType.BIGINT,
                     synthetic_distribution=UniformDistribution(
-                        minimum=100_000.0,
-                        maximum=5_000_000.0,
+                        minimum=DistributionMinimum(100_000.0),
+                        maximum=DistributionMaximum(5_000_000.0),
                     ),
                 ),
             ),

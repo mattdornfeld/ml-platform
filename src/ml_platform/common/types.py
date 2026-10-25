@@ -7,7 +7,18 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# Distinct NewType wrappers make domain primitives statically non-interchangeable.
+# Distinct NewType wrappers make domain primitives and runtime dependencies
+# statically non-interchangeable.
+DatabaseUrl = NewType("DatabaseUrl", str)
+KubernetesNamespace = NewType("KubernetesNamespace", str)
+MaterializationImage = NewType("MaterializationImage", str)
+WarehouseDirectory = NewType("WarehouseDirectory", str)
+S3Endpoint = NewType("S3Endpoint", str)
+MinioAccessKey = NewType("MinioAccessKey", str)
+MinioSecretKey = NewType("MinioSecretKey", str)
+HeadlampUrl = NewType("HeadlampUrl", str)
+MinioConsoleUrl = NewType("MinioConsoleUrl", str)
+
 CallbackToken = NewType("CallbackToken", str)
 ContentHash = NewType("ContentHash", str)
 Description = NewType("Description", str)
