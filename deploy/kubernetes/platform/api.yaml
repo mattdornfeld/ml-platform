@@ -40,6 +40,7 @@ spec:
         args: [-m, uvicorn, ml_platform.api.app:app, --host, 0.0.0.0, --port, '8000']
         env:
         - {name: DATABASE_URL, value: postgresql://postgres@postgres:5432/ml_platform}
+        - {name: ML_PLATFORM_ENVIRONMENT, value: test}
         - {name: DATA_WAREHOUSE_DIR, value: s3a://warehouse}
         - {name: KUBERNETES_NAMESPACE, value: ml-platform}
         - {name: HEADLAMP_URL, value: http://127.0.0.1:8002}

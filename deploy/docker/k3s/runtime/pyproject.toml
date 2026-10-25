@@ -1,0 +1,21 @@
+[project]
+name = "ml-platform-spark-runtime"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.16,<2",
+    "exchange-calendars>=4.13,<5",
+    "fastapi>=0.115",
+    "httpx2>=2.15,<3",
+    "ipython",
+    "kubernetes>=32.0",
+    "omegaconf>=2.3",
+    "pandas>=2.2,<3.0",
+    "pyarrow>=26.0.0",
+    "pydantic>=2.0",
+    "psycopg[binary]>=3.2",
+    "pyspark>=4.1,<4.2",
+    "simple-classproperty>=4.0.2",
+    "sqlalchemy>=2.0,<2.1",
+    "uvicorn[standard]>=0.30",
+]

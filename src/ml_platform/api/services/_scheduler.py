@@ -370,3 +370,5 @@ class JobScheduler:
             self._finish(job_id, "failed", job_type)
         elif state == "COMPLETED":
             self._finish(job_id, "succeeded", job_type)
+        elif state == "CANCELLED":
+            self._finish(job_id, "cancelled", job_type)

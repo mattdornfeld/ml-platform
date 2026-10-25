@@ -1,10 +1,13 @@
 """K3s-backed deployment infrastructure for opt-in end-to-end tests."""
 
 import os
+import re
+import select
 import subprocess
 import tempfile
 import time
 from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +21,10 @@ K3S_DOCKERFILE = "deploy/docker/k3s/Dockerfile"
 
 class E2eImageHealthTimeoutError(Exception):
     """Raised when the self-contained K3s image does not become healthy."""
+
+
+class E2ePortForwardTimeoutError(Exception):
+    """Raised when a Kubernetes service does not expose a local forwarded port."""
 
 
 @dataclass(frozen=True)
@@ -36,6 +43,65 @@ class DeployedPlatform:
             text=True,
             capture_output=True,
         )
+
+    def spark_application_status(self, application_name: str) -> str:
+        """Return a failed Spark application's resource state and driver logs."""
+        application_status = self.kubectl(
+            "get",
+            "sparkapplication",
+            application_name,
+            "--namespace",
+            "ml-platform",
+            "--output",
+            "yaml",
+        ).stdout
+        driver_logs = self.kubectl(
+            "logs",
+            f"{application_name}-driver",
+            "--namespace",
+            "ml-platform",
+        ).stdout
+        return f"{application_status}\nDriver logs:\n{driver_logs}"
+
+    @contextmanager
+    def api_url(self) -> Generator[str, None, None]:
+        """Expose the in-cluster control-plane API through one local URL."""
+        process = subprocess.Popen(
+            [
+                "kubectl",
+                "--kubeconfig",
+                str(self.kubeconfig),
+                "port-forward",
+                "--address",
+                "127.0.0.1",
+                "service/ml-control-plane",
+                "0:8000",
+                "--namespace",
+                "ml-platform",
+            ],
+            cwd=REPOSITORY_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            assert process.stdout is not None
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([process.stdout], [], [], 0.25)
+                if not ready:
+                    continue
+                line = process.stdout.readline()
+                match = re.search(r"127\.0\.0\.1:(\d+)", line)
+                if match is not None:
+                    yield f"http://127.0.0.1:{match.group(1)}"
+                    return
+            raise E2ePortForwardTimeoutError(
+                "Timed out forwarding the ml-control-plane service."
+            )
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
 
 
 def _run(
@@ -57,7 +123,6 @@ def _build_k3s_image() -> None:
         [
             "docker",
             "build",
-            "--quiet",
             "--tag",
             K3S_IMAGE,
             "--file",
@@ -90,8 +155,6 @@ def _wait_for_healthy_image(cluster: K3SContainer) -> None:
 @pytest.fixture(scope="session")
 def deployed_platform() -> Generator[DeployedPlatform, None, None]:
     """Build images and deploy every required ML Platform service to K3s."""
-    if os.environ.get("ML_PLATFORM_RUN_E2E") != "1":
-        pytest.skip("Set ML_PLATFORM_RUN_E2E=1 to run K3s end-to-end tests.")
     previous_ryuk_setting = os.environ.get("TESTCONTAINERS_RYUK_DISABLED")
     os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
     try:

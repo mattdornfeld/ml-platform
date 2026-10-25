@@ -79,3 +79,102 @@ def test_terminal_spark_states_finish_the_api_job(
         "failed",
         "dataset_materialization",
     )
+
+
+@patch("ml_platform.api.services._scheduler.client.CustomObjectsApi")
+def test_cancelled_spark_application_cancels_the_api_job(
+    custom_objects: MagicMock, runtime_dependencies: Dependencies
+) -> None:
+    """A cancelled Spark application persists a cancelled control-plane job."""
+    scheduler = JobScheduler(runtime_dependencies)
+    job_id = UUID("00000000-0000-0000-0000-000000000002")
+    custom_objects.return_value.get_namespaced_custom_object.return_value = {
+        "status": {"applicationState": {"state": "CANCELLED"}}
+    }
+    scheduler._finish = MagicMock()
+
+    scheduler._observe_application(
+        job_id,
+        "dataset-job",
+        "dataset_materialization",
+    )
+
+    scheduler._finish.assert_called_once_with(
+        job_id,
+        "cancelled",
+        "dataset_materialization",
+    )
+
+
+@patch("ml_platform.api.services._scheduler.client.CustomObjectsApi")
+def test_feature_application_is_created_with_resolved_worker_config(
+    custom_objects: MagicMock, runtime_dependencies: Dependencies
+) -> None:
+    """Feature Spark applications carry the scheduler-resolved worker config."""
+    scheduler = JobScheduler(runtime_dependencies)
+    job_id = UUID("00000000-0000-0000-0000-000000000003")
+    scheduler._feature_job = MagicMock(
+        return_value={
+            "config": {
+                "name": "log_return",
+                "version": 1,
+                "dtype": "double",
+                "frequency": "daily",
+                "keys": ["symbol"],
+                "validations": [],
+                "datasets": [],
+                "transform": "ml_platform.data_sdk.LogReturnTransform",
+                "description": "Log return.",
+                "parameters": {},
+            },
+            "callbacks": [],
+        }
+    )
+
+    scheduler._ensure_feature_application(job_id, "feature-job")
+
+    manifest = custom_objects.return_value.create_namespaced_custom_object.call_args.args[
+        -1
+    ]
+    assert manifest["spec"]["mainApplicationFile"].endswith("_feature.py")
+    config = json.loads(manifest["spec"]["arguments"][1])
+    assert config["environment"] == "test"
+    assert config["warehouse_dir"] == "s3a://warehouse"
+    assert config["partitions"] == []
+
+
+@patch("ml_platform.api.services._scheduler.client.CustomObjectsApi")
+def test_label_application_is_created_with_resolved_worker_config(
+    custom_objects: MagicMock, runtime_dependencies: Dependencies
+) -> None:
+    """Label Spark applications carry the scheduler-resolved worker config."""
+    scheduler = JobScheduler(runtime_dependencies)
+    job_id = UUID("00000000-0000-0000-0000-000000000004")
+    scheduler._label_job = MagicMock(
+        return_value={
+            "config": {
+                "name": "triple_barrier",
+                "version": 1,
+                "dtype": "int",
+                "frequency": "daily",
+                "keys": ["symbol"],
+                "validations": [],
+                "datasets": [],
+                "transform": "ml_platform.data_sdk.TripleBarrierLabelTransform",
+                "description": "Triple barrier.",
+                "parameters": {},
+            },
+            "callbacks": [],
+        }
+    )
+
+    scheduler._ensure_label_application(job_id, "label-job")
+
+    manifest = custom_objects.return_value.create_namespaced_custom_object.call_args.args[
+        -1
+    ]
+    assert manifest["spec"]["mainApplicationFile"].endswith("_label.py")
+    config = json.loads(manifest["spec"]["arguments"][1])
+    assert config["environment"] == "test"
+    assert config["warehouse_dir"] == "s3a://warehouse"
+    assert config["partitions"] == []
