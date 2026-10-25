@@ -3,6 +3,7 @@
 import os
 import subprocess
 import tempfile
+import time
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,12 +12,12 @@ import pytest
 from testcontainers.community.k3s import K3SContainer
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-K3S_IMAGE_DIRECTORY = "/var/lib/rancher/k3s/agent/images"
-DEPLOYMENT_SCRIPT = REPOSITORY_ROOT / "deploy/kubernetes/install.sh"
+K3S_IMAGE = "ml-platform-k3s:latest"
+K3S_DOCKERFILE = "deploy/docker/k3s/Dockerfile"
 
 
-class E2eImageImportError(Exception):
-    """Raised when K3s cannot import a required locally built image."""
+class E2eImageHealthTimeoutError(Exception):
+    """Raised when the self-contained K3s image does not become healthy."""
 
 
 @dataclass(frozen=True)
@@ -50,38 +51,40 @@ def _run(
     )
 
 
-def _import_image(cluster: K3SContainer, image: str, archive: Path) -> None:
-    """Build one host image archive and import it into K3s containerd."""
-    _run(["docker", "save", "--output", str(archive), image])
-    destination = f"{K3S_IMAGE_DIRECTORY}/{archive.name}"
-    cluster.copy_into_container(archive, destination)
-    result = cluster.exec(["ctr", "images", "import", destination])
-    if result.exit_code != 0:
-        raise E2eImageImportError(result.output.decode())
-
-
-def _build_and_import_images(cluster: K3SContainer) -> None:
-    """Build every local deployment image before applying Kubernetes resources."""
-    _run(["docker", "build", "--tag", "ml-platform:latest", "."])
+def _build_k3s_image() -> None:
+    """Build the self-bootstrapping K3s image that owns deployment setup."""
     _run(
         [
             "docker",
             "build",
+            "--quiet",
             "--tag",
-            "ml-platform-minio:latest",
+            K3S_IMAGE,
             "--file",
-            "deploy/docker/minio/Dockerfile",
+            K3S_DOCKERFILE,
             ".",
         ]
     )
-    with tempfile.TemporaryDirectory() as directory:
-        archives = Path(directory)
-        _import_image(cluster, "ml-platform:latest", archives / "platform.tar")
-        _import_image(
-            cluster,
-            "ml-platform-minio:latest",
-            archives / "minio.tar",
-        )
+
+
+def _wait_for_healthy_image(cluster: K3SContainer) -> None:
+    """Wait until Docker reports the complete platform image as healthy."""
+    deadline = time.monotonic() + 180
+    container = cluster.get_wrapped_container()
+    while time.monotonic() < deadline:
+        container.reload()
+        health = container.attrs["State"].get("Health", {}).get("Status")
+        if health == "healthy":
+            return
+        if health == "unhealthy":
+            logs = container.logs().decode()
+            raise E2eImageHealthTimeoutError(
+                f"The K3s image became unhealthy while bootstrapping:\n{logs}"
+            )
+        time.sleep(1)
+    raise E2eImageHealthTimeoutError(
+        "The self-contained K3s image did not become healthy within 180 seconds."
+    )
 
 
 @pytest.fixture(scope="session")
@@ -92,18 +95,16 @@ def deployed_platform() -> Generator[DeployedPlatform, None, None]:
     previous_ryuk_setting = os.environ.get("TESTCONTAINERS_RYUK_DISABLED")
     os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
     try:
-        with K3SContainer(
-            "rancher/k3s:v1.31.4-k3s1", enable_cgroup_mount=False
-        ) as cluster:
-            _build_and_import_images(cluster)
+        _build_k3s_image()
+        cluster = K3SContainer(K3S_IMAGE, enable_cgroup_mount=False)
+        with cluster:
+            _wait_for_healthy_image(cluster)
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".yaml", delete=False
             ) as kubeconfig_file:
                 kubeconfig_file.write(cluster.config_yaml())
                 kubeconfig = Path(kubeconfig_file.name)
             try:
-                environment = os.environ | {"KUBECONFIG": str(kubeconfig)}
-                _run([str(DEPLOYMENT_SCRIPT)], environment=environment)
                 yield DeployedPlatform(cluster=cluster, kubeconfig=kubeconfig)
             finally:
                 kubeconfig.unlink(missing_ok=True)

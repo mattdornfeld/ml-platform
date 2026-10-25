@@ -116,6 +116,7 @@ class PlannedInputTest(unittest.TestCase):
         timestamp = datetime(2026, 10, 19, tzinfo=UTC)
         config = FeatureMaterializationConfig.model_validate(
             {
+                "environment": "local",
                 "name": "joined_feature",
                 "version": 1,
                 "description": "Joined feature.",
@@ -199,6 +200,7 @@ class TransformMaterializerTest(unittest.TestCase):
         timestamp = datetime(2026, 10, 19, tzinfo=UTC)
         config = LabelMaterializationConfig.model_validate(
             {
+                "environment": "local",
                 "name": "triple_barrier",
                 "version": 1,
                 "description": "Labels.",

@@ -2,7 +2,7 @@ FROM ghcr.io/astral-sh/uv:0.9.25 AS uv
 
 FROM maven:3.9.11-eclipse-temurin-21 AS spark_jars
 WORKDIR /build
-COPY deploy/docker/spark-deps/pom.xml ./pom.xml
+COPY deploy/docker/k3s/spark-deps/pom.xml ./pom.xml
 RUN mvn --batch-mode dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=/jars
 
 FROM apache/spark:4.1.3-python3

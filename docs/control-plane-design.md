@@ -103,7 +103,7 @@ The advisory locks prevent concurrent API scheduler workers from releasing confl
 
 Workers complete update requests only after an Iceberg commit. When every target callback is complete, the API marks the job `succeeded`. It marks a job `failed` when the SparkApplication reaches a terminal failure state before all callbacks finish. Cancellation keeps the gate in place when possible, deletes or suspends the SparkApplication, marks unfinished requests `cancelled`, and marks the job `cancelled`.
 
-The local deployment installs Kueue's SparkApplication integration, which is currently an upstream alpha feature. `deploy/kubernetes/kueue-values.yaml` enables its feature gate and framework registration; `deploy/kubernetes/kueue.yaml` defines the `materialization` LocalQueue and its resource quota.
+The local deployment installs Kueue's SparkApplication integration, which is currently an upstream alpha feature. `deploy/kubernetes/bootstrap/kueue-values.yaml` enables its feature gate and framework registration; `deploy/kubernetes/platform/kueue.yaml` defines the `materialization` LocalQueue and its resource quota.
 
 ## Iceberg consistency
 
