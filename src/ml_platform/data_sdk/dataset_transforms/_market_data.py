@@ -136,10 +136,11 @@ class MarketDataTransform(DatasetTransform):
             ),
             partition_type=PartitionType.DAILY,
             synthetic_distribution_invariants=(
-                *(
-                    PositiveInvariant(column=DatasetColumnName(column))
-                    for column in ("Open", "High", "Low", "Close", "Volume")
-                ),
+                PositiveInvariant(column=DatasetColumnName("Open")),
+                PositiveInvariant(column=DatasetColumnName("High")),
+                PositiveInvariant(column=DatasetColumnName("Low")),
+                PositiveInvariant(column=DatasetColumnName("Close")),
+                PositiveInvariant(column=DatasetColumnName("Volume")),
                 LessThanOrEqualInvariant(
                     lower_column=DatasetColumnName("Low"),
                     upper_column=DatasetColumnName("Open"),
