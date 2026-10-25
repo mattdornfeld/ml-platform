@@ -80,11 +80,11 @@ class Dependencies(BaseConfig):
         """Read and validate this process's runtime dependencies once."""
         try:
             environment = Environment(
-                os.environ.get("ML_PLATFORM_ENVIRONMENT", Environment.LOCAL)
+                os.environ.get("ENVIRONMENT", Environment.LOCAL)
             )
         except ValueError as error:
             raise InvalidRuntimeEnvironmentError(
-                os.environ.get("ML_PLATFORM_ENVIRONMENT", "")
+                os.environ.get("ENVIRONMENT", "")
             ) from error
         try:
             database_url = DatabaseUrl(os.environ["DATABASE_URL"])

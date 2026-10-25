@@ -808,7 +808,6 @@ dependencies = [
     { name = "httpx2" },
     { name = "ipython" },
     { name = "kubernetes" },
-    { name = "lightning" },
     { name = "omegaconf" },
     { name = "pandas" },
     { name = "psycopg", extra = ["binary"] },
@@ -817,8 +816,13 @@ dependencies = [
     { name = "pyspark" },
     { name = "simple-classproperty" },
     { name = "sqlalchemy" },
-    { name = "torchvision" },
     { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+training = [
+    { name = "lightning" },
+    { name = "torchvision" },
 ]
 
 [package.dev-dependencies]
@@ -843,7 +847,7 @@ requires-dist = [
     { name = "httpx2", specifier = ">=2.15,<3" },
     { name = "ipython" },
     { name = "kubernetes", specifier = ">=32.0" },
-    { name = "lightning", specifier = ">=2.6.6" },
+    { name = "lightning", marker = "extra == 'training'", specifier = ">=2.6.6" },
     { name = "omegaconf", specifier = ">=2.3" },
     { name = "pandas", specifier = ">=2.2,<3.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
@@ -852,9 +856,10 @@ requires-dist = [
     { name = "pyspark", specifier = ">=4.1,<4.2" },
     { name = "simple-classproperty", specifier = ">=4.0.2" },
     { name = "sqlalchemy", specifier = ">=2.0,<2.1" },
-    { name = "torchvision", specifier = ">=0.29.1" },
+    { name = "torchvision", marker = "extra == 'training'", specifier = ">=0.29.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
+provides-extras = ["training"]
 
 [package.metadata.requires-dev]
 dev = [

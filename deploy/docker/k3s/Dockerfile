@@ -17,20 +17,16 @@ FROM apache/spark:4.1.3-python3 AS platform_dependencies
 COPY --from=uv /uv /uvx /bin/
 COPY --from=spark_jars /jars /opt/spark/jars/
 USER root
-WORKDIR /runtime
-COPY deploy/docker/k3s/runtime/pyproject.toml \
-     deploy/docker/k3s/runtime/uv.lock ./
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
 RUN uv python install 3.12 --install-dir /opt/python \
  && python_path="$(find /opt/python -path '*/bin/python3.12' -type f -print -quit)" \
  && UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-install-project \
-      --project /runtime \
       --python "$python_path" \
  && mkdir -p /tmp/.ivy2 /tmp/.cache \
  && chown -R 185:0 /opt/venv /tmp/.ivy2 /tmp/.cache
 
 FROM platform_dependencies AS platform_image
-WORKDIR /app
-COPY pyproject.toml ./
 COPY src ./src
 RUN chown -R 185:0 /app/src
 ENV PATH=/opt/venv/bin:${PATH}
