@@ -3,9 +3,7 @@ name = "ml-platform"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "lightning>=2.6.6",
     "ipython",
-    "torchvision>=0.29.1",
     "pyarrow>=26.0.0",
     "pandas>=2.2,<3.0",
     "pyspark>=4.1,<4.2",
@@ -20,6 +18,12 @@ dependencies = [
     "sqlalchemy>=2.0,<2.1",
     "alembic>=1.16,<2",
     "httpx2>=2.15,<3",
+]
+
+[project.optional-dependencies]
+training = [
+    "lightning>=2.6.6",
+    "torchvision>=0.29.1",
 ]
 
 [project.scripts]

@@ -7,8 +7,13 @@ from datetime import UTC, datetime, timedelta
 
 from pyspark.sql import SparkSession
 
-from ml_platform.common.types import DataType, EntityKey, PartitionType
-from ml_platform.data_sdk import Dataset, DatasetReference
+from ml_platform.common.types import DataType, EntityKey, PartitionType, Symbol
+from ml_platform.data_sdk import (
+    Dataset,
+    DatasetReference,
+    MarketDataTransform,
+    SyntheticDatasetTransform,
+)
 from ml_platform.data_sdk.feature_transforms import (
     LogReturnTransform,
     RelativeVolumeTransform,
@@ -115,6 +120,43 @@ class BuiltInTransformTest(unittest.TestCase):
         )
         self.assertEqual(len(rows), 3)
         self.assertTrue(all(row["feature_value"] > 0 for row in rows))
+
+    def test_synthetic_market_data_is_deterministic_and_satisfies_schema(
+        self,
+    ) -> None:
+        """Schema-driven synthetic market data is repeatable and internally valid."""
+        source = MarketDataTransform(
+            spark=self.spark,
+            partitions=(
+                datetime(2026, 1, 5, tzinfo=UTC),
+                datetime(2026, 1, 6, tzinfo=UTC),
+            ),
+            keys=[EntityKey.SYMBOL],
+            partition_type=PartitionType.DAILY,
+            symbols=(Symbol("AAA"), Symbol("BBB")),
+        )
+        transform = SyntheticDatasetTransform(
+            spark=self.spark,
+            partitions=source.partitions,
+            keys=source.keys,
+            partition_type=source.partition_type,
+            source_transform=source,
+            synthetic_seed=0,
+        )
+
+        first_rows = transform().orderBy("timestamp", "symbol").collect()
+        second_rows = transform().orderBy("timestamp", "symbol").collect()
+
+        self.assertEqual(first_rows, second_rows)
+        self.assertEqual(len(first_rows), 4)
+        for row in first_rows:
+            self.assertEqual(row["market_session"], "regular")
+            self.assertGreater(row["Volume"], 0)
+            self.assertGreater(row["Low"], 0)
+            self.assertLessEqual(row["Low"], row["Open"])
+            self.assertLessEqual(row["Open"], row["High"])
+            self.assertLessEqual(row["Low"], row["Close"])
+            self.assertLessEqual(row["Close"], row["High"])
 
     def test_triple_barrier_emits_signed_labels(self) -> None:
         """Triple barrier produces labels only for events with a full horizon."""

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -11,12 +12,23 @@ from kubernetes.config.incluster_config import load_incluster_config
 
 from ml_platform.api._configuration import Dependencies
 from ml_platform.api._exceptions import UnsupportedScheduledJobTypeError
+from ml_platform.api.domain import JobStatus
 from ml_platform.api.repositories import SchedulerRepository
 from ml_platform.common.types import JobId
 
 ADMISSION_GATE = "api.ml-control-plane.io/blocked"
 QUEUE_LABEL = "kueue.x-k8s.io/queue-name"
 QUEUE_NAME = "materialization"
+
+
+class SparkApplicationState(StrEnum):
+    """Terminal SparkApplication states observed by the scheduler."""
+
+    FAILED = "FAILED"
+    SUBMISSION_FAILED = "SUBMISSION_FAILED"
+    UNKNOWN = "UNKNOWN"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
 
 
 class JobScheduler:
@@ -72,7 +84,7 @@ class JobScheduler:
         """Determine whether the job owns all requested partition locks."""
         return self._repository.is_eligible(job_id, job_type)
 
-    def _finish(self, job_id: JobId, outcome: str, job_type: str) -> None:
+    def _finish(self, job_id: JobId, outcome: JobStatus, job_type: str) -> None:
         """Persist a terminal Spark application result."""
         self._repository.finish(job_id, outcome, job_type)
 
@@ -361,12 +373,25 @@ class JobScheduler:
         application_state = (
             status.get("applicationState") if isinstance(status, dict) else None
         )
-        state = (
+        state_name = (
             application_state.get("state")
             if isinstance(application_state, dict)
             else None
         )
-        if state in {"FAILED", "SUBMISSION_FAILED", "UNKNOWN"}:
-            self._finish(job_id, "failed", job_type)
-        elif state == "COMPLETED":
-            self._finish(job_id, "succeeded", job_type)
+        if not isinstance(state_name, str):
+            return
+        try:
+            state = SparkApplicationState(state_name)
+        except ValueError:
+            return
+        match state:
+            case (
+                SparkApplicationState.FAILED
+                | SparkApplicationState.SUBMISSION_FAILED
+                | SparkApplicationState.UNKNOWN
+            ):
+                self._finish(job_id, JobStatus.FAILED, job_type)
+            case SparkApplicationState.COMPLETED:
+                self._finish(job_id, JobStatus.SUCCEEDED, job_type)
+            case SparkApplicationState.CANCELLED:
+                self._finish(job_id, JobStatus.CANCELLED, job_type)

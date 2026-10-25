@@ -10,7 +10,7 @@ SPARK_JAVA_HOME ?= $(shell brew --prefix openjdk@21 2>/dev/null || /usr/libexec/
 
 ## Create the named environment with mkvirtualenv, then install locked dependencies.
 configure: venv
-	UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) sync --locked --python $(PYTHON_VERSION)
+	UV_PROJECT_ENVIRONMENT="$(VENV_PATH)" $(UV) sync --locked --extra training --python $(PYTHON_VERSION)
 
 ## Create the environment using mkvirtualenv and associate this directory with it.
 venv:

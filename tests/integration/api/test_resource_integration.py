@@ -452,3 +452,48 @@ def test_hourly_dependencies_use_hourly_input_windows(
     )
     assert feature_response.status_code == 202
     assert label_response.status_code == 202
+
+
+def test_feature_and_label_materialization_requests_are_idempotent(
+    api_client: TestClient, clean_postgres: str
+) -> None:
+    """An identical in-flight request reuses the existing partition plan."""
+    assert (
+        api_client.post("/datasets", json=_dataset_payload()).status_code == 201
+    )
+    _seed_created_dataset_partition(clean_postgres)
+    assert (
+        api_client.post("/features", json=_feature_payload()).status_code == 201
+    )
+    assert api_client.post("/labels", json=_label_payload()).status_code == 201
+
+    payload = {"timestamps": ["2026-01-01T00:00:00Z"]}
+    first_feature = api_client.post(
+        "/features/daily_return/versions/1/partitions", json=payload
+    )
+    repeat_feature = api_client.post(
+        "/features/daily_return/versions/1/partitions", json=payload
+    )
+    first_label = api_client.post(
+        "/labels/direction/versions/1/partitions", json=payload
+    )
+    repeat_label = api_client.post(
+        "/labels/direction/versions/1/partitions", json=payload
+    )
+
+    assert first_feature.status_code == 202
+    assert first_label.status_code == 202
+    assert repeat_feature.status_code == 202
+    assert repeat_label.status_code == 202
+    assert repeat_feature.json()["submitted_job"] is None
+    assert repeat_label.json()["submitted_job"] is None
+    with psycopg.connect(clean_postgres) as connection:
+        counts = connection.execute(
+            """SELECT type::text, COUNT(*) FROM jobs
+            WHERE type IN ('feature_materialization', 'label_materialization')
+            GROUP BY type ORDER BY type"""
+        ).fetchall()
+    assert counts == [
+        ("feature_materialization", 1),
+        ("label_materialization", 1),
+    ]

@@ -13,19 +13,22 @@ RUN mvn --batch-mode dependency:copy-dependencies \
     -DincludeScope=runtime \
     -DoutputDirectory=/jars
 
-FROM apache/spark:4.1.3-python3 AS platform_image
+FROM apache/spark:4.1.3-python3 AS platform_dependencies
 COPY --from=uv /uv /uvx /bin/
 COPY --from=spark_jars /jars /opt/spark/jars/
 USER root
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
-COPY src ./src
+COPY pyproject.toml uv.lock ./
 RUN uv python install 3.12 --install-dir /opt/python \
  && python_path="$(find /opt/python -path '*/bin/python3.12' -type f -print -quit)" \
- && UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-editable \
+ && UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --no-install-project \
       --python "$python_path" \
  && mkdir -p /tmp/.ivy2 /tmp/.cache \
- && chown -R 185:0 /app /opt/venv /tmp/.ivy2 /tmp/.cache
+ && chown -R 185:0 /opt/venv /tmp/.ivy2 /tmp/.cache
+
+FROM platform_dependencies AS platform_image
+COPY src ./src
+RUN chown -R 185:0 /app/src
 ENV PATH=/opt/venv/bin:${PATH}
 ENV PYTHONPATH=/app/src:/opt/spark/python/lib/pyspark.zip:/opt/spark/python/lib/py4j-0.10.9.9-src.zip
 ENV PYSPARK_PYTHON=/opt/venv/bin/python
@@ -47,11 +50,21 @@ FROM gcr.io/go-containerregistry/crane:debug AS crane
 FROM alpine:3.21 AS workload_archives
 RUN apk add --no-cache tar
 COPY --from=crane /ko-app/crane /usr/local/bin/crane
-COPY --from=platform_image / /rootfs/platform
+COPY --from=platform_dependencies /opt/python /rootfs/opt/python
+COPY --from=platform_dependencies /opt/venv /rootfs/opt/venv
+COPY --from=spark_jars /jars /rootfs/opt/spark/jars
+COPY --from=platform_image /app /rootfs/app
 COPY --from=minio_image / /rootfs/minio
 RUN mkdir /images \
- && tar -C /rootfs/platform -cf /tmp/platform.tar . \
- && crane mutate apache/spark:4.1.3-python3 \
+ && tar -C /rootfs -cf /tmp/platform.tar \
+      app opt/python opt/venv opt/spark/jars \
+ && architecture="$(uname -m)" \
+ && case "$architecture" in \
+      aarch64) platform=linux/arm64 ;; \
+      x86_64) platform=linux/amd64 ;; \
+      *) echo "Unsupported architecture: $architecture" >&2; exit 1 ;; \
+    esac \
+ && crane mutate --platform "$platform" apache/spark:4.1.3-python3 \
       --append /tmp/platform.tar \
       --env PATH=/opt/venv/bin:/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
       --env PYTHONPATH=/app/src:/opt/spark/python/lib/pyspark.zip:/opt/spark/python/lib/py4j-0.10.9.9-src.zip \
@@ -63,7 +76,7 @@ RUN mkdir /images \
       --tag ml-platform:latest \
       --output /images/ml-platform.tar \
  && tar -C /rootfs/minio -cf /tmp/minio.tar . \
- && crane mutate alpine:3.21 \
+ && crane mutate --platform "$platform" alpine:3.21 \
       --append /tmp/minio.tar \
       --entrypoint /usr/local/bin/minio \
       --tag ml-platform-minio:latest \
