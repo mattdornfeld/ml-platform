@@ -1,10 +1,13 @@
 """Unit coverage for scheduler Kubernetes reconciliation."""
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from uuid import UUID
 
+from kubernetes.client.exceptions import ApiException
+
 from ml_platform.api import Dependencies
+from ml_platform.api.domain import JobStatus
 from ml_platform.api.services import ADMISSION_GATE, JobScheduler
 
 
@@ -101,9 +104,106 @@ def test_cancelled_spark_application_cancels_the_api_job(
 
     scheduler._finish.assert_called_once_with(
         job_id,
-        "cancelled",
+        JobStatus.CANCELLED,
         "dataset_materialization",
     )
+
+
+@patch("ml_platform.api.services._scheduler.client.CustomObjectsApi")
+def test_unrecognized_spark_application_state_is_not_terminal(
+    custom_objects: MagicMock, runtime_dependencies: Dependencies
+) -> None:
+    """An unrecognized Spark state remains submitted for later reconciliation."""
+    scheduler = JobScheduler(runtime_dependencies)
+    custom_objects.return_value.get_namespaced_custom_object.return_value = {
+        "status": {"applicationState": {"state": "RUNNING"}}
+    }
+    scheduler._finish = MagicMock()
+
+    scheduler._observe_application(
+        UUID("00000000-0000-0000-0000-000000000003"),
+        "dataset-job",
+        "dataset_materialization",
+    )
+
+    scheduler._finish.assert_not_called()
+
+
+def test_reconcile_releases_only_eligible_jobs(
+    runtime_dependencies: Dependencies,
+) -> None:
+    """Scheduler reconciliation retains an admission gate for blocked jobs."""
+    scheduler = JobScheduler(runtime_dependencies)
+    first_job_id = UUID("00000000-0000-0000-0000-000000000004")
+    second_job_id = UUID("00000000-0000-0000-0000-000000000005")
+    scheduler._ensure_dataset_application = MagicMock()
+    scheduler._is_eligible = MagicMock(side_effect=[True, False])
+    scheduler._remove_admission_gate = MagicMock()
+    scheduler._observe_application = MagicMock()
+
+    with patch.object(
+        type(scheduler._repository),
+        "submitted_jobs",
+        return_value=[
+            {"id": first_job_id, "type": "dataset_materialization"},
+            {"id": second_job_id, "type": "dataset_materialization"},
+        ],
+    ):
+        scheduler._reconcile_submitted_jobs()
+
+    assert scheduler._ensure_dataset_application.call_count == 2
+    scheduler._remove_admission_gate.assert_called_once_with(
+        f"dataset-{first_job_id}"
+    )
+    assert scheduler._observe_application.call_args_list == [
+        call(
+            first_job_id, f"dataset-{first_job_id}", "dataset_materialization"
+        ),
+        call(
+            second_job_id, f"dataset-{second_job_id}", "dataset_materialization"
+        ),
+    ]
+
+
+@patch("ml_platform.api.services._scheduler.client.CustomObjectsApi")
+def test_kubernetes_error_leaves_job_submitted_for_a_later_reconciliation(
+    custom_objects: MagicMock,
+    runtime_dependencies: Dependencies,
+) -> None:
+    """A transient Kubernetes error does not discard an API-owned job."""
+    scheduler = JobScheduler(runtime_dependencies)
+    job_id = UUID("00000000-0000-0000-0000-000000000006")
+    custom_objects.return_value.create_namespaced_custom_object.side_effect = (
+        ApiException(status=503, reason="Unavailable")
+    )
+
+    with (
+        patch.object(
+            type(scheduler._repository),
+            "submitted_jobs",
+            return_value=[{"id": job_id, "type": "dataset_materialization"}],
+        ),
+        patch.object(
+            type(scheduler._repository),
+            "dataset_job",
+            return_value={
+                "name": "prices",
+                "version": 1,
+                "dataset_type": "market_data",
+                "config": {
+                    "description": "Prices.",
+                    "validations": [],
+                    "keys": ["symbol"],
+                    "partition_type": "daily",
+                    "symbols": ["AAA"],
+                },
+                "callbacks": [],
+            },
+        ),
+    ):
+        scheduler._reconcile_submitted_jobs()
+
+    custom_objects.return_value.create_namespaced_custom_object.assert_called_once()
 
 
 @patch("ml_platform.api.services._scheduler.client.CustomObjectsApi")

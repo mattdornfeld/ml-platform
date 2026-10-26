@@ -64,6 +64,46 @@ class DeployedPlatform:
         return f"{application_status}\nDriver logs:\n{driver_logs}"
 
     @contextmanager
+    def minio_url(self) -> Generator[str, None, None]:
+        """Expose the in-cluster MinIO S3 endpoint through one local URL."""
+        process = subprocess.Popen(
+            [
+                "kubectl",
+                "--kubeconfig",
+                str(self.kubeconfig),
+                "port-forward",
+                "--address",
+                "127.0.0.1",
+                "service/minio",
+                "0:9000",
+                "--namespace",
+                "ml-platform",
+            ],
+            cwd=REPOSITORY_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            assert process.stdout is not None
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([process.stdout], [], [], 0.25)
+                if not ready:
+                    continue
+                line = process.stdout.readline()
+                match = re.search(r"127\.0\.0\.1:(\d+)", line)
+                if match is not None:
+                    yield f"http://127.0.0.1:{match.group(1)}"
+                    return
+            raise E2ePortForwardTimeoutError(
+                "Timed out forwarding the MinIO service."
+            )
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
+
+    @contextmanager
     def api_url(self) -> Generator[str, None, None]:
         """Expose the in-cluster control-plane API through one local URL."""
         process = subprocess.Popen(

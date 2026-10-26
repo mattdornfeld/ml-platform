@@ -5,6 +5,7 @@ from uuid import uuid4
 import psycopg
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import make_url
 
 from ml_platform.api import Dependencies
@@ -66,6 +67,59 @@ def test_upgrade_from_024_embeds_dataset_type_in_existing_config(
         assert config == (
             {"description": "Prices", "dataset_type": "market_data"},
         )
+    finally:
+        with psycopg.connect(postgres_database, autocommit=True) as connection:
+            connection.execute(
+                psycopg.sql.SQL("DROP DATABASE IF EXISTS {}").format(
+                    psycopg.sql.Identifier(database_name)
+                )
+            )
+
+
+def test_upgrade_from_empty_database_applies_full_migration_history(
+    postgres_database: str,
+) -> None:
+    """A new control-plane database receives every forward migration at once."""
+    database_name = f"migration_{uuid4().hex}"
+    source_url = make_url(postgres_database)
+    database_url = source_url.set(database=database_name).render_as_string(
+        hide_password=False
+    )
+    with psycopg.connect(postgres_database, autocommit=True) as connection:
+        connection.execute(
+            psycopg.sql.SQL("CREATE DATABASE {}").format(
+                psycopg.sql.Identifier(database_name)
+            )
+        )
+    configuration = _migration_config(_dependencies(database_url))
+    try:
+        command.upgrade(configuration, "head")
+        with psycopg.connect(database_url) as connection:
+            revision = connection.execute(
+                "SELECT version_num FROM alembic_version"
+            ).fetchone()
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    """SELECT tablename FROM pg_tables
+                    WHERE schemaname = 'public'"""
+                )
+            }
+        head_revision = ScriptDirectory.from_config(
+            configuration
+        ).get_current_head()
+        assert head_revision is not None
+        assert revision == (head_revision,)
+        assert {
+            "datasets",
+            "dataset_partitions",
+            "features",
+            "feature_partitions",
+            "labels",
+            "label_partitions",
+            "jobs",
+            "partition_update_requests",
+        } <= tables
     finally:
         with psycopg.connect(postgres_database, autocommit=True) as connection:
             connection.execute(

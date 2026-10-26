@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
+import httpx2
+
 from ml_platform.common.types import PartitionType
 from ml_platform.data_sdk.materializers import (
     DatasetMaterializationConfig,
@@ -192,6 +194,43 @@ class MaterializerLifecycleTest(unittest.TestCase):
         self.assertEqual(receipt["partition_id"], "dataset-partition")
         self.assertEqual(receipt["snapshot_id"], 42)
         self.assertEqual(receipt["row_count"], 5)
+
+    @patch("ml_platform.data_sdk.materializers._base.httpx2.request")
+    def test_partition_completion_propagates_a_failed_callback(
+        self, request: MagicMock
+    ) -> None:
+        """A failed control-plane receipt leaves the worker invocation unsuccessful."""
+        spark = MagicMock()
+        table = MagicMock()
+        table.resource_type = "dataset"
+        table.partition_keys.return_value = ["2026-01-01"]
+        table.partition_content_hashes.return_value = {"2026-01-01": "digest"}
+        table.partition_row_counts.return_value = {"2026-01-01": 5}
+        table.schema_fields.return_value = {"timestamp": "timestamp"}
+        table.empty_content_hash.return_value = "empty"
+        request_error = httpx2.HTTPStatusError(
+            "Service unavailable",
+            request=httpx2.Request("POST", "http://api/partitions/complete"),
+            response=httpx2.Response(503),
+        )
+        request.return_value.raise_for_status.side_effect = request_error
+        materializer = DatasetMaterializer(dataset_config())
+
+        with (
+            patch.object(
+                DatasetMaterializer,
+                "iceberg_table",
+                new_callable=PropertyMock,
+                return_value=table,
+            ),
+            patch.object(
+                DatasetMaterializer, "_row_digest", return_value=MagicMock()
+            ),
+            self.assertRaises(httpx2.HTTPStatusError),
+        ):
+            materializer._complete_partitions(spark, 42)
+
+        request.return_value.raise_for_status.assert_called_once_with()
 
     def test_dataset_materializer_declares_market_data_table(self) -> None:
         """Dataset-specific metadata is injected into the table declaration."""

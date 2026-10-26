@@ -1,13 +1,24 @@
 """PostgreSQL-backed API tests for resource and materialization workflows."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Barrier
 from uuid import UUID, uuid4
 
 import psycopg
 from fastapi.testclient import TestClient
+from psycopg import sql
+from sqlalchemy.orm import Session
 
-from ml_platform.api.repositories import SchedulerRepository
-from ml_platform.common.types import JobId
+from ml_platform.api.infrastructure import engine_for
+from ml_platform.api.repositories import DatasetRepository, SchedulerRepository
+from ml_platform.common.api.dtos import ResourceType
+from ml_platform.common.types import (
+    JobId,
+    PartitionTimestamp,
+    ResourceName,
+    ResourceVersion,
+)
 
 
 def _dataset_payload() -> dict[str, object]:
@@ -72,7 +83,7 @@ def _label_payload() -> dict[str, object]:
     }
 
 
-def _seed_created_dataset_partition(database_url: str) -> None:
+def _seed_created_dataset_partition(database_url: str) -> UUID:
     """Insert a completed parent partition for feature and label planning tests."""
     partition_id = uuid4()
     job_id = uuid4()
@@ -91,9 +102,88 @@ def _seed_created_dataset_partition(database_url: str) -> None:
         connection.execute(
             """INSERT INTO dataset_partitions
             (partition_id, content_hash, row_count, schema, snapshot_id)
-            VALUES (%s, 'parent-hash', 1, '{\"timestamp\": \"timestamp\"}'::jsonb, 1)""",
+            VALUES (%s, 'parent-hash', 1, '{"timestamp": "timestamp"}'::jsonb, 1)""",
             (partition_id,),
         )
+    return partition_id
+
+
+def _complete_transform_partition(
+    api_client: TestClient,
+    database_url: str,
+    *,
+    resource_type: ResourceType,
+    partition_id: str,
+    dataset_partition_id: UUID,
+) -> None:
+    """Complete one submitted derived partition through its authenticated API receipt."""
+    match resource_type:
+        case ResourceType.FEATURE:
+            request_table = "feature_partition_update_requests"
+            value_column = "feature_value"
+        case ResourceType.LABEL:
+            request_table = "label_partition_update_requests"
+            value_column = "label_value"
+        case _ as unsupported_resource_type:
+            raise AssertionError(
+                f"Expected a derived resource type, got {unsupported_resource_type}."
+            )
+    with psycopg.connect(database_url) as connection:
+        callback_token = connection.execute(
+            sql.SQL(
+                "SELECT callback_token FROM {} WHERE partition_id = %s"
+            ).format(sql.Identifier(request_table)),
+            (UUID(partition_id),),
+        ).fetchone()[0]
+    response = api_client.post(
+        "/partitions/complete",
+        json=[
+            {
+                "partition_id": partition_id,
+                "resource_type": resource_type.value,
+                "row_count": 1,
+                "iceberg_schema": {
+                    "timestamp": "timestamp",
+                    "symbol": "string",
+                    value_column: "double",
+                },
+                "content_hash": f"{resource_type.value}-hash-{partition_id}",
+                "snapshot_id": 1,
+                "callback_token": callback_token,
+                "dataset_partition_ids": [str(dataset_partition_id)],
+            }
+        ],
+    )
+    assert response.status_code == 200
+
+
+def _seed_newer_dataset_partition(database_url: str) -> UUID:
+    """Insert a later completed revision of the shared source partition."""
+    partition_id = uuid4()
+    job_id = uuid4()
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    revision_time = datetime(2030, 1, 1, tzinfo=UTC)
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """INSERT INTO jobs (id, type, status, created_at, updated_at)
+            VALUES (%s, 'dataset_materialization', 'succeeded', %s, %s)""",
+            (job_id, revision_time, revision_time),
+        )
+        connection.execute(
+            """INSERT INTO partition_update_requests
+            (partition_id, job_id, dataset_name, dataset_version, timestamp, status,
+             callback_token, created_at, updated_at)
+            VALUES (%s, %s, 'prices', 1, %s, 'created', 'new-parent-token', %s, %s)""",
+            (partition_id, job_id, timestamp, revision_time, revision_time),
+        )
+        connection.execute(
+            """INSERT INTO dataset_partitions
+            (partition_id, content_hash, row_count, schema, snapshot_id, created_at)
+            VALUES (%s, 'new-parent-hash', 1, '{"timestamp": "timestamp"}'::jsonb,
+                    2, %s)""",
+            (partition_id, revision_time),
+        )
+    return partition_id
 
 
 def test_dataset_lifecycle_materialization_and_job_inspection(
@@ -315,6 +405,27 @@ def test_scheduler_repository_builds_feature_and_label_job_inputs(
         ("feature_materialization", "cancelled"),
         ("label_materialization", "failed"),
     ]
+    with psycopg.connect(clean_postgres) as connection:
+        partition_statuses = connection.execute(
+            """SELECT type::text, status::text
+            FROM (
+                SELECT jobs.type, feature_partition_update_requests.status
+                FROM feature_partition_update_requests
+                JOIN jobs ON jobs.id = feature_partition_update_requests.job_id
+                WHERE feature_partition_update_requests.job_id = %s
+                UNION ALL
+                SELECT jobs.type, label_partition_update_requests.status
+                FROM label_partition_update_requests
+                JOIN jobs ON jobs.id = label_partition_update_requests.job_id
+                WHERE label_partition_update_requests.job_id = %s
+            ) AS partition_statuses
+            ORDER BY type""",
+            (feature_job_id, label_job_id),
+        ).fetchall()
+    assert partition_statuses == [
+        ("feature_materialization", "cancelled"),
+        ("label_materialization", "failed"),
+    ]
 
 
 def _seed_created_hourly_dataset_partitions(database_url: str) -> None:
@@ -454,6 +565,52 @@ def test_hourly_dependencies_use_hourly_input_windows(
     assert label_response.status_code == 202
 
 
+def test_concurrent_dataset_requests_create_one_active_partition_job(
+    api_client: TestClient,
+    clean_postgres: str,
+) -> None:
+    """Transactional advisory locks preserve one pending job per dataset partition."""
+    assert (
+        api_client.post("/datasets", json=_dataset_payload()).status_code == 201
+    )
+    synchronization = Barrier(2)
+    engine = engine_for(clean_postgres)
+
+    def materialize_once():
+        synchronization.wait()
+        with Session(engine) as session:
+            request = DatasetRepository(session).materialize(
+                ResourceName("prices"),
+                ResourceVersion(1),
+                (PartitionTimestamp(datetime(2026, 1, 1, tzinfo=UTC)),),
+            )
+        assert request is not None
+        return request
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        requests = tuple(
+            future.result()
+            for future in (
+                executor.submit(materialize_once),
+                executor.submit(materialize_once),
+            )
+        )
+
+    assert sum(request.submitted_job is not None for request in requests) == 1
+    assert {
+        partition.status.value
+        for request in requests
+        for partition in request.partitions
+    } == {"pending"}
+    with psycopg.connect(clean_postgres) as connection:
+        active_requests = connection.execute(
+            """SELECT COUNT(*) FROM partition_update_requests
+            WHERE dataset_name = 'prices' AND dataset_version = 1
+            AND timestamp = '2026-01-01T00:00:00Z' AND status = 'pending'"""
+        ).fetchone()
+    assert active_requests == (1,)
+
+
 def test_feature_and_label_materialization_requests_are_idempotent(
     api_client: TestClient, clean_postgres: str
 ) -> None:
@@ -497,3 +654,89 @@ def test_feature_and_label_materialization_requests_are_idempotent(
         ("feature_materialization", 1),
         ("label_materialization", 1),
     ]
+
+
+def test_ensure_current_replaces_derived_partitions_with_new_input_revisions(
+    api_client: TestClient, clean_postgres: str
+) -> None:
+    """Ensure-current replaces outputs when a source partition revision changes."""
+    assert (
+        api_client.post("/datasets", json=_dataset_payload()).status_code == 201
+    )
+    initial_dataset_partition_id = _seed_created_dataset_partition(
+        clean_postgres
+    )
+    assert (
+        api_client.post("/features", json=_feature_payload()).status_code == 201
+    )
+    assert api_client.post("/labels", json=_label_payload()).status_code == 201
+
+    request_payload = {"timestamps": ["2026-01-01T00:00:00Z"]}
+    initial_feature = api_client.post(
+        "/features/daily_return/versions/1/partitions",
+        json=request_payload,
+    )
+    initial_label = api_client.post(
+        "/labels/direction/versions/1/partitions",
+        json=request_payload,
+    )
+    assert initial_feature.status_code == 202
+    assert initial_label.status_code == 202
+    initial_feature_partition_id = initial_feature.json()["partitions"][0][
+        "partition_id"
+    ]
+    initial_label_partition_id = initial_label.json()["partitions"][0][
+        "partition_id"
+    ]
+    _complete_transform_partition(
+        api_client,
+        clean_postgres,
+        resource_type=ResourceType.FEATURE,
+        partition_id=initial_feature_partition_id,
+        dataset_partition_id=initial_dataset_partition_id,
+    )
+    _complete_transform_partition(
+        api_client,
+        clean_postgres,
+        resource_type=ResourceType.LABEL,
+        partition_id=initial_label_partition_id,
+        dataset_partition_id=initial_dataset_partition_id,
+    )
+
+    new_dataset_partition_id = _seed_newer_dataset_partition(clean_postgres)
+    refreshed_feature = api_client.post(
+        "/features/daily_return/versions/1/partitions",
+        json=request_payload,
+    )
+    refreshed_label = api_client.post(
+        "/labels/direction/versions/1/partitions",
+        json=request_payload,
+    )
+    assert refreshed_feature.status_code == 202
+    assert refreshed_label.status_code == 202
+    assert refreshed_feature.json()["submitted_job"] is not None
+    assert refreshed_label.json()["submitted_job"] is not None
+    assert (
+        refreshed_feature.json()["partitions"][0]["partition_id"]
+        != initial_feature_partition_id
+    )
+    assert (
+        refreshed_label.json()["partitions"][0]["partition_id"]
+        != initial_label_partition_id
+    )
+
+    with psycopg.connect(clean_postgres) as connection:
+        feature_plan = connection.execute(
+            """SELECT dataset_partition_id
+            FROM feature_partition_update_request_dataset_dependencies
+            WHERE feature_partition_request_id = %s""",
+            (UUID(refreshed_feature.json()["partitions"][0]["partition_id"]),),
+        ).fetchone()[0]
+        label_plan = connection.execute(
+            """SELECT dataset_partition_id
+            FROM label_partition_update_request_dataset_dependencies
+            WHERE label_partition_request_id = %s""",
+            (UUID(refreshed_label.json()["partitions"][0]["partition_id"]),),
+        ).fetchone()[0]
+    assert feature_plan == new_dataset_partition_id
+    assert label_plan == new_dataset_partition_id

@@ -4,6 +4,7 @@ import os
 import sys
 import unittest
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock, patch
 
 from pyspark.sql import SparkSession
 
@@ -13,6 +14,7 @@ from ml_platform.data_sdk import (
     DatasetReference,
     MarketDataTransform,
     SyntheticDatasetTransform,
+    YahooFinanceDataUnavailableError,
 )
 from ml_platform.data_sdk.feature_transforms import (
     LogReturnTransform,
@@ -157,6 +159,28 @@ class BuiltInTransformTest(unittest.TestCase):
             self.assertLessEqual(row["Open"], row["High"])
             self.assertLessEqual(row["Low"], row["Close"])
             self.assertLessEqual(row["Close"], row["High"])
+
+    @patch(
+        "ml_platform.data_sdk.dataset_transforms._market_data.fetch_hourly_ohlcv_rows",
+        return_value=[],
+    )
+    def test_market_data_transform_rejects_a_job_without_provider_rows(
+        self,
+        fetch_rows: MagicMock,
+    ) -> None:
+        """A live-provider job fails instead of materializing a silent empty table."""
+        transform = MarketDataTransform(
+            spark=self.spark,
+            partitions=(datetime(2026, 1, 5, tzinfo=UTC),),
+            keys=[EntityKey.SYMBOL],
+            partition_type=PartitionType.DAILY,
+            symbols=(Symbol("AAA"),),
+        )
+
+        with self.assertRaises(YahooFinanceDataUnavailableError):
+            transform()
+
+        self.assertEqual(fetch_rows.call_count, 1)
 
     def test_triple_barrier_emits_signed_labels(self) -> None:
         """Triple barrier produces labels only for events with a full horizon."""

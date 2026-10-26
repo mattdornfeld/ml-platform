@@ -542,7 +542,12 @@ class SchedulerRepository:
                 is not None
             ):
                 terminal_status = JobStatus.FAILED
-            if terminal_status is JobStatus.FAILED:
+            if terminal_status in {JobStatus.FAILED, JobStatus.CANCELLED}:
+                partition_status = (
+                    PartitionStatus.FAILED
+                    if terminal_status is JobStatus.FAILED
+                    else PartitionStatus.CANCELLED
+                )
                 match self._job_type(job_type):
                     case JobType.DATASET_MATERIALIZATION:
                         session.execute(
@@ -553,7 +558,7 @@ class SchedulerRepository:
                                 == PartitionStatus.PENDING.value,
                             )
                             .values(
-                                status=PartitionStatus.FAILED.value,
+                                status=partition_status.value,
                                 updated_at=func.now(),
                             )
                         )
@@ -566,7 +571,7 @@ class SchedulerRepository:
                                 == PartitionStatus.PENDING.value,
                             )
                             .values(
-                                status=PartitionStatus.FAILED.value,
+                                status=partition_status.value,
                                 updated_at=func.now(),
                             )
                         )
@@ -579,7 +584,7 @@ class SchedulerRepository:
                                 == PartitionStatus.PENDING.value,
                             )
                             .values(
-                                status=PartitionStatus.FAILED.value,
+                                status=partition_status.value,
                                 updated_at=func.now(),
                             )
                         )
